@@ -2,7 +2,7 @@
 
 **What to build:** Session 作为插件提供仅追加日志的 append/query/derive；Host 在模型请求前强制「Model Context 必须能从 Session Log 重建」，否则拒绝该次请求。
 
-**Blocked by:** 04 — Capability 星型路由
+**Blocked by:** 12 — Plugin SDK（二次开发接口）
 
 **Status:** ready-for-agent
 
@@ -11,3 +11,4 @@
 - [ ] Host 在 `agent/request`（或等价模型请求路径）前校验可重建性，失败则拒绝并给出可诊断错误
 - [ ] 主缝测试：合法追加后可派生；构造「未入日志却进入模型请求」路径必须被 Host 拒绝
 - [ ] Session 可替换存储实现，但不变量不依赖具体 Loop 实现
+- [ ] Session 插件基于 `pluginsdk` 实现，不手写 Frame 循环

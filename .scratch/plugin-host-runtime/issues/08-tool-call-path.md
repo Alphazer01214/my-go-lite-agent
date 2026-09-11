@@ -11,3 +11,4 @@
 - [ ] Session 中先有 tool 调用事实再有 tool 结果事实；下一步 Model Context 由日志派生
 - [ ] 工具 Function 不编排循环；是否继续由 Loop 决定
 - [ ] 主缝测试：一轮内至少「用户 → 模型调工具 → 工具结果 → 模型最终答复」
+- [ ] 工具插件与 fake-llm 基于 `pluginsdk` 实现

@@ -12,6 +12,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/protocol"
+	"github.com/tomori/my-go-lite-agent/serve"
 )
 
 func main() {
@@ -20,6 +21,8 @@ func main() {
 	pluginsDir := flag.String("plugins", "", "plugin directory for assembly")
 	assemblyPath := flag.String("assembly", "", "assembly config path (JSON plugins list)")
 	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
+	invokePlugin := flag.String("invoke", "", "after mount, Host-initiated req to this plugin (serve mode)")
+	callCap := flag.String("call-cap", "", "Capability name for the consumer to call via Host (default echo)")
 	flag.Parse()
 
 	switch {
@@ -30,6 +33,12 @@ func main() {
 	case *assemblyPath != "":
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
+		}
+		if *invokePlugin != "" {
+			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump); err != nil {
+				fatal(err)
+			}
+			return
 		}
 		if err := runAssembly(*pluginsDir, *assemblyPath, *dump); err != nil {
 			fatal(err)
@@ -173,5 +182,52 @@ func roundtrip(pluginPath, id string) error {
 		return fmt.Errorf("plugin error: %w", res.Error)
 	}
 	fmt.Printf("ok id=%s payload=%s\n", res.ID, string(res.Payload))
+	return nil
+}
+
+func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump bool) error {
+	cfg, err := assembly.Load(assemblyPath)
+	if err != nil {
+		return err
+	}
+	res := discovery.Scan(pluginsDir)
+	if len(res.Errors) > 0 {
+		printDiscovery(res)
+		return fmt.Errorf("discovery failed before assembly")
+	}
+	plan := assembly.Resolve(cfg, res)
+	if len(plan.Missing) > 0 {
+		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+	}
+	if dump {
+		dumpAssembly(plan, res)
+	}
+
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srv.Close() }()
+
+	payload := map[string]string{}
+	if callCap != "" {
+		payload["cap"] = callCap
+	}
+	frame := &protocol.Frame{
+		V:       1,
+		Type:    protocol.TypeReq,
+		Cap:     "demo",
+		Method:  "invoke",
+		Payload: serve.MarshalPayload(payload),
+	}
+	out, err := srv.Call(invokePlugin, frame)
+	if err != nil {
+		return fmt.Errorf("invoke %s: %w", invokePlugin, err)
+	}
+	if out.Error != nil {
+		fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
+		return fmt.Errorf("invoke failed: %s", out.Error.Code)
+	}
+	fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
 	return nil
 }

@@ -11,3 +11,4 @@
 - [ ] 同一 Session 重放时同一工具结果得到相同 Card（主缝可断言）
 - [ ] 无 Presentation 的 Function 仍可正常工作（可选面）
 - [ ] UI 消费插件不在本票范围；仅保证事件形状可供后续 UI 插件订阅
+- [ ] 发 Card 的插件经 `pluginsdk` 的 `Emit` 发送
