@@ -11,12 +11,13 @@ import (
 
 // Manifest is plugin.json next to a Plugin executable.
 type Manifest struct {
-	Name     string   `json:"name"`
-	Version  string   `json:"version"`
-	Protocol int      `json:"protocol"`
-	Provides []string `json:"provides"`
-	Consumes []string `json:"consumes"`
-	Entry    string   `json:"entry"`
+	Name       string   `json:"name"`
+	Version    string   `json:"version"`
+	Protocol   int      `json:"protocol"`
+	Provides   []string `json:"provides"`
+	Consumes   []string `json:"consumes"`
+	Entry      string   `json:"entry"`
+	TimeoutMs  int      `json:"timeoutMs,omitempty"`
 }
 
 // CurrentProtocol is the Frame/manifest protocol version this Host speaks.

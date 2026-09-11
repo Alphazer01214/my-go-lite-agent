@@ -23,6 +23,7 @@ func main() {
 	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
 	invokePlugin := flag.String("invoke", "", "after mount, Host-initiated req to this plugin (serve mode)")
 	callCap := flag.String("call-cap", "", "Capability name for the consumer to call via Host (default echo)")
+	callPlugin := flag.String("call-plugin", "", "after mount, Host-initiated req directly to this plugin name")
 	flag.Parse()
 
 	switch {
@@ -36,6 +37,12 @@ func main() {
 		}
 		if *invokePlugin != "" {
 			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump); err != nil {
+				fatal(err)
+			}
+			return
+		}
+		if *callPlugin != "" {
+			if err := runCallPlugin(*pluginsDir, *assemblyPath, *callPlugin, *dump); err != nil {
 				fatal(err)
 			}
 			return
@@ -229,5 +236,46 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump bool)
 		return fmt.Errorf("invoke failed: %s", out.Error.Code)
 	}
 	fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
+	return nil
+}
+
+func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
+	cfg, err := assembly.Load(assemblyPath)
+	if err != nil {
+		return err
+	}
+	res := discovery.Scan(pluginsDir)
+	if len(res.Errors) > 0 {
+		printDiscovery(res)
+		return fmt.Errorf("discovery failed before assembly")
+	}
+	plan := assembly.Resolve(cfg, res)
+	if len(plan.Missing) > 0 {
+		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+	}
+	if dump {
+		dumpAssembly(plan, res)
+	}
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srv.Close() }()
+
+	frame := &protocol.Frame{
+		V:       1,
+		Type:    protocol.TypeReq,
+		Cap:     name,
+		Method:  "echo",
+		Payload: json.RawMessage(`{"hello":"lifecycle"}`),
+	}
+	out, err := srv.Call(name, frame)
+	if err != nil {
+		return err
+	}
+	if out.Error != nil {
+		return fmt.Errorf("call failed: %s: %s", out.Error.Code, out.Error.Message)
+	}
+	fmt.Printf("ok plugin=%s payload=%s\n", name, string(out.Payload))
 	return nil
 }
