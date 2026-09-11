@@ -478,8 +478,10 @@ func MarshalPayload(v any) json.RawMessage {
 
 // Message is one model-visible chat message.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // SessionCap is the Capability name Session Plugins must provide.
@@ -501,11 +503,32 @@ const LLMChunkMethod = "chunk"
 // LLMCompleteMethod is the req/res method LLM Plugins implement.
 const LLMCompleteMethod = "complete"
 
+// ToolsCap is the Capability Tools Plugins provide (list/call).
+const ToolsCap = "tools"
+
+// MaxToolRounds bounds tool-call iterations inside one turn.
+const MaxToolRounds = 8
+
+// ToolSchema is one model-facing tool registration from tools.list.
+type ToolSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// ToolCall is a model-requested tool invocation.
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
 // TurnResult is one default-Loop turn (ADR-0003: Loop compiled into Host).
 type TurnResult struct {
 	User      string    `json:"user"`
 	Assistant string    `json:"assistant"`
 	Chunks    []string  `json:"chunks"`
+	ToolCalls []string  `json:"tool_calls,omitempty"`
 	Messages  []Message `json:"messages"`
 }
 
@@ -635,10 +658,11 @@ func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
 	return &AgentRequestResult{Messages: derived, Rebuilt: len(claimed) == 0}, nil
 }
 
-// RunTurn is the Host-compiled default Agent Loop for one chat turn (no tools).
+// RunTurn is the Host-compiled default Agent Loop for one chat turn.
 //
 // If a mounted Plugin provides LoopCap, that external Loop is used (ADR-0003).
-// Default flow: session.append(user) → AgentRequest(rebuild) → llm.complete(stream) → session.append(assistant).
+// Default flow: session.append(user) → AgentRequest(rebuild) → llm.complete(tools)
+// → optional tools.call → session tool facts → repeat until final assistant reply.
 func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return nil, fmt.Errorf("agent loop: user input is required")
@@ -659,63 +683,119 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
-	// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
-	ar, err := s.AgentRequest(nil)
+	schemas, err := s.CollectToolSchemas()
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
-	s.mu.Lock()
-	llmOwner, ok := s.provides[LLMCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("agent loop: no plugin provides %q", LLMCap)
-	}
+	var allChunks []string
+	var toolNames []string
+	var assistant string
 
-	payload := MarshalPayload(map[string]any{"messages": ar.Messages})
-	out, err := s.CallStream(llmOwner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     LLMCap,
-		Method:  LLMCompleteMethod,
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, err)
-	}
-	if out.Frame.Error != nil {
-		return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, out.Frame.Error)
-	}
+	for round := 0; round <= MaxToolRounds; round++ {
+		// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
+		ar, err := s.AgentRequest(nil)
+		if err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
 
-	var llmOut struct {
-		Content string `json:"content"`
-	}
-	if len(out.Frame.Payload) > 0 {
-		if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
-			return nil, fmt.Errorf("agent loop: llm.%s: bad payload: %w", LLMCompleteMethod, err)
+		s.mu.Lock()
+		llmOwner, ok := s.provides[LLMCap]
+		s.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("agent loop: no plugin provides %q", LLMCap)
 		}
-	}
 
-	var chunks []string
-	for _, ev := range out.Events {
-		if ev.Method != LLMChunkMethod {
-			continue
+		reqBody := map[string]any{"messages": ar.Messages}
+		if len(schemas) > 0 {
+			reqBody["tools"] = schemas
 		}
-		var c struct {
-			Delta string `json:"delta"`
+		out, err := s.CallStream(llmOwner, &protocol.Frame{
+			V:       protocol.Version,
+			Type:    protocol.TypeReq,
+			Cap:     LLMCap,
+			Method:  LLMCompleteMethod,
+			Payload: MarshalPayload(reqBody),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, err)
 		}
-		if len(ev.Payload) > 0 {
-			_ = json.Unmarshal(ev.Payload, &c)
+		if out.Frame.Error != nil {
+			return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, out.Frame.Error)
 		}
-		chunks = append(chunks, c.Delta)
-	}
 
-	if _, err := s.AppendSessionFacts([]map[string]any{{
-		"type":    "message",
-		"role":    "assistant",
-		"content": llmOut.Content,
-	}}); err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
+		var llmOut struct {
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
+		}
+		if len(out.Frame.Payload) > 0 {
+			if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
+				return nil, fmt.Errorf("agent loop: llm.%s: bad payload: %w", LLMCompleteMethod, err)
+			}
+		}
+
+		for _, ev := range out.Events {
+			if ev.Method != LLMChunkMethod {
+				continue
+			}
+			var c struct {
+				Delta string `json:"delta"`
+			}
+			if len(ev.Payload) > 0 {
+				_ = json.Unmarshal(ev.Payload, &c)
+			}
+			allChunks = append(allChunks, c.Delta)
+		}
+
+		// Final assistant reply (no tool calls).
+		if len(llmOut.ToolCalls) == 0 {
+			assistant = llmOut.Content
+			if _, err := s.AppendSessionFacts([]map[string]any{{
+				"type":    "message",
+				"role":    "assistant",
+				"content": llmOut.Content,
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+			break
+		}
+
+		// Tool path: record call facts, execute via star routing, record results.
+		for _, tc := range llmOut.ToolCalls {
+			toolNames = append(toolNames, tc.Name)
+			meta := map[string]any{
+				"tool_call_id": tc.ID,
+				"name":         tc.Name,
+			}
+			if len(tc.Arguments) > 0 {
+				meta["arguments"] = json.RawMessage(tc.Arguments)
+			}
+			if _, err := s.AppendSessionFacts([]map[string]any{{
+				"type":    "tool_call",
+				"role":    "assistant",
+				"content": tc.Name,
+				"meta":    meta,
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+
+			result, callErr := s.CallTool(tc)
+			resultContent := result
+			if callErr != nil {
+				resultContent = "error: " + callErr.Error()
+			}
+			if _, err := s.AppendSessionFacts([]map[string]any{{
+				"type":    "tool_result",
+				"role":    "tool",
+				"content": resultContent,
+				"meta":    map[string]any{"tool_call_id": tc.ID},
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+		}
+		if round == MaxToolRounds {
+			return nil, fmt.Errorf("agent loop: exceeded %d tool rounds", MaxToolRounds)
+		}
 	}
 
 	msgs, err := s.DeriveMessages()
@@ -724,10 +804,82 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	}
 	return &TurnResult{
 		User:      userInput,
-		Assistant: llmOut.Content,
-		Chunks:    chunks,
+		Assistant: assistant,
+		Chunks:    allChunks,
+		ToolCalls: toolNames,
 		Messages:  msgs,
 	}, nil
+}
+
+// CollectToolSchemas asks the mounted Tools Plugin for model-facing tool registrations.
+func (s *Server) CollectToolSchemas() ([]ToolSchema, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ToolsCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     ToolsCap,
+		Method:  "list",
+		Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tools.list: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("tools.list: %w", res.Error)
+	}
+	var out struct {
+		Tools []ToolSchema `json:"tools"`
+	}
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return nil, fmt.Errorf("tools.list: bad payload: %w", err)
+		}
+	}
+	return out.Tools, nil
+}
+
+// CallTool executes one ToolCall through the mounted Tools Plugin.
+func (s *Server) CallTool(tc ToolCall) (string, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ToolsCap]
+	s.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("no plugin provides %q", ToolsCap)
+	}
+	args := tc.Arguments
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:      protocol.Version,
+		Type:   protocol.TypeReq,
+		Cap:    ToolsCap,
+		Method: "call",
+		Payload: MarshalPayload(map[string]any{
+			"name":      tc.Name,
+			"arguments": json.RawMessage(args),
+		}),
+	})
+	if err != nil {
+		return "", fmt.Errorf("tools.call %s: %w", tc.Name, err)
+	}
+	if res.Error != nil {
+		return "", fmt.Errorf("tools.call %s: %w", tc.Name, res.Error)
+	}
+	var out struct {
+		Content string `json:"content"`
+	}
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return "", fmt.Errorf("tools.call %s: bad payload: %w", tc.Name, err)
+		}
+	}
+	return out.Content, nil
 }
 
 func (s *Server) runExternalTurn(owner, userInput string) (*TurnResult, error) {
@@ -762,6 +914,18 @@ func messagesEqual(a, b []Message) bool {
 	}
 	for i := range a {
 		if a[i].Role != b[i].Role || a[i].Content != b[i].Content {
+			return false
+		}
+		if len(a[i].ToolCalls) != len(b[i].ToolCalls) {
+			return false
+		}
+		for j := range a[i].ToolCalls {
+			if a[i].ToolCalls[j].ID != b[i].ToolCalls[j].ID ||
+				a[i].ToolCalls[j].Name != b[i].ToolCalls[j].Name {
+				return false
+			}
+		}
+		if a[i].ToolCallID != b[i].ToolCallID {
 			return false
 		}
 	}

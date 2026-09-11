@@ -358,9 +358,13 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("turn ok user=%s assistant=%q chunks=%d\n", out.User, out.Assistant, len(out.Chunks))
+		fmt.Printf("turn ok user=%s assistant=%q chunks=%d tools=%v\n",
+			out.User, out.Assistant, len(out.Chunks), out.ToolCalls)
 		for i, c := range out.Chunks {
 			fmt.Printf("chunk[%d]=%q\n", i, c)
+		}
+		for i, name := range out.ToolCalls {
+			fmt.Printf("tool_call[%d]=%s\n", i, name)
 		}
 	}
 

@@ -27,8 +27,17 @@ type Fact struct {
 
 // Message is one model-visible chat message produced by derive.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is a model-requested tool invocation projected from the log.
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 type store struct {
@@ -82,10 +91,40 @@ func (st *store) derive() []Message {
 	defer st.mu.Unlock()
 	msgs := make([]Message, 0, len(st.facts))
 	for _, f := range st.facts {
-		if f.Type != "message" {
-			continue
+		switch f.Type {
+		case "message":
+			msgs = append(msgs, Message{Role: f.Role, Content: f.Content})
+		case "tool_call":
+			var meta struct {
+				ToolCallID string          `json:"tool_call_id"`
+				Name       string          `json:"name"`
+				Arguments  json.RawMessage `json:"arguments"`
+			}
+			if len(f.Meta) > 0 {
+				_ = json.Unmarshal(f.Meta, &meta)
+			}
+			msgs = append(msgs, Message{
+				Role:    f.Role,
+				Content: f.Content,
+				ToolCalls: []ToolCall{{
+					ID:        meta.ToolCallID,
+					Name:      meta.Name,
+					Arguments: meta.Arguments,
+				}},
+			})
+		case "tool_result":
+			var meta struct {
+				ToolCallID string `json:"tool_call_id"`
+			}
+			if len(f.Meta) > 0 {
+				_ = json.Unmarshal(f.Meta, &meta)
+			}
+			msgs = append(msgs, Message{
+				Role:       f.Role,
+				Content:    f.Content,
+				ToolCallID: meta.ToolCallID,
+			})
 		}
-		msgs = append(msgs, Message{Role: f.Role, Content: f.Content})
 	}
 	return msgs
 }
