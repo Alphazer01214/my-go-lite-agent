@@ -884,6 +884,16 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 		sysText += extraSystem
 	}
+	s.mu.Lock()
+	_, hasToolsProvider := s.provides[ToolsCap]
+	s.mu.Unlock()
+	if !hasToolsProvider {
+		note := "No tools are mounted in this assembly. Do not claim to use tools, browse the workspace, or run commands. Answer from the conversation only, or ask the user to use the agent assembly if they need file tools."
+		if sysText != "" {
+			sysText += "\n\n"
+		}
+		sysText += note
+	}
 	if sysText != "" {
 		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type":    "message",
@@ -1031,11 +1041,21 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			return nil, fmt.Errorf("agent loop: exceeded %d steps", MaxSteps)
 		}
 
+		// Normalize tool-call ids: OpenAI/DeepSeek reject empty or duplicate tool_call_id.
+		seenIDs := map[string]bool{}
+		for i := range llmOut.ToolCalls {
+			if llmOut.ToolCalls[i].ID == "" || seenIDs[llmOut.ToolCalls[i].ID] {
+				llmOut.ToolCalls[i].ID = fmt.Sprintf("call_%d_%d", stepN, i+1)
+			}
+			seenIDs[llmOut.ToolCalls[i].ID] = true
+		}
+
 		// One assistant fact carries content (if any) + all tool_calls, then execute.
 		callMeta := make([]map[string]any, 0, len(llmOut.ToolCalls))
 		for _, tc := range llmOut.ToolCalls {
 			toolNames = append(toolNames, tc.Name)
 			item := map[string]any{
+				"id":           tc.ID,
 				"tool_call_id": tc.ID,
 				"name":         tc.Name,
 			}

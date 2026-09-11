@@ -128,11 +128,22 @@ func toWireMessages(in []struct {
 	ToolCallID string `json:"tool_call_id"`
 }) []chatMessage {
 	out := make([]chatMessage, 0, len(in))
+	used := map[string]bool{}
 	for _, m := range in {
 		cm := chatMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
+			if tc.Name == "" {
+				continue
+			}
 			var w toolCall
 			w.ID = tc.ID
+			if w.ID == "" || used[w.ID] {
+				w.ID = fmt.Sprintf("call_%d", len(used)+1)
+				for used[w.ID] {
+					w.ID = w.ID + "x"
+				}
+			}
+			used[w.ID] = true
 			w.Type = "function"
 			w.Function.Name = tc.Name
 			w.Function.Arguments = string(tc.Arguments)
@@ -140,6 +151,13 @@ func toWireMessages(in []struct {
 				w.Function.Arguments = "{}"
 			}
 			cm.ToolCalls = append(cm.ToolCalls, w)
+		}
+		if cm.Role == "tool" && cm.ToolCallID == "" && len(cm.ToolCalls) == 0 {
+			// Tool results require a tool_call_id; skip malformed rows rather than 400 the API.
+			continue
+		}
+		if len(cm.ToolCalls) == 0 && cm.Role == "assistant" && cm.Content == "" {
+			continue
 		}
 		out = append(out, cm)
 	}

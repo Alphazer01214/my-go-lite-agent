@@ -163,7 +163,13 @@ func (st *store) derive() []Message {
 			msgs = append(msgs, Message{Role: f.Role, Content: f.Content})
 		case "tool_call":
 			var meta struct {
-				ToolCalls []ToolCall `json:"tool_calls"`
+				ToolCalls []struct {
+					// Host writes tool_call_id; ToolCall JSON uses id. Accept both.
+					ID         string          `json:"id"`
+					ToolCallID string          `json:"tool_call_id"`
+					Name       string          `json:"name"`
+					Arguments  json.RawMessage `json:"arguments"`
+				} `json:"tool_calls"`
 				// Legacy single-call shape.
 				ToolCallID string          `json:"tool_call_id"`
 				Name       string          `json:"name"`
@@ -172,7 +178,14 @@ func (st *store) derive() []Message {
 			if len(f.Meta) > 0 {
 				_ = json.Unmarshal(f.Meta, &meta)
 			}
-			calls := meta.ToolCalls
+			var calls []ToolCall
+			for _, c := range meta.ToolCalls {
+				id := c.ID
+				if id == "" {
+					id = c.ToolCallID
+				}
+				calls = append(calls, ToolCall{ID: id, Name: c.Name, Arguments: c.Arguments})
+			}
 			if len(calls) == 0 && meta.ToolCallID != "" {
 				calls = []ToolCall{{
 					ID:        meta.ToolCallID,
