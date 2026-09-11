@@ -102,6 +102,7 @@ Status: ready-for-agent
 
 - 规范名词一律以 `CONTEXT.md` 为准；实现若与 ADR-0001/0002/0003 冲突，先改 ADR 再改代码。
 - 参考实现思路来自 deepseek-harness / Cordis（无特权内核、可逆注册、inject 驱动、waterfall、事件溯源会话、seam 三角色），但映射到 Go 进程边界模型，不引入其 TS 运行时机制。
-- 建议实现顺序：protocol/Frame → host process+router → discovery/assembly → fixture 插件与主缝测试 → **plugin SDK（二次开发接口）** → session 插件与不变量 → 默认 loop → interceptor → presentation 形状。
+- 建议实现顺序：protocol/Frame → host process+router → discovery/assembly → **plugin SDK Serve** → 星型路由与 SDK Call → 生命周期 → session → 默认 loop → interceptor → presentation。
+- 分工：Host `serve` = 进程监督 + Capability 路由；`pluginsdk` = 插件作者 API（Serve/Handle/Call/Emit）。原生插件与第三方同一路径。
 - 仓库内正式插件（session/tool/llm/interceptor）一律基于 `pluginsdk`，保证作者路径与产品路径同一套 API。
 - 后续 tickets 拆到 `.scratch/plugin-host-runtime/issues/`。

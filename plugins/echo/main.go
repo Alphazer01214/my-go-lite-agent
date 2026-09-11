@@ -1,31 +1,16 @@
-// Command echo is a fixture Plugin: every req becomes a res with the same id.
+// Command echo is the reference Plugin: every req becomes a res with the same id.
 package main
 
 import (
-	"os"
+	"encoding/json"
 
-	"github.com/tomori/my-go-lite-agent/protocol"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 func main() {
-	for {
-		f, err := protocol.ReadFrame(os.Stdin)
-		if err != nil {
-			return
-		}
-		if f.Type != protocol.TypeReq {
-			continue
-		}
-		res := &protocol.Frame{
-			V:       f.V,
-			ID:      f.ID,
-			Type:    protocol.TypeRes,
-			Cap:     f.Cap,
-			Method:  f.Method,
-			Payload: f.Payload,
-		}
-		if err := protocol.WriteFrame(os.Stdout, res); err != nil {
-			return
-		}
-	}
+	s := pluginsdk.New()
+	s.Handle("echo", "echo", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return req.Payload, nil
+	})
+	_ = s.Serve()
 }

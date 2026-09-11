@@ -1,23 +1,22 @@
-# 12 — Plugin SDK Serve（二次开发 · 服务端）
+# 12 — Plugin SDK Serve/Call（二次开发 · 与原生同一路径）
 
-**What to build:** 仓库内外同一套作者接口：只实现 Handler 与 `plugin.json`，`pluginsdk.Serve` 即可成为合法插件。echo 改为 SDK 实现，证明原生路径与第三方路径没有分叉。
+**What to build:** 仓库内外同一套作者接口：`pluginsdk.Serve/Handle/Call/Emit`。原生插件（echo、consumer…）与第三方共用该包，Host 侧 `serve` 只做监督与星型路由，不提供第二套插件编程模型。
 
-**Blocked by:** 03 — Assembly 挂载
+**Blocked by:** 03 — Assembly 挂载（04/05 的 Host 路由与生命周期已并行落地）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 存在可导入的 `pluginsdk`：`Serve` 主循环（stdin/stdout Frame、req 分发、管道关闭即退出）
-- [ ] 支持 `Handle(cap, method, handler)`；未注册 method 返回结构化 Frame 错误
-- [ ] 支持发 `evt`（为 Presentation / 流式预留，本票不要求 UI）
-- [ ] `plugins/echo` 改为基于 `pluginsdk`，既有 Host 集成测试仍绿
-- [ ] `protocol` 字段与清单校验规则在包注释中写清（公开契约）
-- [ ] 主缝测试：仅用 SDK 写的 echo 仍通过 Host 回环
+- [x] `pluginsdk`：`Serve` 主循环、`Handle(cap, method)`、`Emit`、出站 `Call`（经 Host）
+- [x] 未注册 method → `method_not_found` 结构化错误
+- [x] `plugins/echo`、`plugins/consumer` 改为基于 SDK；集成测试仍绿
+- [x] 包注释写明公开契约（Frame / manifest protocol=1）
+- [x] 主缝：consumer 经 `Call` 打到 echo（星型）；echo 回环
 
 ## Answer
 
-（待实现）
+新增 `pluginsdk.Server`：stdin 分发 req 到 Handler，res 完成 pending `Call`，stdout 写回。`echo`/`consumer` 去掉手写 Frame 循环。Host `serve` 保持为内核侧进程监督 + 路由，与 SDK 分工：作者写 Handler，Host 管进程。
 
 ## Comments
 
-- 本票只做 **Serve**；出站 `Call` 在 04（依赖星型路由）。
-- 06 及之后所有原生插件必须基于 `pluginsdk`，不得手写 Frame 循环。
+- 后续 session/tool/llm/interceptor 一律 `pluginsdk`，禁止手写循环。
+- Host 内默认 Loop 走 `serve.Server.Call`（进程内），cap/method/错误形状与 SDK 一致。

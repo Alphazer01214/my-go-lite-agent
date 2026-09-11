@@ -38,6 +38,9 @@ const (
 	TypeEvt = "evt"
 )
 
+// Version is the Frame protocol version carried in Frame.V.
+const Version = 1
+
 // maxFrameSize guards against corrupt length prefixes.
 const maxFrameSize = 16 << 20
 
