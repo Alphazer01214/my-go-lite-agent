@@ -26,7 +26,9 @@
 - **双层 Waterfall**：内建审计/取消始终生效；外部 Interceptor 可放行/改写/短路
 - **Session Log 不变量**：仅追加日志是历史唯一真源；模型可见内容必须可从日志重建
 - **默认 Agent Loop 在 Host**：开箱跑通一轮对话；可用外置 `loop` 插件替换
-- **Presentation Card**：工具可发纯函数投影的结构化卡片（可回放）
+- **`llm-openai`**：OpenAI 兼容适配（DeepSeek 等），流式输出
+- **REPL**：`-repl` 多轮同 Session，实时流式打印
+- **Presentation**：`stream` / `status` / `card` 三类信号，CLI 为默认 Render Medium
 - **Windows 一等公民**：进程模型按 Windows 语义验证
 
 ## 快速开始
@@ -44,34 +46,56 @@
 dist/
   host.exe
   plugins/
-    session/     session.exe + plugin.json
-    fakellm/     fakellm.exe + plugin.json
-    echotool/    echotool.exe + plugin.json
-    echo/        echo.exe     + plugin.json
-    interceptor/ interceptor.exe + plugin.json
+    session/           memory Session Log
+    llm-openai/        OpenAI 兼容 LLM（DeepSeek 等）+ config.example.json
+    fakellm/           测试用假模型
+    contextmanager/    system-prompt 组装 + segments.json
+    filetools/         读写/grep/glob
+    echotool/          演示工具 + Presentation Card
+    echo/ interceptor/
   examples/
-    assembly.json
+    chat.json          session + llm-openai + contextmanager
+    agent.json         chat + filetools
+    assembly.json      fakellm 最小集（测试）
     assembly-with-tools.json
 ```
 
-### 跑一轮对话（最小 Assembly）
+### 真实模型（DeepSeek / OpenAI 兼容）
 
 ```powershell
+# 方式一：环境变量（优先）
+$env:OPENAI_API_KEY = "sk-..."
+$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"   # 可省略，默认 DeepSeek
+$env:OPENAI_MODEL = "deepseek-chat"                   # 或你账户可用的模型名
+
+# 方式二：复制配置到插件目录
+copy plugins\llm-openai\config.example.json plugins\llm-openai\config.json
+# 编辑 config.json 填入 apiKey / model
+
 cd dist
+.\host.exe -plugins plugins -assembly examples\chat.json -repl
+```
+
+输入多轮对话；`exit` 或 Ctrl+C 退出。流式 token 边生成边打印。
+
+带文件工具：
+
+```powershell
+.\host.exe -plugins plugins -assembly examples\agent.json -repl
+```
+
+### 单发一轮（脚本友好）
+
+```powershell
+.\host.exe -plugins plugins -assembly examples\chat.json -turn "hello" -session-derive
+```
+
+### 无真实 Key 时（fixture）
+
+```powershell
 .\host.exe -plugins plugins -assembly examples\assembly.json `
   -turn "hello" -session-derive
 ```
-
-期望输出包含：`turn ok`、流式 `chunk[...]`、`derive ok messages=[...]`。
-
-### 带工具的一轮
-
-```powershell
-.\host.exe -plugins plugins -assembly examples\assembly-with-tools.json `
-  -turn "please echo me" -session-derive -cards
-```
-
-会看到 `tool_call`、最终 `Tool said: ...`，以及 `card[0] type=echo_result`。
 
 ### 发现与挂载
 
@@ -80,7 +104,7 @@ cd dist
 .\host.exe -discover plugins
 
 # 挂载并 dump Assembly 树
-.\host.exe -plugins plugins -assembly examples\assembly.json -dump
+.\host.exe -plugins plugins -assembly examples\chat.json -dump
 ```
 
 ### Session / 不变量 / 注入
@@ -103,7 +127,7 @@ cd dist
 ### Waterfall 审计
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\assembly.json `
+.\host.exe -plugins plugins -assembly examples\chat.json `
   -turn "audit me" -audit
 ```
 
@@ -116,6 +140,8 @@ my-plugin/
   plugin.json     # 清单（必需）
   my-plugin.exe   # 可执行（entry）
   static/         # 可选静态文件（默认仅本插件可见）
+  config.json     # 可选（llm-openai 等）
+  segments.json   # 可选（contextmanager）
 ```
 
 `plugin.json` 最小示例：

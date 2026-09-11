@@ -19,11 +19,15 @@ function Build-Pkg([string]$pkg, [string]$out) {
     if ($LASTEXITCODE -ne 0) { throw "go build $pkg failed" }
 }
 
-function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]$consumes = "[]") {
+function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]$consumes = "[]", [int]$timeoutMs = 0) {
     $dir = Join-Path $dist "plugins\$name"
     New-Item -ItemType Directory -Path $dir | Out-Null
     $exe = Join-Path $dir "$name.exe"
     Build-Pkg $pkg $exe
+    $timeoutField = ""
+    if ($timeoutMs -gt 0) {
+        $timeoutField = ",`n  `"timeoutMs`": $timeoutMs"
+    }
     $manifest = @"
 {
   "name": "$name",
@@ -31,7 +35,7 @@ function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]
   "protocol": 1,
   "provides": $provides,
   "consumes": $consumes,
-  "entry": "$name.exe"
+  "entry": "$name.exe"$timeoutField
 }
 "@
     # UTF-8 without BOM — Host's JSON parser rejects a BOM.
@@ -43,14 +47,22 @@ Push-Location $root
 try {
     Build-Pkg "./cmd/host" (Join-Path $dist "host.exe")
 
-    Install-Plugin "session"     "./plugins/session"     '["session"]'
-    Install-Plugin "fakellm"     "./plugins/fakellm"     '["llm"]'
-    Install-Plugin "echotool"    "./plugins/echotool"    '["tools"]'
-    Install-Plugin "echo"        "./plugins/echo"        '["echo"]'
-    Install-Plugin "interceptor" "./plugins/interceptor" '["interceptor"]'
+    Install-Plugin "session"        "./plugins/session"        '["session"]'
+    Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]'
+    Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000
+    Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]'
+    Install-Plugin "filetools"      "./plugins/filetools"      '["tools"]'
+    Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]'
+    Install-Plugin "echo"           "./plugins/echo"           '["echo"]'
+    Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]'
+
+    Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
+    Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
 
     Copy-Item (Join-Path $root "examples\assembly.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\assembly-with-tools.json") (Join-Path $dist "examples\") -Force
+    Copy-Item (Join-Path $root "examples\chat.json") (Join-Path $dist "examples\") -Force
+    Copy-Item (Join-Path $root "examples\agent.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "README.md") $dist -Force
     Copy-Item (Join-Path $root "CONTEXT.md") $dist -Force
 

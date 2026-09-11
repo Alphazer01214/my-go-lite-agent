@@ -29,12 +29,13 @@ const (
 )
 
 type wait struct {
-	kind   waitKind
-	caller string
-	target string
-	origID string
-	ch     chan *CallResult
-	events []*protocol.Frame
+	kind    waitKind
+	caller  string
+	target  string
+	origID  string
+	ch      chan *CallResult
+	events  []*protocol.Frame
+	onEvent func(*protocol.Frame)
 }
 
 // CallResult carries one Call's final res plus any evt frames collected while waiting.
@@ -64,6 +65,10 @@ type Server struct {
 	gen      map[string]int
 	audit    []AuditEntry
 	cards    []PresentationCard
+	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
+	OnStreamDelta func(delta string)
+	// OnStatus is the live Render Medium hook for agent idle/running.
+	OnStatus func(status string)
 }
 
 // PresentationCap is the Capability used for Presentation Card evt frames.
@@ -71,6 +76,12 @@ const PresentationCap = "presentation"
 
 // PresentationCardMethod is the evt method for a Presentation Card.
 const PresentationCardMethod = "card"
+
+// PresentationStreamMethod is the ephemeral stream evt (start/chunk/end); not logged.
+const PresentationStreamMethod = "stream"
+
+// PresentationStatusMethod is the agent status evt (idle/running) for Render Medium.
+const PresentationStatusMethod = "status"
 
 // PresentationCard is a structured UI render intent projected from args/result (no I/O).
 type PresentationCard struct {
@@ -283,10 +294,15 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 		return
 	}
 	s.mu.Lock()
+	var cb func(*protocol.Frame)
 	if w, ok := s.pending[f.ID]; ok {
 		w.events = append(w.events, f)
+		cb = w.onEvent
 	}
 	s.mu.Unlock()
+	if cb != nil {
+		cb(f)
+	}
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
@@ -432,6 +448,12 @@ func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, er
 
 // CallStream is Call plus any evt frames attributed to the request id while waiting.
 func (s *Server) CallStream(pluginName string, f *protocol.Frame) (*CallResult, error) {
+	return s.CallStreamOn(pluginName, f, nil)
+}
+
+// CallStreamOn is CallStream with a live callback for each attributed evt (Render Medium).
+// Callback runs on the Host read-loop goroutine; keep it fast and non-blocking.
+func (s *Server) CallStreamOn(pluginName string, f *protocol.Frame, onEvent func(*protocol.Frame)) (*CallResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt == 1 {
@@ -441,7 +463,7 @@ func (s *Server) CallStream(pluginName string, f *protocol.Frame) (*CallResult, 
 		} else if err := s.ensureAlive(pluginName); err != nil {
 			return nil, err
 		}
-		res, err := s.callOnce(pluginName, f)
+		res, err := s.callOnce(pluginName, f, onEvent)
 		if err != nil {
 			lastErr = err
 			continue
@@ -458,7 +480,7 @@ func (s *Server) CallStream(pluginName string, f *protocol.Frame) (*CallResult, 
 	return nil, lastErr
 }
 
-func (s *Server) callOnce(pluginName string, f *protocol.Frame) (*CallResult, error) {
+func (s *Server) callOnce(pluginName string, f *protocol.Frame, onEvent func(*protocol.Frame)) (*CallResult, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -472,7 +494,7 @@ func (s *Server) callOnce(pluginName string, f *protocol.Frame) (*CallResult, er
 	id := fmt.Sprintf("host-%d", s.seq)
 	f.ID = id
 	ch := make(chan *CallResult, 1)
-	s.pending[id] = &wait{kind: waitHost, target: pluginName, ch: ch}
+	s.pending[id] = &wait{kind: waitHost, target: pluginName, ch: ch, onEvent: onEvent}
 	s.mu.Unlock()
 
 	if err := s.writeTo(pluginName, f); err != nil {
@@ -779,6 +801,30 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 	return out.Text, nil
 }
 
+func (s *Server) emitStatus(status string) {
+	if s.OnStatus != nil {
+		s.OnStatus(status)
+	}
+}
+
+// extractStreamDelta returns text delta from llm.chunk or presentation.stream chunk frames.
+func extractStreamDelta(f *protocol.Frame) (string, bool) {
+	var c struct {
+		Op    string `json:"op"`
+		Delta string `json:"delta"`
+	}
+	if len(f.Payload) > 0 {
+		_ = json.Unmarshal(f.Payload, &c)
+	}
+	if f.Method == LLMChunkMethod {
+		return c.Delta, c.Delta != ""
+	}
+	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod && c.Op == "chunk" {
+		return c.Delta, c.Delta != ""
+	}
+	return "", false
+}
+
 // RunTurn is the Host-compiled default Agent Loop for one chat turn.
 //
 // If a mounted Plugin provides LoopCap, that external Loop is used (ADR-0003).
@@ -812,6 +858,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	}}); err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
+	s.emitStatus("running")
 	turnFailed := true
 	defer func() {
 		reason := "completed"
@@ -823,6 +870,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			"role": "host",
 			"meta": map[string]any{"turn": 1, "reason": reason},
 		}})
+		s.emitStatus("idle")
 	}()
 
 	// System Prompt is assembled then logged before any model-visible user input (ADR-0005/0006).
@@ -917,12 +965,18 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
 
-		out, err := s.CallStream(llmOwner, &protocol.Frame{
+		out, err := s.CallStreamOn(llmOwner, &protocol.Frame{
 			V:       protocol.Version,
 			Type:    protocol.TypeReq,
 			Cap:     LLMCap,
 			Method:  LLMCompleteMethod,
 			Payload: MarshalPayload(reqBody),
+		}, func(ev *protocol.Frame) {
+			if delta, ok := extractStreamDelta(ev); ok {
+				if s.OnStreamDelta != nil {
+					s.OnStreamDelta(delta)
+				}
+			}
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, err)
@@ -942,16 +996,9 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 
 		for _, ev := range out.Events {
-			if ev.Method != LLMChunkMethod {
-				continue
+			if delta, ok := extractStreamDelta(ev); ok {
+				allChunks = append(allChunks, delta)
 			}
-			var c struct {
-				Delta string `json:"delta"`
-			}
-			if len(ev.Payload) > 0 {
-				_ = json.Unmarshal(ev.Payload, &c)
-			}
-			allChunks = append(allChunks, c.Delta)
 		}
 
 		// Final assistant reply (no tool calls).

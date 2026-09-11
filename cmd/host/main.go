@@ -2,12 +2,15 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
@@ -30,6 +33,7 @@ func main() {
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
+	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or exit to quit)")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
@@ -43,6 +47,12 @@ func main() {
 	case *assemblyPath != "":
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
+		}
+		if *repl {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump); err != nil {
+				fatal(err)
+			}
+			return
 		}
 		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards {
 			opts := sessionAgentOpts{
@@ -482,4 +492,74 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		fmt.Printf("agent/request ok rebuilt=%v messages=%s\n", out.Rebuilt, body)
 	}
 	return nil
+}
+
+// runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
+func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
+	cfg, err := assembly.Load(assemblyPath)
+	if err != nil {
+		return err
+	}
+	res := discovery.Scan(pluginsDir)
+	if len(res.Errors) > 0 {
+		printDiscovery(res)
+		return fmt.Errorf("discovery failed before assembly")
+	}
+	plan := assembly.Resolve(cfg, res)
+	if len(plan.Missing) > 0 {
+		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+	}
+	if dump != nil && *dump {
+		dumpAssembly(plan, res)
+	}
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srv.Close() }()
+
+	// Clean shutdown on Ctrl+C so plugin processes are not orphaned.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\nshutting down…")
+		_ = srv.Close()
+		os.Exit(0)
+	}()
+
+	srv.OnStreamDelta = func(delta string) {
+		fmt.Print(delta)
+	}
+
+	fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for {
+		fmt.Print("> ")
+		if !in.Scan() {
+			fmt.Println()
+			break
+		}
+		line := strings.TrimSpace(in.Text())
+		if line == "" {
+			continue
+		}
+		low := strings.ToLower(line)
+		if low == "exit" || low == "quit" {
+			break
+		}
+		out, err := srv.RunTurn(line)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			continue
+		}
+		// Settlement: durable assistant text is authoritative (dsh committed).
+		// Live chunks may have already been printed; ensure a final newline.
+		fmt.Println()
+		if out.Assistant != "" && len(out.Chunks) == 0 {
+			fmt.Println(out.Assistant)
+		}
+	}
+	return in.Err()
 }

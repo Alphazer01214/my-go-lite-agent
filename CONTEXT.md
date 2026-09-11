@@ -29,12 +29,16 @@ _Avoid_: 功能、接口实现
 _Avoid_: 业务逻辑、实现体（规范名词是 Function）
 
 **Presentation**:
-插件的另一条面：向 UI 暴露的可呈现状态与交互意图。与 Function 可同属一个 Plugin，也可只实现其一。
+插件的另一条面：向 Render Medium 暴露的可呈现状态与交互意图。与 Function 可同属一个 Plugin，也可只实现其一。
 _Avoid_: 视图、前端组件、渲染器（规范名词是 Presentation）
 
 **Presentation Card**:
-Presentation 面的渲染意图：从 args/result 纯函数投影出的结构化视图（如问卷、diff 卡）。不做 I/O，回放可重现。
+Presentation 面的结构化渲染意图：从 args/result 纯函数投影（如问卷、diff 卡）。不做 I/O，回放可重现。与瞬态 stream/status 信号不同。
 _Avoid_: UI 组件、视图模型
+
+**Render Medium**:
+消费 Presentation 信号并向用户展示的媒介。Host 内建 CLI 是默认实现；契约按可多消费者订阅设计。
+_Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
 
 **Waterfall**:
 环绕式拦截链：下游处理完才返回，监听方不放行则短路。Host 内建强制链 + 可选外部 Interceptor。
