@@ -3,6 +3,8 @@
 // Capability: tools
 //   - list: → {"tools":[{name,description,input_schema}]}
 //   - call: {"name","arguments"} → {"content", "additionalContexts":[{role,content}]}
+//
+// On success it also Emits a presentation.card evt (pure projection of args+result).
 package main
 
 import (
@@ -11,6 +13,20 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
+
+// emitEchoCard is a pure Presentation Card projection: no I/O, clock, or randomness.
+func emitEchoCard(s *pluginsdk.Server, argsText, result string) {
+	data, _ := json.Marshal(map[string]string{
+		"input":  argsText,
+		"output": result,
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"cardType": "echo_result",
+		"tool":     "echo_text",
+		"data":     json.RawMessage(data),
+	})
+	_ = s.Emit("presentation", "card", payload)
+}
 
 func main() {
 	s := pluginsdk.New()
@@ -52,6 +68,7 @@ func main() {
 		}
 		// Deterministic additionalContexts probe: tool result then extra model-visible note.
 		if args.Text == "ctx" {
+			emitEchoCard(s, args.Text, args.Text)
 			return json.Marshal(map[string]any{
 				"content": args.Text,
 				"additionalContexts": []map[string]string{{
@@ -60,6 +77,7 @@ func main() {
 				}},
 			})
 		}
+		emitEchoCard(s, args.Text, args.Text)
 		return json.Marshal(map[string]string{"content": args.Text})
 	})
 

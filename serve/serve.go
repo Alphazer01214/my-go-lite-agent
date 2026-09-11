@@ -63,6 +63,44 @@ type Server struct {
 	seq      int
 	gen      map[string]int
 	audit    []AuditEntry
+	cards    []PresentationCard
+}
+
+// PresentationCap is the Capability used for Presentation Card evt frames.
+const PresentationCap = "presentation"
+
+// PresentationCardMethod is the evt method for a Presentation Card.
+const PresentationCardMethod = "card"
+
+// PresentationCard is a structured UI render intent projected from args/result (no I/O).
+type PresentationCard struct {
+	CardType string          `json:"cardType"`
+	Tool     string          `json:"tool,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
+}
+
+// Cards returns a copy of Presentation Cards observed this run.
+func (s *Server) Cards() []PresentationCard {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]PresentationCard, len(s.cards))
+	copy(out, s.cards)
+	return out
+}
+
+func (s *Server) recordCard(f *protocol.Frame) {
+	var c PresentationCard
+	if len(f.Payload) > 0 {
+		if err := json.Unmarshal(f.Payload, &c); err != nil {
+			return
+		}
+	}
+	if c.CardType == "" {
+		return
+	}
+	s.mu.Lock()
+	s.cards = append(s.cards, c)
+	s.mu.Unlock()
 }
 
 // Start launches every mounted Plugin, checks consumes, and builds the Capability registry.
@@ -237,6 +275,10 @@ func (s *Server) handleFromPlugin(from string, f *protocol.Frame) {
 }
 
 func (s *Server) collectEvent(f *protocol.Frame) {
+	// Presentation Cards are broadcast (may have no id); record before id filter.
+	if f.Cap == PresentationCap && f.Method == PresentationCardMethod {
+		s.recordCard(f)
+	}
 	if f.ID == "" {
 		return
 	}

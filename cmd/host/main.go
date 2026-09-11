@@ -31,6 +31,7 @@ func main() {
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
+	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
 	flag.Parse()
 
 	switch {
@@ -42,7 +43,7 @@ func main() {
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
-		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" {
+		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards {
 			opts := sessionAgentOpts{
 				pluginsDir:   pluginsDir,
 				assemblyPath: assemblyPath,
@@ -56,6 +57,7 @@ func main() {
 				invokePlugin: invokePlugin,
 				callCap:      callCap,
 				audit:        audit,
+				cards:        cards,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -99,6 +101,12 @@ func printAudit(entries []serve.AuditEntry) {
 			fmt.Printf(" reason=%s", e.Reason)
 		}
 		fmt.Println()
+	}
+}
+
+func printCards(cards []serve.PresentationCard) {
+	for i, c := range cards {
+		fmt.Printf("card[%d] type=%s tool=%s data=%s\n", i, c.CardType, c.Tool, string(c.Data))
 	}
 }
 
@@ -336,6 +344,7 @@ type sessionAgentOpts struct {
 	invokePlugin *string
 	callCap      *string
 	audit        *bool
+	cards        *bool
 }
 
 // runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
@@ -363,6 +372,9 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	defer func() {
 		if opts.audit != nil && *opts.audit {
 			printAudit(srv.Audit())
+		}
+		if opts.cards != nil && *opts.cards {
+			printCards(srv.Cards())
 		}
 		_ = srv.Close()
 	}()
