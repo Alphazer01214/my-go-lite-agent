@@ -1,0 +1,65 @@
+# my-go-lite-agent
+
+轻量 Go agent：一切皆插件，插件运行时发现与组装，核心零第三方（解析库除外）。
+
+## Language
+
+**Plugin**:
+一个可独立分发的扩展单元，由配置文件、可执行二进制与静态文件组成；运行时被发现并挂载，通过结构化消息与宿主通信。可只实现 Function，或兼有 Presentation。
+_Avoid_: 扩展、模块、组件（除非特指 Go module）
+
+**Host**:
+插件树的宿主进程：负责 Discovery、Assembly、生命周期、Frame 路由与双层 Waterfall 的薄内核。
+_Avoid_: 宿主程序、主程序、kernel（正文可用，规范名词是 Host）
+
+**Assembly**:
+一次运行时对插件树的组装结果：哪些插件被挂载、以何序、何参数。发现 ≠ 挂载。
+_Avoid_: 配置加载（配置只是 Assembly 的输入之一）
+
+**Discovery**:
+扫描插件目录与清单，得到「机器上有哪些插件」的过程。只负责看见，不负责挂载。
+_Avoid_: 加载、注册（挂载属于 Assembly）
+
+**Capability**:
+宿主或插件对外提供的一项可调用能力，经 Frame 暴露；消费方只依赖契约，不依赖具体插件。
+_Avoid_: 功能、接口实现
+
+**Function**:
+插件的一条面：接收 Call Payload、处理，并返回 result / additionalContexts，或经 Host 请求其他 Capability。一次调用，不编排下一步。
+_Avoid_: 业务逻辑、实现体（规范名词是 Function）
+
+**Presentation**:
+插件的另一条面：向 UI 暴露的可呈现状态与交互意图。与 Function 可同属一个 Plugin，也可只实现其一。
+_Avoid_: 视图、前端组件、渲染器（规范名词是 Presentation）
+
+**Presentation Card**:
+Presentation 面的渲染意图：从 args/result 纯函数投影出的结构化视图（如问卷、diff 卡）。不做 I/O，回放可重现。
+_Avoid_: UI 组件、视图模型
+
+**Waterfall**:
+环绕式拦截链：下游处理完才返回，监听方不放行则短路。Host 内建强制链 + 可选外部 Interceptor。
+_Avoid_: 中间件链、拦截器（若语义相同，正文可用，规范名词是 Waterfall）
+
+**Interceptor**:
+挂在 Waterfall 上的策略插件：放行、改写或短路一次调用。
+_Avoid_: 中间件、守卫（守卫若语义为单调否决可另立术语）
+
+**Frame**:
+Host 与插件之间的一条完整结构化消息：`uint32` 长度前缀 + JSON body，携带 id 以对齐请求/响应。
+_Avoid_: 包、报文（规范名词是 Frame）
+
+**Session Log**:
+仅追加的会话事实流；是交互历史的唯一真源。模型历史从日志派生，从不单独存储。
+_Avoid_: 对话历史、transcript（可作别名，规范名词是 Session Log）
+
+**Model Context**:
+单次模型请求实际可见的输入集合；必须能从 Session Log 重建。
+_Avoid_: 上下文、prompt（prompt 是 Model Context 的组装产物之一）
+
+**Call Payload**:
+Host 调某个 Capability 时的输入（tool args、messages…）。不是 Model Context，也不是 Session Log。
+_Avoid_: 参数、请求体（规范名词是 Call Payload）
+
+**Additional Contexts**:
+Function 返回结果时附带的、在工具结果之后注入的模型可见消息。由 Loop 落入 Session Log，不是插件直接改写历史。
+_Avoid_: 附加上下文、注入内容（规范名词是 Additional Contexts）

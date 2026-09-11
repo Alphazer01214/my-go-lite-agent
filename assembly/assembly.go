@@ -1,0 +1,65 @@
+// Package assembly decides which discovered Plugins are mounted.
+package assembly
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+
+	"github.com/tomori/my-go-lite-agent/discovery"
+)
+
+// Config is the user-facing Assembly file (JSON).
+type Config struct {
+	Plugins []string `json:"plugins"`
+}
+
+// Plan is the resolved mount set against a Discovery result.
+type Plan struct {
+	Mounted   []discovery.Found
+	Unmounted []discovery.Found
+	Missing   []string
+}
+
+// Load reads an Assembly config file.
+func Load(path string) (Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read assembly: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse assembly %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// Resolve intersects cfg.Plugins with discovered plugins. Missing names stay in Plan.Missing.
+func Resolve(cfg Config, res discovery.Result) Plan {
+	byName := make(map[string]discovery.Found, len(res.Plugins))
+	for _, p := range res.Plugins {
+		byName[p.Manifest.Name] = p
+	}
+
+	want := make(map[string]bool, len(cfg.Plugins))
+	for _, name := range cfg.Plugins {
+		want[name] = true
+	}
+
+	var plan Plan
+	for _, name := range cfg.Plugins {
+		if p, ok := byName[name]; ok {
+			plan.Mounted = append(plan.Mounted, p)
+			continue
+		}
+		plan.Missing = append(plan.Missing, name)
+	}
+	for _, p := range res.Plugins {
+		if !want[p.Manifest.Name] {
+			plan.Unmounted = append(plan.Unmounted, p)
+		}
+	}
+	sort.Slice(plan.Missing, func(i, j int) bool { return plan.Missing[i] < plan.Missing[j] })
+	return plan
+}
