@@ -62,6 +62,7 @@ type Server struct {
 	closed   bool
 	seq      int
 	gen      map[string]int
+	audit    []AuditEntry
 }
 
 // Start launches every mounted Plugin, checks consumes, and builds the Capability registry.
@@ -252,6 +253,20 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 		s.handleAgentFromPlugin(from, f)
 		return
 	}
+
+	// Dual Waterfall: built-in cancel/audit always on; optional external Interceptor.
+	dec := s.runWaterfall(from, f)
+	if dec.Action == ActionReject {
+		_ = s.writeTo(from, &protocol.Frame{
+			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+			Error: &protocol.FrameError{Code: "interceptor_rejected", Message: dec.Reason},
+		})
+		return
+	}
+	if dec.Action == ActionRewrite {
+		f.Payload = dec.Payload
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

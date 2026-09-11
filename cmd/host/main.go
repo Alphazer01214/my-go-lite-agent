@@ -29,6 +29,7 @@ func main() {
 	sessionQuery := flag.Bool("session-query", false, "print session.query facts")
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
+	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	flag.Parse()
 
 	switch {
@@ -52,6 +53,7 @@ func main() {
 				dump:         dump,
 				invokePlugin: invokePlugin,
 				callCap:      callCap,
+				audit:        audit,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -59,7 +61,7 @@ func main() {
 			return
 		}
 		if *invokePlugin != "" {
-			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump); err != nil {
+			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump, *audit); err != nil {
 				fatal(err)
 			}
 			return
@@ -86,6 +88,16 @@ func main() {
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "host: %v\n", err)
 	os.Exit(1)
+}
+
+func printAudit(entries []serve.AuditEntry) {
+	for _, e := range entries {
+		fmt.Printf("audit from=%s cap=%s method=%s action=%s", e.From, e.Cap, e.Method, e.Action)
+		if e.Reason != "" {
+			fmt.Printf(" reason=%s", e.Reason)
+		}
+		fmt.Println()
+	}
 }
 
 func runDiscover(dir string) error {
@@ -215,7 +227,7 @@ func roundtrip(pluginPath, id string) error {
 	return nil
 }
 
-func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump bool) error {
+func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audit bool) error {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return err
@@ -237,7 +249,12 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump bool)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if audit {
+			printAudit(srv.Audit())
+		}
+		_ = srv.Close()
+	}()
 
 	payload := map[string]string{}
 	if callCap != "" {
@@ -315,6 +332,7 @@ type sessionAgentOpts struct {
 	dump         *bool
 	invokePlugin *string
 	callCap      *string
+	audit        *bool
 }
 
 // runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
@@ -339,7 +357,12 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if opts.audit != nil && *opts.audit {
+			printAudit(srv.Audit())
+		}
+		_ = srv.Close()
+	}()
 
 	if *opts.appendJSON != "" {
 		var facts []map[string]any
