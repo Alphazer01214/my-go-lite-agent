@@ -248,23 +248,28 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
+	// Dual Waterfall first: built-in cancel/audit always on; optional external Interceptor.
+	// Applies to every plugin-originated star call, including agent/request.
+	dec := s.runWaterfall(from, f)
+	if dec.Action == ActionReject {
+		code := dec.Code
+		if code == "" {
+			code = "interceptor_rejected"
+		}
+		_ = s.writeTo(from, &protocol.Frame{
+			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+			Error: &protocol.FrameError{Code: code, Message: dec.Reason},
+		})
+		return
+	}
+	if dec.Action == ActionRewrite && len(dec.Payload) > 0 {
+		f.Payload = dec.Payload
+	}
+
 	// Host owns agent/request (log invariant). Other agent.* methods may be Plugin-provided.
 	if f.Cap == AgentCap && f.Method == "request" {
 		s.handleAgentFromPlugin(from, f)
 		return
-	}
-
-	// Dual Waterfall: built-in cancel/audit always on; optional external Interceptor.
-	dec := s.runWaterfall(from, f)
-	if dec.Action == ActionReject {
-		_ = s.writeTo(from, &protocol.Frame{
-			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
-			Error: &protocol.FrameError{Code: "interceptor_rejected", Message: dec.Reason},
-		})
-		return
-	}
-	if dec.Action == ActionRewrite {
-		f.Payload = dec.Payload
 	}
 
 	s.mu.Lock()

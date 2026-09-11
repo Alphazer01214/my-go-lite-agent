@@ -151,3 +151,35 @@ func TestWaterfallMandatoryChainSurvivesInterceptorCrash(t *testing.T) {
 		t.Fatalf("want fail-open allow after interceptor_down: %s", s)
 	}
 }
+
+func TestWaterfallCoversAgentRequest(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/host")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildAgentProbePluginDir(t, root, pluginsDir, "agentprobe")
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","agentprobe"]}`)
+
+	// Plugin-originated agent/request must still hit the mandatory Waterfall (audit).
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-session-append", `[{"role":"user","content":"logged"}]`,
+		"-invoke", "agentprobe",
+		"-audit",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("agent/request through waterfall: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, "invoke ok") {
+		t.Fatalf("want invoke ok: %s", s)
+	}
+	if !strings.Contains(s, "audit from=agentprobe cap=agent method=request") {
+		t.Fatalf("want mandatory audit on agent/request: %s", s)
+	}
+}

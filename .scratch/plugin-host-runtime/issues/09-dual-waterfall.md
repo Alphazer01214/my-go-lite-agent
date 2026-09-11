@@ -18,7 +18,11 @@
 
 ## Comments
 
-- Waterfall 只包住插件发起的星型调用；Host 内部 `Call`（Loop→session/llm/tools）本票不经过 Interceptor，避免自锁与递归。
+- Waterfall 包住所有插件发起的星型调用（含 `agent/request`）；Host 内部 `Call`（Loop→session/llm/tools）本票不经过 Interceptor，避免自锁与递归。
 - 多个 Interceptor 插件会因 `provides` 唯一属主 fail-loud；策略组合留给后续。
 - 取消面目前是 Host closed；更细粒度 cancel token 留给后续票。
-- Interceptor 失败默认 fail-open；若策略面需要 fail-closed，应另立配置而非改默认。
+- Interceptor 失败默认 fail-open；策略面若需 fail-closed，应另立配置。
+- 拒绝错误码：`interceptor_rejected` / `interceptor_error` / `interceptor_unknown_action` / `host_closed`。
+- 空 payload 的 rewrite 被忽略（不擦除原 Call Payload）。
+- Code review 修复：agent/request 也过链；错误码区分；空 rewrite；新增 agent/request 审计主缝测试。
+- 「卸载」路径本票无现成卸载机制，崩溃覆盖已证明强制链不依赖 Interceptor 存活。
