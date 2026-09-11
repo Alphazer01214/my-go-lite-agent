@@ -226,6 +226,10 @@ func (s *Server) handleFromPlugin(from string, f *protocol.Frame) {
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
+	if f.Cap == "agent" {
+		s.handleAgentFromPlugin(from, f)
+		return
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -435,4 +439,156 @@ func MarshalPayload(v any) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return b
+}
+
+// Message is one model-visible chat message.
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// SessionCap is the Capability name Session Plugins must provide.
+const SessionCap = "session"
+
+// AgentRequestResult is the validated Model Context after the log invariant check.
+type AgentRequestResult struct {
+	Messages []Message `json:"messages"`
+	Rebuilt  bool      `json:"rebuilt"`
+}
+
+// DeriveMessages rebuilds Model Context from the mounted Session Plugin (session.derive).
+func (s *Server) DeriveMessages() ([]Message, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[SessionCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     SessionCap,
+		Method:  "derive",
+		Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session.derive: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("session.derive: %w", res.Error)
+	}
+	var out struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := json.Unmarshal(res.Payload, &out); err != nil {
+		return nil, fmt.Errorf("session.derive: bad payload: %w", err)
+	}
+	if out.Messages == nil {
+		out.Messages = []Message{}
+	}
+	return out.Messages, nil
+}
+
+// AppendSessionFacts appends each fact to the mounted Session Plugin.
+func (s *Server) AppendSessionFacts(facts []map[string]any) (int, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[SessionCap]
+	s.mu.Unlock()
+	if !ok {
+		return 0, fmt.Errorf("no plugin provides %q", SessionCap)
+	}
+	last := 0
+	for _, fact := range facts {
+		res, err := s.Call(owner, &protocol.Frame{
+			V:       protocol.Version,
+			Type:    protocol.TypeReq,
+			Cap:     SessionCap,
+			Method:  "append",
+			Payload: MarshalPayload(fact),
+		})
+		if err != nil {
+			return last, fmt.Errorf("session.append: %w", err)
+		}
+		if res.Error != nil {
+			return last, fmt.Errorf("session.append: %w", res.Error)
+		}
+		var out struct {
+			Seq int `json:"seq"`
+		}
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return last, fmt.Errorf("session.append: bad payload: %w", err)
+		}
+		last = out.Seq
+	}
+	return last, nil
+}
+
+// AgentRequest enforces the Session Log invariant before a model call (ADR-0002).
+//
+// claimed empty/nil → rebuild from session.derive and accept.
+// claimed non-empty → must match session.derive exactly, else session_invariant_violation.
+func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
+	derived, err := s.DeriveMessages()
+	if err != nil {
+		return nil, fmt.Errorf("agent/request: %w", err)
+	}
+	if len(claimed) > 0 && !messagesEqual(claimed, derived) {
+		return nil, &protocol.FrameError{
+			Code:    "session_invariant_violation",
+			Message: "model context is not reconstructable from session log",
+		}
+	}
+	return &AgentRequestResult{Messages: derived, Rebuilt: true}, nil
+}
+
+func messagesEqual(a, b []Message) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Role != b[i].Role || a[i].Content != b[i].Content {
+			return false
+		}
+	}
+	return true
+}
+
+// handleAgentFromPlugin serves Host-owned agent.* so Plugins cannot bypass the log invariant.
+func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V:      f.V,
+		ID:     f.ID,
+		Type:   protocol.TypeRes,
+		Cap:    f.Cap,
+		Method: f.Method,
+	}
+	switch f.Method {
+	case "request":
+		var in struct {
+			Messages []Message `json:"messages"`
+		}
+		if len(f.Payload) > 0 {
+			if err := json.Unmarshal(f.Payload, &in); err != nil {
+				res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+				break
+			}
+		}
+		// Empty/omitted messages → rebuild from log.
+		out, err := s.AgentRequest(in.Messages)
+		if err != nil {
+			if fe, ok := err.(*protocol.FrameError); ok {
+				res.Error = fe
+			} else {
+				res.Error = &protocol.FrameError{Code: "agent_request_failed", Message: err.Error()}
+			}
+			break
+		}
+		res.Payload = MarshalPayload(out)
+	default:
+		res.Error = &protocol.FrameError{
+			Code:    "method_not_found",
+			Message: fmt.Sprintf("no handler for agent.%s", f.Method),
+		}
+	}
+	_ = s.writeTo(from, res)
 }

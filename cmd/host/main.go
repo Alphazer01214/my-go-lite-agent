@@ -24,6 +24,9 @@ func main() {
 	invokePlugin := flag.String("invoke", "", "after mount, Host-initiated req to this plugin (serve mode)")
 	callCap := flag.String("call-cap", "", "Capability name for the consumer to call via Host (default echo)")
 	callPlugin := flag.String("call-plugin", "", "after mount, Host-initiated req directly to this plugin name")
+	sessionAppend := flag.String("session-append", "", "JSON array of facts to append via session")
+	sessionDerive := flag.Bool("session-derive", false, "print session.derive Model Context")
+	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	flag.Parse()
 
 	switch {
@@ -34,6 +37,12 @@ func main() {
 	case *assemblyPath != "":
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
+		}
+		if *sessionAppend != "" || *sessionDerive || *agentRequest != "" {
+			if err := runSessionAgent(*pluginsDir, *assemblyPath, *sessionAppend, *sessionDerive, *agentRequest, *dump); err != nil {
+				fatal(err)
+			}
+			return
 		}
 		if *invokePlugin != "" {
 			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump); err != nil {
@@ -277,5 +286,65 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 		return fmt.Errorf("call failed: %s: %s", out.Error.Code, out.Error.Message)
 	}
 	fmt.Printf("ok plugin=%s payload=%s\n", name, string(out.Payload))
+	return nil
+}
+
+// runSessionAgent mounts Plugins then runs session append/derive and/or agent/request checks.
+func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, requestJSON string, dump bool) error {
+	cfg, err := assembly.Load(assemblyPath)
+	if err != nil {
+		return err
+	}
+	res := discovery.Scan(pluginsDir)
+	if len(res.Errors) > 0 {
+		printDiscovery(res)
+		return fmt.Errorf("discovery failed before assembly")
+	}
+	plan := assembly.Resolve(cfg, res)
+	if len(plan.Missing) > 0 {
+		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+	}
+	if dump {
+		dumpAssembly(plan, res)
+	}
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srv.Close() }()
+
+	if appendJSON != "" {
+		var facts []map[string]any
+		if err := json.Unmarshal([]byte(appendJSON), &facts); err != nil {
+			return fmt.Errorf("parse -session-append: %w", err)
+		}
+		seq, err := srv.AppendSessionFacts(facts)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), seq)
+	}
+
+	if derive {
+		msgs, err := srv.DeriveMessages()
+		if err != nil {
+			return err
+		}
+		body, _ := json.Marshal(msgs)
+		fmt.Printf("derive ok messages=%s\n", body)
+	}
+
+	if requestJSON != "" {
+		var claimed []serve.Message
+		if err := json.Unmarshal([]byte(requestJSON), &claimed); err != nil {
+			return fmt.Errorf("parse -agent-request: %w", err)
+		}
+		out, err := srv.AgentRequest(claimed)
+		if err != nil {
+			return err
+		}
+		body, _ := json.Marshal(out)
+		fmt.Printf("agent/request ok rebuilt=%v messages=%s\n", out.Rebuilt, body)
+	}
 	return nil
 }
