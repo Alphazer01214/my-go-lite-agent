@@ -71,6 +71,8 @@ type Server struct {
 	OnStatus func(status string)
 	// OnToolCall is the live Render Medium hook when the Loop starts a tool (or Subagent).
 	OnToolCall func(name string, arguments json.RawMessage)
+	// OnRender is the live Render Medium hook for presentation.render intents.
+	OnRender func(kind, title, body, detail, level, text string, open bool)
 }
 
 // PresentationCap is the Capability used for Presentation Card evt frames.
@@ -84,6 +86,9 @@ const PresentationStreamMethod = "stream"
 
 // PresentationStatusMethod is the agent status evt (idle/running) for Render Medium.
 const PresentationStatusMethod = "status"
+
+// PresentationRenderMethod is a classified render intent (markdown|expandable|message).
+const PresentationRenderMethod = "render"
 
 // PresentationCard is a structured UI render intent projected from args/result (no I/O).
 type PresentationCard struct {
@@ -292,6 +297,9 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 	if f.Cap == PresentationCap && f.Method == PresentationCardMethod {
 		s.recordCard(f)
 	}
+	if f.Cap == PresentationCap && f.Method == PresentationRenderMethod {
+		s.dispatchRender(f)
+	}
 	if f.ID == "" {
 		return
 	}
@@ -305,6 +313,25 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 	if cb != nil {
 		cb(f)
 	}
+}
+
+func (s *Server) dispatchRender(f *protocol.Frame) {
+	if s.OnRender == nil {
+		return
+	}
+	var ri struct {
+		Kind   string `json:"kind"`
+		Text   string `json:"text"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		Detail string `json:"detail"`
+		Level  string `json:"level"`
+		Open   bool   `json:"open"`
+	}
+	if len(f.Payload) > 0 {
+		_ = json.Unmarshal(f.Payload, &ri)
+	}
+	s.OnRender(ri.Kind, ri.Title, ri.Body, ri.Detail, ri.Level, ri.Text, ri.Open)
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
@@ -599,7 +626,7 @@ const ToolsCap = "tools"
 const SubagentToolName = "run_subagent"
 
 // MaxSteps bounds model hops (Steps) inside one Turn (CONTEXT.md Turn/Step).
-const MaxSteps = 8
+const MaxSteps = 128
 
 // ToolSchema is one model-facing tool registration from tools.list.
 type ToolSchema struct {
@@ -1084,6 +1111,10 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			} else {
 				resultContent = toolOut.Content
 				additionalContexts = toolOut.AdditionalContexts
+			}
+			// Render Medium: tool call as expandable (default shown).
+			if s.OnRender != nil {
+				s.OnRender("expandable", tc.Name, resultContent, string(tc.Arguments), "", "", true)
 			}
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "tool_result",

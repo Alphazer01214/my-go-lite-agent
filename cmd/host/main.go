@@ -15,6 +15,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/protocol"
+	"github.com/tomori/my-go-lite-agent/render/mdansi"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
 
@@ -34,7 +35,6 @@ func main() {
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or exit to quit)")
-	verbose := flag.Bool("verbose", false, "show tool calls and stream details (REPL/-turn); default prints Thinking… until body text")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
@@ -50,7 +50,7 @@ func main() {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
 		if *repl {
-			if err := runREPL(*pluginsDir, *assemblyPath, dump, *verbose); err != nil {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump); err != nil {
 				fatal(err)
 			}
 			return
@@ -71,7 +71,6 @@ func main() {
 				invokePayload: invokePayload,
 				audit:         audit,
 				cards:         cards,
-				verbose:       verbose,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -360,29 +359,38 @@ type sessionAgentOpts struct {
 	invokePayload *string
 	audit         *bool
 	cards         *bool
-	verbose       *bool
 }
 
-// turnRenderer is the CLI Render Medium for one Turn (CONTEXT.md Render Medium).
+// turnRenderer is the CLI Render Medium (CONTEXT.md).
+// Content is classified as markdown | expandable | message; all are shown by default.
 type turnRenderer struct {
-	verbose       bool
 	thinkingShown bool
 	gotContent    bool
 	started       bool
+	streamBuf     strings.Builder
+	streamedLive  bool
 }
 
 func (r *turnRenderer) begin() {
 	r.thinkingShown = false
 	r.gotContent = false
 	r.started = true
+	r.streamBuf.Reset()
+	r.streamedLive = false
+}
+
+func (r *turnRenderer) clearThinking() {
+	if r.thinkingShown {
+		fmt.Println()
+		r.thinkingShown = false
+	}
 }
 
 func (r *turnRenderer) onStatus(status string) {
 	if status != "running" || !r.started {
 		return
 	}
-	// Compact mode: no body yet → Claude-Code style placeholder.
-	if !r.verbose && !r.gotContent && !r.thinkingShown {
+	if !r.gotContent && !r.thinkingShown {
 		fmt.Print("Thinking…")
 		r.thinkingShown = true
 	}
@@ -392,39 +400,71 @@ func (r *turnRenderer) onStream(delta string) {
 	if delta == "" {
 		return
 	}
-	if !r.gotContent {
-		if r.thinkingShown {
-			fmt.Println()
-			r.thinkingShown = false
-		}
+	r.streamBuf.WriteString(delta)
+	// Live progressive text for responsiveness; markdown pass runs on settle if we didn't stream.
+	if !r.streamedLive {
+		r.clearThinking()
+		r.streamedLive = true
 		r.gotContent = true
-	}
-	if r.verbose {
-		// verbose still prints body; tools already annotated.
 	}
 	fmt.Print(delta)
 }
 
 func (r *turnRenderer) onTool(name string, args json.RawMessage) {
-	if r.thinkingShown {
-		fmt.Println()
-		r.thinkingShown = false
+	r.clearThinking()
+	fmt.Printf("⏺ %s\n", name)
+	if len(args) > 0 {
+		fmt.Print(mdansi.Indent(string(args), "  "))
 	}
-	if !r.verbose {
-		// Compact: hide tool noise; keep Thinking… until body text (Claude-Code style).
-		if !r.gotContent {
-			fmt.Print("Thinking…")
-			r.thinkingShown = true
-		}
-		return
-	}
-	fmt.Printf("⏺ %s(%s)\n", name, compactArgs(args))
 }
 
-func (r *turnRenderer) end() {
-	if r.thinkingShown {
-		fmt.Println()
-		r.thinkingShown = false
+func (r *turnRenderer) onRender(kind, title, body, detail, level, text string, open bool) {
+	r.clearThinking()
+	switch kind {
+	case "markdown":
+		r.gotContent = true
+		fmt.Print(mdansi.Render(text))
+	case "expandable":
+		r.gotContent = true
+		r.renderExpandable(title, body, detail, open)
+	case "message":
+		prefix := ""
+		switch level {
+		case "error":
+			prefix = "✖ "
+		case "warn":
+			prefix = "⚠ "
+		default:
+			prefix = "· "
+		}
+		fmt.Println(prefix + text)
+	default:
+		if text != "" {
+			fmt.Println(text)
+		}
+	}
+}
+
+func (r *turnRenderer) renderExpandable(title, body, detail string, open bool) {
+	icon := "▸"
+	if open {
+		icon = "▾"
+	}
+	fmt.Printf("%s %s\n", icon, title)
+	if detail != "" {
+		fmt.Print(mdansi.Indent(truncate(detail, 200), "  "))
+	}
+	if open && body != "" {
+		fmt.Print(mdansi.Indent(mdansi.Render(body), "  "))
+	}
+}
+
+func (r *turnRenderer) end(assistant string) {
+	r.clearThinking()
+	// If nothing was streamed live, render the durable assistant body as markdown.
+	if !r.streamedLive && assistant != "" {
+		fmt.Print(mdansi.Render(assistant))
+		r.gotContent = true
 	}
 	if !r.gotContent {
 		fmt.Println()
@@ -432,25 +472,22 @@ func (r *turnRenderer) end() {
 	r.started = false
 }
 
-func compactArgs(args json.RawMessage) string {
-	if len(args) == 0 {
-		return ""
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	s := string(args)
-	if len(s) > 120 {
-		s = s[:117] + "…"
-	}
-	return s
+	return s[:n-1] + "…"
 }
 
 // wireRenderer attaches a turnRenderer to Host live hooks for one RunTurn.
 func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
-	prevDelta, prevStatus, prevTool := srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall
+	prevDelta, prevStatus, prevTool, prevRender := srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall, srv.OnRender
 	srv.OnStreamDelta = r.onStream
 	srv.OnStatus = r.onStatus
 	srv.OnToolCall = r.onTool
+	srv.OnRender = r.onRender
 	return func() {
-		srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall = prevDelta, prevStatus, prevTool
+		srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall, srv.OnRender = prevDelta, prevStatus, prevTool, prevRender
 	}
 }
 
@@ -541,15 +578,17 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	}
 
 	if *opts.turnInput != "" {
-		r := &turnRenderer{verbose: opts.verbose != nil && *opts.verbose}
+		r := &turnRenderer{}
 		restore := wireRenderer(srv, r)
 		r.begin()
 		out, err := srv.RunTurn(*opts.turnInput)
-		r.end()
-		restore()
 		if err != nil {
+			r.end("")
+			restore()
 			return err
 		}
+		r.end(out.Assistant)
+		restore()
 		fmt.Printf("turn ok user=%s assistant=%q chunks=%d tools=%v\n",
 			out.User, out.Assistant, len(out.Chunks), out.ToolCalls)
 		for i, c := range out.Chunks {
@@ -594,7 +633,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 }
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
-func runREPL(pluginsDir, assemblyPath string, dump *bool, verbose bool) error {
+func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return err
@@ -627,15 +666,7 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool, verbose bool) error {
 		os.Exit(0)
 	}()
 
-	srv.OnStreamDelta = nil
-	srv.OnStatus = nil
-	srv.OnToolCall = nil
-
-	if verbose {
-		fmt.Println("lite agent REPL (verbose) — type a message; exit/quit or Ctrl+C to leave.")
-	} else {
-		fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
-	}
+	fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {
@@ -652,20 +683,18 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool, verbose bool) error {
 		if low == "exit" || low == "quit" {
 			break
 		}
-		r := &turnRenderer{verbose: verbose}
+		r := &turnRenderer{}
 		restore := wireRenderer(srv, r)
 		r.begin()
 		out, err := srv.RunTurn(line)
-		r.end()
-		restore()
 		if err != nil {
+			r.end("")
+			restore()
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		// If the model never streamed body text, print the durable assistant reply.
-		if out.Assistant != "" && !r.gotContent {
-			fmt.Println(out.Assistant)
-		}
+		r.end(out.Assistant)
+		restore()
 	}
 	return in.Err()
 }

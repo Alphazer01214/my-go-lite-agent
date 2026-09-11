@@ -76,13 +76,16 @@ cd dist
 .\host.exe -plugins plugins -assembly examples\chat.json -repl
 ```
 
-输入多轮对话；`exit` 或 Ctrl+C 退出。流式 token 边生成边打印。
+输入多轮对话；`exit` 或 Ctrl+C 退出。
 
-默认紧凑模式：尚无正文时显示 `Thinking…`，工具调用不刷屏。需要看工具与细节时加 `-verbose`：
+渲染默认全量展示（无需 `-verbose`）：
 
-```powershell
-.\host.exe -plugins plugins -assembly examples\agent.json -repl -verbose
-```
+- **Thinking…** — 尚无正文时的占位
+- **markdown** — 助手正文（流式；未流式时按 Markdown→ANSI 渲染）
+- **expandable** — 工具调用（`▾ 工具名` + 参数/结果）
+- **message** — 状态/错误行
+
+插件可通过 `pluginsdk.EmitMarkdown` / `EmitExpandable` / `EmitMessage` 向 Render Medium 发分类意图。
 
 带文件工具：
 

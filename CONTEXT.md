@@ -29,7 +29,7 @@ _Avoid_: 功能、接口实现
 _Avoid_: 业务逻辑、实现体（规范名词是 Function）
 
 **Presentation**:
-插件的另一条面：向 Render Medium 暴露的可呈现状态与交互意图。与 Function 可同属一个 Plugin，也可只实现其一。
+插件的另一条面：向 Render Medium 暴露的可呈现状态与交互意图。主窗口内容分为 markdown、expandable、message 三类渲染意图；与 Function 可同属一个 Plugin，也可只实现其一。
 _Avoid_: 视图、前端组件、渲染器（规范名词是 Presentation）
 
 **Presentation Card**:
