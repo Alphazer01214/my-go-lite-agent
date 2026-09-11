@@ -69,6 +69,8 @@ type Server struct {
 	OnStreamDelta func(delta string)
 	// OnStatus is the live Render Medium hook for agent idle/running.
 	OnStatus func(status string)
+	// OnToolCall is the live Render Medium hook when the Loop starts a tool (or Subagent).
+	OnToolCall func(name string, arguments json.RawMessage)
 }
 
 // PresentationCap is the Capability used for Presentation Card evt frames.
@@ -1228,6 +1230,9 @@ func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []stri
 // CallTool executes one ToolCall through the mounted Tools Plugin,
 // or Host-run Subagent when the tool is run_subagent.
 func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
+	if s.OnToolCall != nil {
+		s.OnToolCall(tc.Name, tc.Arguments)
+	}
 	if tc.Name == SubagentToolName {
 		var in struct {
 			Input        string   `json:"input"`

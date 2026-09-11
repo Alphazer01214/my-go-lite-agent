@@ -78,6 +78,12 @@ cd dist
 
 输入多轮对话；`exit` 或 Ctrl+C 退出。流式 token 边生成边打印。
 
+默认紧凑模式：尚无正文时显示 `Thinking…`，工具调用不刷屏。需要看工具与细节时加 `-verbose`：
+
+```powershell
+.\host.exe -plugins plugins -assembly examples\agent.json -repl -verbose
+```
+
 带文件工具：
 
 ```powershell

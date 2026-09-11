@@ -34,6 +34,7 @@ func main() {
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or exit to quit)")
+	verbose := flag.Bool("verbose", false, "show tool calls and stream details (REPL/-turn); default prints Thinking… until body text")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
@@ -49,7 +50,7 @@ func main() {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
 		if *repl {
-			if err := runREPL(*pluginsDir, *assemblyPath, dump); err != nil {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump, *verbose); err != nil {
 				fatal(err)
 			}
 			return
@@ -70,6 +71,7 @@ func main() {
 				invokePayload: invokePayload,
 				audit:         audit,
 				cards:         cards,
+				verbose:       verbose,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -358,6 +360,98 @@ type sessionAgentOpts struct {
 	invokePayload *string
 	audit         *bool
 	cards         *bool
+	verbose       *bool
+}
+
+// turnRenderer is the CLI Render Medium for one Turn (CONTEXT.md Render Medium).
+type turnRenderer struct {
+	verbose       bool
+	thinkingShown bool
+	gotContent    bool
+	started       bool
+}
+
+func (r *turnRenderer) begin() {
+	r.thinkingShown = false
+	r.gotContent = false
+	r.started = true
+}
+
+func (r *turnRenderer) onStatus(status string) {
+	if status != "running" || !r.started {
+		return
+	}
+	// Compact mode: no body yet → Claude-Code style placeholder.
+	if !r.verbose && !r.gotContent && !r.thinkingShown {
+		fmt.Print("Thinking…")
+		r.thinkingShown = true
+	}
+}
+
+func (r *turnRenderer) onStream(delta string) {
+	if delta == "" {
+		return
+	}
+	if !r.gotContent {
+		if r.thinkingShown {
+			fmt.Println()
+			r.thinkingShown = false
+		}
+		r.gotContent = true
+	}
+	if r.verbose {
+		// verbose still prints body; tools already annotated.
+	}
+	fmt.Print(delta)
+}
+
+func (r *turnRenderer) onTool(name string, args json.RawMessage) {
+	if r.thinkingShown {
+		fmt.Println()
+		r.thinkingShown = false
+	}
+	if !r.verbose {
+		// Compact: hide tool noise; keep Thinking… until body text (Claude-Code style).
+		if !r.gotContent {
+			fmt.Print("Thinking…")
+			r.thinkingShown = true
+		}
+		return
+	}
+	fmt.Printf("⏺ %s(%s)\n", name, compactArgs(args))
+}
+
+func (r *turnRenderer) end() {
+	if r.thinkingShown {
+		fmt.Println()
+		r.thinkingShown = false
+	}
+	if !r.gotContent {
+		fmt.Println()
+	}
+	r.started = false
+}
+
+func compactArgs(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	s := string(args)
+	if len(s) > 120 {
+		s = s[:117] + "…"
+	}
+	return s
+}
+
+// wireRenderer attaches a turnRenderer to Host live hooks for one RunTurn.
+func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
+	prevDelta, prevStatus, prevTool := srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall
+	srv.OnStreamDelta = r.onStream
+	srv.OnStatus = r.onStatus
+	srv.OnToolCall = r.onTool
+	return func() {
+		srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall = prevDelta, prevStatus, prevTool
+	}
 }
 
 // runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
@@ -447,7 +541,12 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	}
 
 	if *opts.turnInput != "" {
+		r := &turnRenderer{verbose: opts.verbose != nil && *opts.verbose}
+		restore := wireRenderer(srv, r)
+		r.begin()
 		out, err := srv.RunTurn(*opts.turnInput)
+		r.end()
+		restore()
 		if err != nil {
 			return err
 		}
@@ -495,7 +594,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 }
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
-func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
+func runREPL(pluginsDir, assemblyPath string, dump *bool, verbose bool) error {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return err
@@ -528,11 +627,15 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		os.Exit(0)
 	}()
 
-	srv.OnStreamDelta = func(delta string) {
-		fmt.Print(delta)
-	}
+	srv.OnStreamDelta = nil
+	srv.OnStatus = nil
+	srv.OnToolCall = nil
 
-	fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
+	if verbose {
+		fmt.Println("lite agent REPL (verbose) — type a message; exit/quit or Ctrl+C to leave.")
+	} else {
+		fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
+	}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {
@@ -549,15 +652,18 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		if low == "exit" || low == "quit" {
 			break
 		}
+		r := &turnRenderer{verbose: verbose}
+		restore := wireRenderer(srv, r)
+		r.begin()
 		out, err := srv.RunTurn(line)
+		r.end()
+		restore()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		// Settlement: durable assistant text is authoritative (dsh committed).
-		// Live chunks may have already been printed; ensure a final newline.
-		fmt.Println()
-		if out.Assistant != "" && len(out.Chunks) == 0 {
+		// If the model never streamed body text, print the durable assistant reply.
+		if out.Assistant != "" && !r.gotContent {
 			fmt.Println(out.Assistant)
 		}
 	}
