@@ -23,3 +23,5 @@ Card 形状：`cap=presentation, method=card` 的 `evt`，payload `{cardType, to
 - Card 不含 call id / 时间戳 / 随机数，保证回放可重现。
 - 无 Presentation 的 Function（echo、fakellm）不受影响。
 - Host 丢弃无 id 的非 presentation evt 的行为未改（留给 UI 订阅票）。
+- Code review 修复：纯投影 `echoCard` 与 `EmitCard` 传输拆分；`pluginsdk.Card`/`EmitCard` 暴露作者契约；成功路径只 Emit 一次。
+- 「无 Presentation 的 Function」主缝以 fakellm（无 tools）覆盖；带 tools 但不 Emit 的路径结构上允许，未单独立测。

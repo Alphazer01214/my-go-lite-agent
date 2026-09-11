@@ -4,7 +4,7 @@
 //   - list: → {"tools":[{name,description,input_schema}]}
 //   - call: {"name","arguments"} → {"content", "additionalContexts":[{role,content}]}
 //
-// On success it also Emits a presentation.card evt (pure projection of args+result).
+// On success it also Emits a presentation.card evt built by a pure projection of args+result.
 package main
 
 import (
@@ -14,18 +14,17 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
-// emitEchoCard is a pure Presentation Card projection: no I/O, clock, or randomness.
-func emitEchoCard(s *pluginsdk.Server, argsText, result string) {
+// echoCard is a pure Presentation Card projection: no I/O, clock, or randomness.
+func echoCard(argsText, result string) pluginsdk.Card {
 	data, _ := json.Marshal(map[string]string{
 		"input":  argsText,
 		"output": result,
 	})
-	payload, _ := json.Marshal(map[string]any{
-		"cardType": "echo_result",
-		"tool":     "echo_text",
-		"data":     json.RawMessage(data),
-	})
-	_ = s.Emit("presentation", "card", payload)
+	return pluginsdk.Card{
+		CardType: "echo_result",
+		Tool:     "echo_text",
+		Data:     data,
+	}
 }
 
 func main() {
@@ -66,19 +65,23 @@ func main() {
 		if args.Text == "boom" {
 			return nil, &protocol.FrameError{Code: "tool_failed", Message: "echo_text refused boom"}
 		}
+
+		result := args.Text
+		var body any = map[string]string{"content": result}
 		// Deterministic additionalContexts probe: tool result then extra model-visible note.
 		if args.Text == "ctx" {
-			emitEchoCard(s, args.Text, args.Text)
-			return json.Marshal(map[string]any{
-				"content": args.Text,
+			body = map[string]any{
+				"content": result,
 				"additionalContexts": []map[string]string{{
 					"role":    "system",
 					"content": "ADDITIONAL_CTX_MARKER",
 				}},
-			})
+			}
 		}
-		emitEchoCard(s, args.Text, args.Text)
-		return json.Marshal(map[string]string{"content": args.Text})
+
+		// Transport is separate from the pure projection.
+		_ = s.EmitCard(echoCard(args.Text, result))
+		return json.Marshal(body)
 	})
 
 	_ = s.Serve()
