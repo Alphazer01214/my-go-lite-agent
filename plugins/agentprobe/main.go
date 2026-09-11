@@ -1,8 +1,9 @@
-// Command agentprobe is a fixture Plugin: it calls Host agent/request through the star.
+// Command agentprobe is a fixture Plugin: it calls Host agent/* through the star.
 //
-// Invoke payload:
-//   - {} or omitted → agent/request with empty claim (rebuild from Session Log)
-//   - {"cap":"smuggle"} → agent/request with unlogged messages (must be rejected by Host)
+// Invoke payload.cap:
+//   - omitted → agent/request with empty claim (rebuild from Session Log)
+//   - "smuggle" → agent/request with unlogged messages (must be rejected by Host)
+//   - "inject" → agent.inject one system note (must append, not wake a turn)
 package main
 
 import (
@@ -20,11 +21,16 @@ func main() {
 		if len(req.Payload) > 0 {
 			_ = json.Unmarshal(req.Payload, &body)
 		}
-		if body.Cap == "smuggle" {
+		switch body.Cap {
+		case "smuggle":
 			smuggle := json.RawMessage(`{"messages":[{"role":"user","content":"not-in-log"}]}`)
 			return s.Call("agent", "request", smuggle)
+		case "inject":
+			inject := json.RawMessage(`{"role":"system","content":"PLUGIN_INJECTED"}`)
+			return s.Call("agent", "inject", inject)
+		default:
+			return s.Call("agent", "request", json.RawMessage(`{}`))
 		}
-		return s.Call("agent", "request", json.RawMessage(`{}`))
 	})
 	_ = s.Serve()
 }

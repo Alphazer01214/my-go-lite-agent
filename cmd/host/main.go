@@ -28,6 +28,7 @@ func main() {
 	sessionDerive := flag.Bool("session-derive", false, "print session.derive Model Context")
 	sessionQuery := flag.Bool("session-query", false, "print session.query facts")
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
+	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	flag.Parse()
@@ -41,7 +42,7 @@ func main() {
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
-		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *turnInput != "" {
+		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" {
 			opts := sessionAgentOpts{
 				pluginsDir:   pluginsDir,
 				assemblyPath: assemblyPath,
@@ -49,6 +50,7 @@ func main() {
 				derive:       sessionDerive,
 				query:        sessionQuery,
 				requestJSON:  agentRequest,
+				injectJSON:   agentInject,
 				turnInput:    turnInput,
 				dump:         dump,
 				invokePlugin: invokePlugin,
@@ -328,6 +330,7 @@ type sessionAgentOpts struct {
 	derive       *bool
 	query        *bool
 	requestJSON  *string
+	injectJSON   *string
 	turnInput    *string
 	dump         *bool
 	invokePlugin *string
@@ -376,6 +379,18 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), seq)
 	}
 
+	if opts.injectJSON != nil && *opts.injectJSON != "" {
+		var msgs []serve.Message
+		if err := json.Unmarshal([]byte(*opts.injectJSON), &msgs); err != nil {
+			return fmt.Errorf("parse -agent-inject: %w", err)
+		}
+		out, err := srv.AgentInject(serve.MarshalPayload(map[string]any{"messages": msgs}))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("inject ok count=%d lastSeq=%d\n", out["count"], out["lastSeq"])
+	}
+
 	if *opts.turnInput != "" {
 		out, err := srv.RunTurn(*opts.turnInput)
 		if err != nil {
@@ -389,6 +404,29 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		for i, name := range out.ToolCalls {
 			fmt.Printf("tool_call[%d]=%s\n", i, name)
 		}
+	}
+
+	if *opts.invokePlugin != "" {
+		payload := map[string]string{}
+		if *opts.callCap != "" {
+			payload["cap"] = *opts.callCap
+		}
+		frame := &protocol.Frame{
+			V:       1,
+			Type:    protocol.TypeReq,
+			Cap:     "demo",
+			Method:  "invoke",
+			Payload: serve.MarshalPayload(payload),
+		}
+		out, err := srv.Call(*opts.invokePlugin, frame)
+		if err != nil {
+			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
+		}
+		if out.Error != nil {
+			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
+			return fmt.Errorf("invoke failed: %s", out.Error.Code)
+		}
+		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
 	}
 
 	if *opts.derive {
@@ -420,29 +458,6 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 		body, _ := json.Marshal(out)
 		fmt.Printf("agent/request ok rebuilt=%v messages=%s\n", out.Rebuilt, body)
-	}
-
-	if *opts.invokePlugin != "" {
-		payload := map[string]string{}
-		if *opts.callCap != "" {
-			payload["cap"] = *opts.callCap
-		}
-		frame := &protocol.Frame{
-			V:       1,
-			Type:    protocol.TypeReq,
-			Cap:     "demo",
-			Method:  "invoke",
-			Payload: serve.MarshalPayload(payload),
-		}
-		out, err := srv.Call(*opts.invokePlugin, frame)
-		if err != nil {
-			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
-		}
-		if out.Error != nil {
-			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
-			return fmt.Errorf("invoke failed: %s", out.Error.Code)
-		}
-		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
 	}
 	return nil
 }

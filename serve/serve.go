@@ -266,8 +266,8 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 		f.Payload = dec.Payload
 	}
 
-	// Host owns agent/request (log invariant). Other agent.* methods may be Plugin-provided.
-	if f.Cap == AgentCap && f.Method == "request" {
+	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
+	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject") {
 		s.handleAgentFromPlugin(from, f)
 		return
 	}
@@ -808,10 +808,14 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		}
 
 		for _, tc := range llmOut.ToolCalls {
-			result, callErr := s.CallTool(tc)
-			resultContent := result
+			toolOut, callErr := s.CallTool(tc)
+			resultContent := ""
+			var extra []Message
 			if callErr != nil {
 				resultContent = "error: " + callErr.Error()
+			} else {
+				resultContent = toolOut.Content
+				extra = toolOut.AdditionalContexts
 			}
 			if _, err := s.AppendSessionFacts([]map[string]any{{
 				"type":    "tool_result",
@@ -820,6 +824,20 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 				"meta":    map[string]any{"tool_call_id": tc.ID},
 			}}); err != nil {
 				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+			// Additional Contexts land after the tool result (CONTEXT / US16).
+			for _, ac := range extra {
+				role := ac.Role
+				if role == "" {
+					role = "system"
+				}
+				if _, err := s.AppendSessionFacts([]map[string]any{{
+					"type":    "message",
+					"role":    role,
+					"content": ac.Content,
+				}}); err != nil {
+					return nil, fmt.Errorf("agent loop: %w", err)
+				}
 			}
 		}
 	}
@@ -869,13 +887,19 @@ func (s *Server) CollectToolSchemas() ([]ToolSchema, error) {
 	return out.Tools, nil
 }
 
+// CallToolResult is one tools.call outcome, including Additional Contexts (CONTEXT.md).
+type CallToolResult struct {
+	Content            string    `json:"content"`
+	AdditionalContexts []Message `json:"additionalContexts,omitempty"`
+}
+
 // CallTool executes one ToolCall through the mounted Tools Plugin.
-func (s *Server) CallTool(tc ToolCall) (string, error) {
+func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[ToolsCap]
 	s.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("no plugin provides %q", ToolsCap)
+		return nil, fmt.Errorf("no plugin provides %q", ToolsCap)
 	}
 	args := tc.Arguments
 	if len(args) == 0 {
@@ -892,20 +916,18 @@ func (s *Server) CallTool(tc ToolCall) (string, error) {
 		}),
 	})
 	if err != nil {
-		return "", fmt.Errorf("tools.call %s: %w", tc.Name, err)
+		return nil, fmt.Errorf("tools.call %s: %w", tc.Name, err)
 	}
 	if res.Error != nil {
-		return "", fmt.Errorf("tools.call %s: %w", tc.Name, res.Error)
+		return nil, fmt.Errorf("tools.call %s: %w", tc.Name, res.Error)
 	}
-	var out struct {
-		Content string `json:"content"`
-	}
+	var out CallToolResult
 	if len(res.Payload) > 0 {
 		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return "", fmt.Errorf("tools.call %s: bad payload: %w", tc.Name, err)
+			return nil, fmt.Errorf("tools.call %s: bad payload: %w", tc.Name, err)
 		}
 	}
-	return out.Content, nil
+	return &out, nil
 }
 
 func (s *Server) runExternalTurn(owner, userInput string) (*TurnResult, error) {
@@ -965,7 +987,7 @@ func bytesEqualJSON(a, b json.RawMessage) bool {
 	return string(a) == string(b)
 }
 
-// handleAgentFromPlugin serves Host-owned agent.request so Plugins cannot bypass the log invariant.
+// handleAgentFromPlugin serves Host-owned agent.request and agent.inject.
 func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 	res := &protocol.Frame{
 		V:      f.V,
@@ -974,26 +996,87 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 		Cap:    f.Cap,
 		Method: f.Method,
 	}
-	var in struct {
-		Messages []Message `json:"messages"`
-	}
-	if len(f.Payload) > 0 {
-		if err := json.Unmarshal(f.Payload, &in); err != nil {
-			res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+	switch f.Method {
+	case "request":
+		var in struct {
+			Messages []Message `json:"messages"`
+		}
+		if len(f.Payload) > 0 {
+			if err := json.Unmarshal(f.Payload, &in); err != nil {
+				res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+				_ = s.writeTo(from, res)
+				return
+			}
+		}
+		out, err := s.AgentRequest(in.Messages)
+		if err != nil {
+			if fe, ok := err.(*protocol.FrameError); ok {
+				res.Error = fe
+			} else {
+				res.Error = &protocol.FrameError{Code: "agent_request_failed", Message: err.Error()}
+			}
 			_ = s.writeTo(from, res)
 			return
 		}
-	}
-	out, err := s.AgentRequest(in.Messages)
-	if err != nil {
-		if fe, ok := err.(*protocol.FrameError); ok {
-			res.Error = fe
-		} else {
-			res.Error = &protocol.FrameError{Code: "agent_request_failed", Message: err.Error()}
+		res.Payload = MarshalPayload(out)
+		_ = s.writeTo(from, res)
+	case "inject":
+		out, err := s.AgentInject(f.Payload)
+		if err != nil {
+			if fe, ok := err.(*protocol.FrameError); ok {
+				res.Error = fe
+			} else {
+				res.Error = &protocol.FrameError{Code: "agent_inject_failed", Message: err.Error()}
+			}
+			_ = s.writeTo(from, res)
+			return
+		}
+		res.Payload = MarshalPayload(out)
+		_ = s.writeTo(from, res)
+	default:
+		res.Error = &protocol.FrameError{
+			Code:    "method_not_found",
+			Message: fmt.Sprintf("no handler for agent.%s", f.Method),
 		}
 		_ = s.writeTo(from, res)
-		return
 	}
-	res.Payload = MarshalPayload(out)
-	_ = s.writeTo(from, res)
+}
+
+// AgentInject appends model-visible messages to the Session Log without starting a turn (US17).
+// Accepts {"role","content"} or {"messages":[{role,content},...]}.
+func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
+	var in struct {
+		Role     string    `json:"role"`
+		Content  string    `json:"content"`
+		Messages []Message `json:"messages"`
+	}
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &in); err != nil {
+			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+		}
+	}
+	msgs := in.Messages
+	if len(msgs) == 0 && (in.Role != "" || in.Content != "") {
+		msgs = []Message{{Role: in.Role, Content: in.Content}}
+	}
+	if len(msgs) == 0 {
+		return nil, &protocol.FrameError{Code: "bad_payload", Message: "inject requires role/content or messages"}
+	}
+	facts := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		role := m.Role
+		if role == "" {
+			role = "system"
+		}
+		facts = append(facts, map[string]any{
+			"type":    "message",
+			"role":    role,
+			"content": m.Content,
+		})
+	}
+	seq, err := s.AppendSessionFacts(facts)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]int{"count": len(facts), "lastSeq": seq}, nil
 }

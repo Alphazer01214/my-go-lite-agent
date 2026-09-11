@@ -50,6 +50,16 @@ func main() {
 		if args.Text == "boom" {
 			return nil, &protocol.FrameError{Code: "tool_failed", Message: "echo_text refused boom"}
 		}
+		// Deterministic additionalContexts probe: tool result then extra model-visible note.
+		if args.Text == "ctx" {
+			return json.Marshal(map[string]any{
+				"content": args.Text,
+				"additionalContexts": []map[string]string{{
+					"role":    "system",
+					"content": "ADDITIONAL_CTX_MARKER",
+				}},
+			})
+		}
 		return json.Marshal(map[string]string{"content": args.Text})
 	})
 
