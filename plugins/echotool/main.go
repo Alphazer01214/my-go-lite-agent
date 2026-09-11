@@ -2,7 +2,7 @@
 //
 // Capability: tools
 //   - list: → {"tools":[{name,description,input_schema}]}
-//   - call: {"name","arguments"} → {"content"}
+//   - call: {"name","arguments"} → {"content", "additionalContexts":[{role,content}]}
 package main
 
 import (

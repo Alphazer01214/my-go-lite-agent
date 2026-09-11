@@ -113,9 +113,7 @@ func TestPluginAgentInjectViaStar(t *testing.T) {
 	if !strings.Contains(s, "PLUGIN_INJECTED") {
 		t.Fatalf("want plugin-injected content in Model Context: %s", s)
 	}
-	if !strings.Contains(s, "turn ok") {
-		// inject must not run the default Loop
-	} else {
+	if strings.Contains(s, "turn ok") {
 		t.Fatalf("plugin inject must not start a turn: %s", s)
 	}
 }

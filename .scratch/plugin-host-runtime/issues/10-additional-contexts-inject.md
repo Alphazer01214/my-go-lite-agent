@@ -20,5 +20,7 @@
 
 - inject 只追加；不改写历史，也不启动 Loop。空闲 agent 保持空闲。
 - additionalContexts 默认 role=system；缺省时 Loop 补 system。
-- 仅通过 `session.append` 生效——Session 仍是唯一真源（ADR-0002）。
+- 仅通过 `session.append` 生效——Session 仍是唯一真源（ADR-0002）。Session 只有 append/query/derive，结构上不存在 rewrite API。
 - CLI 操作顺序：append → inject → turn → invoke → derive → query → request（保证 derive 看到注入内容）。
+- 本票 additionalContexts 接线在 `tools.call` 路径；任意 Function 返回值上的通用解析留给后续（US11 全量）。
+- Code review 修复：AgentCap 注释、echotool 契约注释、system role 去重、测试断言写法。

@@ -507,7 +507,7 @@ type Message struct {
 // SessionCap is the Capability name Session Plugins must provide.
 const SessionCap = "session"
 
-// AgentCap is the Host-owned Capability namespace for agent/request (and later agent.inject).
+// AgentCap is the Host-owned Capability namespace for agent/request and agent.inject.
 const AgentCap = "agent"
 
 // LLMCap is the Capability name LLM Plugins must provide for the default Loop.
@@ -810,12 +810,12 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		for _, tc := range llmOut.ToolCalls {
 			toolOut, callErr := s.CallTool(tc)
 			resultContent := ""
-			var extra []Message
+			var additionalContexts []Message
 			if callErr != nil {
 				resultContent = "error: " + callErr.Error()
 			} else {
 				resultContent = toolOut.Content
-				extra = toolOut.AdditionalContexts
+				additionalContexts = toolOut.AdditionalContexts
 			}
 			if _, err := s.AppendSessionFacts([]map[string]any{{
 				"type":    "tool_result",
@@ -826,14 +826,10 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
 			// Additional Contexts land after the tool result (CONTEXT / US16).
-			for _, ac := range extra {
-				role := ac.Role
-				if role == "" {
-					role = "system"
-				}
+			for _, ac := range additionalContexts {
 				if _, err := s.AppendSessionFacts([]map[string]any{{
 					"type":    "message",
-					"role":    role,
+					"role":    defaultSystemRole(ac.Role),
 					"content": ac.Content,
 				}}); err != nil {
 					return nil, fmt.Errorf("agent loop: %w", err)
@@ -1064,13 +1060,9 @@ func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
 	}
 	facts := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
-		role := m.Role
-		if role == "" {
-			role = "system"
-		}
 		facts = append(facts, map[string]any{
 			"type":    "message",
-			"role":    role,
+			"role":    defaultSystemRole(m.Role),
 			"content": m.Content,
 		})
 	}
@@ -1079,4 +1071,11 @@ func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
 		return nil, err
 	}
 	return map[string]int{"count": len(facts), "lastSeq": seq}, nil
+}
+
+func defaultSystemRole(role string) string {
+	if role == "" {
+		return "system"
+	}
+	return role
 }
