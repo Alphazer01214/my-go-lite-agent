@@ -96,6 +96,8 @@ func (st *store) derive() []Message {
 			msgs = append(msgs, Message{Role: f.Role, Content: f.Content})
 		case "tool_call":
 			var meta struct {
+				ToolCalls []ToolCall `json:"tool_calls"`
+				// Legacy single-call shape.
 				ToolCallID string          `json:"tool_call_id"`
 				Name       string          `json:"name"`
 				Arguments  json.RawMessage `json:"arguments"`
@@ -103,14 +105,18 @@ func (st *store) derive() []Message {
 			if len(f.Meta) > 0 {
 				_ = json.Unmarshal(f.Meta, &meta)
 			}
-			msgs = append(msgs, Message{
-				Role:    f.Role,
-				Content: f.Content,
-				ToolCalls: []ToolCall{{
+			calls := meta.ToolCalls
+			if len(calls) == 0 && meta.ToolCallID != "" {
+				calls = []ToolCall{{
 					ID:        meta.ToolCallID,
 					Name:      meta.Name,
 					Arguments: meta.Arguments,
-				}},
+				}}
+			}
+			msgs = append(msgs, Message{
+				Role:      f.Role,
+				Content:   f.Content,
+				ToolCalls: calls,
 			})
 		case "tool_result":
 			var meta struct {

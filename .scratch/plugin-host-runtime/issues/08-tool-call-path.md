@@ -20,6 +20,9 @@
 ## Comments
 
 - 工具 Function 只处理一次 call；是否继续由 Loop 决定。
-- 错误路径：`tools.call` 失败会以 `error: …` 作为 tool_result 落日志，不中断 Loop（下一轮由模型决定）。
-- 多个插件同时 provide `tools` 会 fail-loud（Capability 唯一属主）；多工具应装在同一 Tools 插件内，或后续票再拆。
-- Host `Message` 现携带 `tool_calls`/`tool_call_id`，与 session derive 对齐。
+- 错误路径：`tools.call` 失败会以 `error: …` 作为 tool_result 落日志，不中断 Loop（主缝测试 `TestToolCallErrorStillCompletesTurn`）。
+- 多个插件同时 provide `tools` 会 fail-loud（Capability 唯一属主）；多工具应装在同一 Tools 插件内。
+- Host `Message` 携带 `tool_calls`/`tool_call_id`，与 session derive 对齐；`messagesEqual` 比较 arguments。
+- 一次模型响应的多个 tool_calls 合并为一条 `tool_call` 事实（meta.tool_calls 数组），再逐条 tool_result。
+- 轮次上限：最多 `MaxToolRounds` 次模型请求；最后一次仍要求工具时直接报错，不再执行无法回喂的工具。
+- Code review 修复：arguments 不变量、轮次边界、content+tool_calls 同条事实、错误路径测试。

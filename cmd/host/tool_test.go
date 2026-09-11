@@ -105,3 +105,41 @@ func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 		t.Fatalf("want normal assistant reply: %s", s)
 	}
 }
+
+func TestToolCallErrorStillCompletesTurn(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/host")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
+
+	// "boom" makes echotool fail; Loop must log error tool_result and continue.
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-turn", "boom",
+		"-session-derive",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("tool error must not abort turn: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, "turn ok") {
+		t.Fatalf("want turn ok after tool error: %s", s)
+	}
+	if !strings.Contains(s, "error:") && !strings.Contains(s, "tool_failed") && !strings.Contains(s, "refused") {
+		t.Fatalf("want tool error visible in log/output: %s", s)
+	}
+	if !strings.Contains(s, "Tool said:") {
+		t.Fatalf("want final assistant after tool error: %s", s)
+	}
+	if !strings.Contains(s, `"role":"tool"`) {
+		t.Fatalf("want tool_result fact in Model Context: %s", s)
+	}
+}

@@ -46,6 +46,10 @@ func main() {
 		if len(in.Arguments) > 0 {
 			_ = json.Unmarshal(in.Arguments, &args)
 		}
+		// Deterministic failure probe for main-seam tests.
+		if args.Text == "boom" {
+			return nil, &protocol.FrameError{Code: "tool_failed", Message: "echo_text refused boom"}
+		}
 		return json.Marshal(map[string]string{"content": args.Text})
 	})
 

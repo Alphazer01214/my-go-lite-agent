@@ -692,7 +692,7 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	var toolNames []string
 	var assistant string
 
-	for round := 0; round <= MaxToolRounds; round++ {
+	for round := 0; round < MaxToolRounds; round++ {
 		// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
 		ar, err := s.AgentRequest(nil)
 		if err != nil {
@@ -760,25 +760,34 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 			break
 		}
 
-		// Tool path: record call facts, execute via star routing, record results.
+		// Last allowed model hop: do not execute tools we cannot feed back.
+		if round == MaxToolRounds-1 {
+			return nil, fmt.Errorf("agent loop: exceeded %d model rounds", MaxToolRounds)
+		}
+
+		// One assistant fact carries content (if any) + all tool_calls, then execute.
+		callMeta := make([]map[string]any, 0, len(llmOut.ToolCalls))
 		for _, tc := range llmOut.ToolCalls {
 			toolNames = append(toolNames, tc.Name)
-			meta := map[string]any{
+			item := map[string]any{
 				"tool_call_id": tc.ID,
 				"name":         tc.Name,
 			}
 			if len(tc.Arguments) > 0 {
-				meta["arguments"] = json.RawMessage(tc.Arguments)
+				item["arguments"] = json.RawMessage(tc.Arguments)
 			}
-			if _, err := s.AppendSessionFacts([]map[string]any{{
-				"type":    "tool_call",
-				"role":    "assistant",
-				"content": tc.Name,
-				"meta":    meta,
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
+			callMeta = append(callMeta, item)
+		}
+		if _, err := s.AppendSessionFacts([]map[string]any{{
+			"type":    "tool_call",
+			"role":    "assistant",
+			"content": llmOut.Content,
+			"meta":    map[string]any{"tool_calls": callMeta},
+		}}); err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
 
+		for _, tc := range llmOut.ToolCalls {
 			result, callErr := s.CallTool(tc)
 			resultContent := result
 			if callErr != nil {
@@ -792,9 +801,6 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 			}}); err != nil {
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
-		}
-		if round == MaxToolRounds {
-			return nil, fmt.Errorf("agent loop: exceeded %d tool rounds", MaxToolRounds)
 		}
 	}
 
@@ -916,20 +922,27 @@ func messagesEqual(a, b []Message) bool {
 		if a[i].Role != b[i].Role || a[i].Content != b[i].Content {
 			return false
 		}
+		if a[i].ToolCallID != b[i].ToolCallID {
+			return false
+		}
 		if len(a[i].ToolCalls) != len(b[i].ToolCalls) {
 			return false
 		}
 		for j := range a[i].ToolCalls {
-			if a[i].ToolCalls[j].ID != b[i].ToolCalls[j].ID ||
-				a[i].ToolCalls[j].Name != b[i].ToolCalls[j].Name {
+			x, y := a[i].ToolCalls[j], b[i].ToolCalls[j]
+			if x.ID != y.ID || x.Name != y.Name || !bytesEqualJSON(x.Arguments, y.Arguments) {
 				return false
 			}
 		}
-		if a[i].ToolCallID != b[i].ToolCallID {
-			return false
-		}
 	}
 	return true
+}
+
+func bytesEqualJSON(a, b json.RawMessage) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return string(a) == string(b)
 }
 
 // handleAgentFromPlugin serves Host-owned agent.request so Plugins cannot bypass the log invariant.
