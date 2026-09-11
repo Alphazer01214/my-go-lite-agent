@@ -12,8 +12,8 @@ import (
 func TestResolveMountSet(t *testing.T) {
 	res := discovery.Result{
 		Plugins: []discovery.Found{
-			{Dir: "/p/a", Manifest: plugin.Manifest{Name: "alpha", Version: "0.1.0", Protocol: 1, Entry: "a"}},
-			{Dir: "/p/b", Manifest: plugin.Manifest{Name: "beta", Version: "0.1.0", Protocol: 1, Entry: "b"}},
+			{Dir: "/p/a", Manifest: plugin.Manifest{Name: "alpha", Version: "0.1.0", Protocol: 2, Entry: "a"}},
+			{Dir: "/p/b", Manifest: plugin.Manifest{Name: "beta", Version: "0.1.0", Protocol: 2, Entry: "b"}},
 		},
 	}
 	plan := Resolve(Config{Plugins: []string{"alpha", "ghost"}}, res)
@@ -26,6 +26,22 @@ func TestResolveMountSet(t *testing.T) {
 	}
 	if len(plan.Missing) != 1 || plan.Missing[0] != "ghost" {
 		t.Fatalf("missing: %+v", plan.Missing)
+	}
+}
+
+func TestResolveRejectsNativeCommandConflict(t *testing.T) {
+	res := discovery.Result{
+		Plugins: []discovery.Found{
+			{Dir: "/p/help", Manifest: plugin.Manifest{Name: "help", Version: "0.1.0", Protocol: 2, Entry: "h"}},
+			{Dir: "/p/ok", Manifest: plugin.Manifest{Name: "ok", Version: "0.1.0", Protocol: 2, Entry: "o"}},
+		},
+	}
+	plan := Resolve(Config{Plugins: []string{"help", "ok"}}, res)
+	if len(plan.Mounted) != 1 || plan.Mounted[0].Manifest.Name != "ok" {
+		t.Fatalf("mounted: %+v", plan.Mounted)
+	}
+	if len(plan.Rejected) != 1 || plan.Rejected[0].Name != "help" {
+		t.Fatalf("rejected: %+v", plan.Rejected)
 	}
 }
 

@@ -15,7 +15,7 @@ func TestDiscoverListsPlugins(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "echo", "plugin.json"), `{
 		"name": "echo",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["echo"],
 		"consumes": [],
 		"entry": "echo.exe"
@@ -41,7 +41,7 @@ func TestDiscoverInvalidManifestFails(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/host")
 
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "bad", "plugin.json"), `{"version":"1","protocol":1,"entry":"x"}`)
+	writeFile(t, filepath.Join(dir, "bad", "plugin.json"), `{"version":"1","protocol": 2,"entry":"x"}`)
 	writeFile(t, filepath.Join(dir, "bad", "x"), "bin")
 
 	cmd := exec.Command(hostBin, "-discover", dir)

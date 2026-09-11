@@ -36,11 +36,13 @@ func buildLLMOpenAIPluginDir(t *testing.T, root, pluginsDir, name, baseURL, mode
 	writeFile(t, filepath.Join(dir, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["llm"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
-		"timeoutMs": 60000
+		"timeoutMs": 60000,
+		"description": "OpenAI-compatible LLM provider",
+		"commands": [{"name":"config","description":"Show or set API key / model / baseURL","usage":"/`+name+` config [get|set key=value]"}]
 	}`)
 	b, err := os.ReadFile(bin)
 	if err != nil {

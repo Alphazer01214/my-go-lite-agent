@@ -34,7 +34,7 @@ func main() {
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
-	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or exit to quit)")
+	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or /exit to quit)")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
@@ -165,6 +165,7 @@ func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
 		return fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
+	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
@@ -226,7 +227,7 @@ func roundtrip(pluginPath, id string) error {
 	}()
 
 	req := &protocol.Frame{
-		V:       1,
+		V:       protocol.Version,
 		ID:      id,
 		Type:    protocol.TypeReq,
 		Cap:     "echo",
@@ -261,6 +262,7 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audi
 		return fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
+	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
@@ -284,7 +286,7 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audi
 		payload["cap"] = callCap
 	}
 	frame := &protocol.Frame{
-		V:       1,
+		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     "demo",
 		Method:  "invoke",
@@ -313,6 +315,7 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 		return fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
+	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
@@ -326,7 +329,7 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 	defer func() { _ = srv.Close() }()
 
 	frame := &protocol.Frame{
-		V:       1,
+		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     name,
 		Method:  "echo",
@@ -362,7 +365,7 @@ type sessionAgentOpts struct {
 }
 
 // turnRenderer is the CLI Render Medium (CONTEXT.md).
-// Content is classified as markdown | expandable | message; all are shown by default.
+// Content is classified as markdown_text | message_text | summary_text.
 type turnRenderer struct {
 	thinkingShown bool
 	gotContent    bool
@@ -380,10 +383,8 @@ func (r *turnRenderer) begin() {
 }
 
 func (r *turnRenderer) clearThinking() {
-	if r.thinkingShown {
-		fmt.Println()
-		r.thinkingShown = false
-	}
+	// Thinking is a full message_text line; nothing to erase on the same row.
+	r.thinkingShown = false
 }
 
 func (r *turnRenderer) onStatus(status string) {
@@ -391,7 +392,7 @@ func (r *turnRenderer) onStatus(status string) {
 		return
 	}
 	if !r.gotContent && !r.thinkingShown {
-		fmt.Print("Thinking…")
+		r.renderMessageText("dim", "Thinking…")
 		r.thinkingShown = true
 	}
 }
@@ -411,58 +412,62 @@ func (r *turnRenderer) onStream(delta string) {
 }
 
 func (r *turnRenderer) onTool(name string, args json.RawMessage) {
+	// Tool display is owned by message_text (start) + summary_text (end).
 	r.clearThinking()
-	fmt.Printf("⏺ %s\n", name)
-	if len(args) > 0 {
-		fmt.Print(mdansi.Indent(string(args), "  "))
-	}
 }
 
-func (r *turnRenderer) onRender(kind, title, body, detail, level, text string, open bool) {
+func (r *turnRenderer) onRender(ri serve.RenderIntent) {
 	r.clearThinking()
-	switch kind {
-	case "markdown":
-		r.gotContent = true
-		fmt.Print(mdansi.Render(text))
-	case "expandable":
-		r.gotContent = true
-		r.renderExpandable(title, body, detail, open)
-	case "message":
-		prefix := ""
-		switch level {
-		case "error":
-			prefix = "✖ "
-		case "warn":
-			prefix = "⚠ "
-		default:
-			prefix = "· "
+	switch ri.Kind {
+	case serve.KindMarkdownText:
+		// Settle markdown_text: skip if we already streamed the same body live.
+		if r.streamedLive {
+			return
 		}
-		fmt.Println(prefix + text)
+		r.gotContent = true
+		fmt.Print(mdansi.Render(ri.Text))
+	case serve.KindMessageText:
+		r.renderMessageText(ri.Level, ri.Text)
+	case serve.KindSummaryText:
+		r.gotContent = true
+		r.renderSummaryText(ri.Title, ri.Pairs, ri.Detail)
 	default:
-		if text != "" {
-			fmt.Println(text)
+		if ri.Text != "" {
+			fmt.Println(ri.Text)
 		}
 	}
 }
 
-func (r *turnRenderer) renderExpandable(title, body, detail string, open bool) {
-	icon := "▸"
-	if open {
-		icon = "▾"
+func (r *turnRenderer) renderMessageText(level, text string) {
+	switch level {
+	case "error":
+		fmt.Println("✖ " + text)
+	case "warn":
+		fmt.Println("⚠ " + text)
+	case "dim":
+		fmt.Println("\x1b[2m" + text + "\x1b[0m")
+	default:
+		fmt.Println("· " + text)
 	}
-	fmt.Printf("%s %s\n", icon, title)
+}
+
+func (r *turnRenderer) renderSummaryText(title string, pairs []serve.SummaryPair, detail string) {
+	if title != "" {
+		fmt.Printf("⏺ %s\n", title)
+	}
+	for _, p := range pairs {
+		fmt.Printf("  %s: %s\n", p.Key, p.Value)
+	}
 	if detail != "" {
-		fmt.Print(mdansi.Indent(truncate(detail, 200), "  "))
-	}
-	if open && body != "" {
-		fmt.Print(mdansi.Indent(mdansi.Render(body), "  "))
+		fmt.Print(mdansi.Indent(serve.TruncateRunes(detail, serve.MaxSummaryDetail), "  "))
 	}
 }
 
 func (r *turnRenderer) end(assistant string) {
 	r.clearThinking()
-	// If nothing was streamed live, render the durable assistant body as markdown.
-	if !r.streamedLive && assistant != "" {
+	// If nothing was streamed live and settle didn't already paint markdown_text,
+	// fall back to rendering the durable assistant body as markdown.
+	if !r.streamedLive && !r.gotContent && assistant != "" {
 		fmt.Print(mdansi.Render(assistant))
 		r.gotContent = true
 	}
@@ -470,13 +475,6 @@ func (r *turnRenderer) end(assistant string) {
 		fmt.Println()
 	}
 	r.started = false
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }
 
 // wireRenderer attaches a turnRenderer to Host live hooks for one RunTurn.
@@ -503,6 +501,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		return fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
+	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
@@ -560,7 +559,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 			rawPayload = serve.MarshalPayload(payload)
 		}
 		frame := &protocol.Frame{
-			V:       1,
+			V:       protocol.Version,
 			Type:    protocol.TypeReq,
 			Cap:     "demo",
 			Method:  "invoke",
@@ -644,6 +643,7 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		return fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
+	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
@@ -656,6 +656,10 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 	}
 	defer func() { _ = srv.Close() }()
 
+	probeCommandFaces(srv, plan.Mounted)
+
+	cp := newCommandPlane(srv, pluginsDir, plan)
+
 	// Clean shutdown on Ctrl+C so plugin processes are not orphaned.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -666,7 +670,7 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		os.Exit(0)
 	}()
 
-	fmt.Println("lite agent REPL — type a message; exit/quit or Ctrl+C to leave.")
+	fmt.Println("lite agent REPL — type a message; /help for commands; /exit to leave.")
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {
@@ -679,9 +683,16 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		if line == "" {
 			continue
 		}
-		low := strings.ToLower(line)
-		if low == "exit" || low == "quit" {
-			break
+		if strings.HasPrefix(line, "/") {
+			quit, err := cp.handle(line)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				continue
+			}
+			if quit {
+				break
+			}
+			continue
 		}
 		r := &turnRenderer{}
 		restore := wireRenderer(srv, r)
@@ -697,4 +708,26 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		restore()
 	}
 	return in.Err()
+}
+
+func printRejected(rejected []assembly.Rejected) {
+	for _, r := range rejected {
+		fmt.Fprintf(os.Stderr, "reject plugin %s: %s\n", r.Name, r.Reason)
+	}
+}
+
+// probeCommandFaces warns when a Plugin declares commands[] but has no commands.call handler.
+func probeCommandFaces(srv *serve.Server, mounted []discovery.Found) {
+	for _, p := range mounted {
+		if len(p.Manifest.Commands) == 0 {
+			continue
+		}
+		_, err := srv.CallCommand(p.Manifest.Name, "__probe__", "")
+		if err == nil {
+			continue
+		}
+		if strings.Contains(err.Error(), "method_not_found") {
+			fmt.Fprintf(os.Stderr, "warn: plugin %s declares commands but has no commands.call handler\n", p.Manifest.Name)
+		}
+	}
 }

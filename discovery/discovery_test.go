@@ -23,7 +23,7 @@ func TestScanValidAndInvalid(t *testing.T) {
 	writeFile(t, filepath.Join(root, "echo", "plugin.json"), `{
 		"name": "echo",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["echo"],
 		"consumes": [],
 		"entry": "echo.exe"
@@ -33,7 +33,7 @@ func TestScanValidAndInvalid(t *testing.T) {
 	// invalid: missing name
 	writeFile(t, filepath.Join(root, "bad-name", "plugin.json"), `{
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": [],
 		"entry": "x"
 	}`)
@@ -43,7 +43,7 @@ func TestScanValidAndInvalid(t *testing.T) {
 	writeFile(t, filepath.Join(root, "no-entry", "plugin.json"), `{
 		"name": "no-entry",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["x"],
 		"entry": "missing.exe"
 	}`)

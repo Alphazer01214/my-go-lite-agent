@@ -13,7 +13,7 @@ func buildSlowPluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["slow"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
@@ -35,7 +35,7 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["session"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -56,7 +56,7 @@ func buildAgentProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["demo"],
 		"consumes": ["session"],
 		"entry": "`+name+`.exe"
@@ -77,7 +77,7 @@ func buildFakeLLMPluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["llm"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -98,7 +98,7 @@ func buildEchoToolPluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["tools"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -120,7 +120,7 @@ func buildInterceptorPluginDir(t *testing.T, root, pluginsDir, name, mode string
 	writeFile(t, filepath.Join(dir, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["interceptor"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -142,7 +142,7 @@ func buildCrashInterceptorPluginDir(t *testing.T, root, pluginsDir, name string)
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["interceptor"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -163,7 +163,7 @@ func buildCrashOncePluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["crashy"],
 		"consumes": [],
 		"entry": "`+name+`.exe"

@@ -39,7 +39,8 @@ const (
 )
 
 // Version is the Frame protocol version carried in Frame.V.
-const Version = 1
+// v2: presentation render kinds are markdown_text | message_text | summary_text.
+const Version = 2
 
 // maxFrameSize guards against corrupt length prefixes.
 const maxFrameSize = 16 << 20

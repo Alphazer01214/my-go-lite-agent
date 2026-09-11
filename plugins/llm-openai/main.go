@@ -344,6 +344,77 @@ func marshalOut(msg chatMessage) (json.RawMessage, error) {
 	return json.Marshal(out)
 }
 
+func configPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "config.json"
+	}
+	return filepath.Join(filepath.Dir(exe), "config.json")
+}
+
+func saveConfig(cfg config) error {
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), raw, 0o600)
+}
+
+func handleConfigCommand(args string) (json.RawMessage, error) {
+	cfg := loadConfig()
+	fields := strings.Fields(args)
+	if len(fields) == 0 || fields[0] == "get" {
+		// Never print the raw API key.
+		key := cfg.APIKey
+		if key != "" {
+			if len(key) > 8 {
+				key = key[:4] + "…" + key[len(key)-4:]
+			} else {
+				key = "…"
+			}
+		}
+		text := fmt.Sprintf("baseURL=%s\nmodel=%s\napiKey=%s", cfg.BaseURL, cfg.Model, key)
+		return json.Marshal(map[string]string{"text": text})
+	}
+	if fields[0] != "set" {
+		return nil, &protocol.FrameError{
+			Code:    "bad_command",
+			Message: "usage: /llm-openai config [get|set key=value ...]",
+		}
+	}
+	changed := false
+	for _, kv := range fields[1:] {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return nil, &protocol.FrameError{
+				Code:    "bad_assignment",
+				Message: fmt.Sprintf("expected key=value, got %q", kv),
+			}
+		}
+		switch k {
+		case "apiKey":
+			cfg.APIKey = v
+		case "baseURL":
+			cfg.BaseURL = strings.TrimRight(v, "/")
+		case "model":
+			cfg.Model = v
+		default:
+			return nil, &protocol.FrameError{
+				Code:    "unknown_key",
+				Message: fmt.Sprintf("unknown config key %q (apiKey|baseURL|model)", k),
+			}
+		}
+		changed = true
+	}
+	if !changed {
+		return nil, &protocol.FrameError{Code: "bad_command", Message: "set requires at least one key=value"}
+	}
+	if err := saveConfig(cfg); err != nil {
+		return nil, &protocol.FrameError{Code: "save_failed", Message: err.Error()}
+	}
+	return json.Marshal(map[string]string{"text": "config saved to " + configPath()})
+}
+
 func main() {
 	s := pluginsdk.New()
 	cfg := loadConfig()
@@ -371,6 +442,24 @@ func main() {
 			}
 		}
 		return complete(cfg, req.ID, s, toWireMessages(in.Messages), toWireTools(in.Tools))
+	})
+	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Command string `json:"command"`
+			Args    string `json:"args"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		if in.Command != "config" {
+			return nil, &protocol.FrameError{
+				Code:    "unknown_command",
+				Message: fmt.Sprintf("unknown command %q", in.Command),
+			}
+		}
+		return handleConfigCommand(in.Args)
 	})
 	_ = s.Serve()
 }

@@ -16,7 +16,7 @@ func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, s
 	writeFile(t, filepath.Join(dir, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["system-prompt"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -91,7 +91,7 @@ func buildPromptRegPluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["demo"],
 		"consumes": ["system-prompt"],
 		"entry": "`+name+`.exe"

@@ -1,8 +1,9 @@
 {
   "name": "filetools",
   "version": "0.1.0",
-  "protocol": 1,
+  "protocol": 2,
   "provides": ["tools"],
   "consumes": [],
-  "entry": "filetools.exe"
+  "entry": "filetools.exe",
+  "description": "Read/write workspace files"
 }

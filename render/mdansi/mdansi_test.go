@@ -30,6 +30,20 @@ func TestRenderFence(t *testing.T) {
 	}
 }
 
+func TestRenderTableAndLink(t *testing.T) {
+	out := Render("| a | b |\n|---|---|\n| 1 | 2 |\n\nSee [x](https://example.com).\n")
+	plain := Plain(out)
+	if !strings.Contains(plain, "│ a │ b │") {
+		t.Fatalf("want table header row: %q", plain)
+	}
+	if !strings.Contains(plain, "│ 1 │ 2 │") {
+		t.Fatalf("want table body row: %q", plain)
+	}
+	if !strings.Contains(plain, "https://example.com") {
+		t.Fatalf("want link dest: %q", plain)
+	}
+}
+
 func TestIndent(t *testing.T) {
 	out := Indent("a\nb\n", "  ")
 	if out != "  a\n  b\n" {

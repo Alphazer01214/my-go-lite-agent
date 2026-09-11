@@ -72,7 +72,7 @@ type Server struct {
 	// OnToolCall is the live Render Medium hook when the Loop starts a tool (or Subagent).
 	OnToolCall func(name string, arguments json.RawMessage)
 	// OnRender is the live Render Medium hook for presentation.render intents.
-	OnRender func(kind, title, body, detail, level, text string, open bool)
+	OnRender func(ri RenderIntent)
 }
 
 // PresentationCap is the Capability used for Presentation Card evt frames.
@@ -87,8 +87,14 @@ const PresentationStreamMethod = "stream"
 // PresentationStatusMethod is the agent status evt (idle/running) for Render Medium.
 const PresentationStatusMethod = "status"
 
-// PresentationRenderMethod is a classified render intent (markdown|expandable|message).
+// PresentationRenderMethod is a classified render intent (markdown_text|message_text|summary_text).
 const PresentationRenderMethod = "render"
+
+// CommandsCap is the Capability Host uses to route slash commands into a Plugin.
+const CommandsCap = "commands"
+
+// CommandsCallMethod is the method Plugins implement to handle a slash command.
+const CommandsCallMethod = "call"
 
 // PresentationCard is a structured UI render intent projected from args/result (no I/O).
 type PresentationCard struct {
@@ -320,18 +326,32 @@ func (s *Server) dispatchRender(f *protocol.Frame) {
 		return
 	}
 	var ri struct {
-		Kind   string `json:"kind"`
-		Text   string `json:"text"`
-		Title  string `json:"title"`
-		Body   string `json:"body"`
-		Detail string `json:"detail"`
-		Level  string `json:"level"`
-		Open   bool   `json:"open"`
+		Kind   string        `json:"kind"`
+		Text   string        `json:"text"`
+		Level  string        `json:"level"`
+		Title  string        `json:"title"`
+		Pairs  []SummaryPair `json:"pairs"`
+		Detail string        `json:"detail"`
 	}
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &ri)
 	}
-	s.OnRender(ri.Kind, ri.Title, ri.Body, ri.Detail, ri.Level, ri.Text, ri.Open)
+	switch ri.Kind {
+	case KindMarkdownText, KindMessageText, KindSummaryText:
+		s.OnRender(RenderIntent{
+			Kind:   ri.Kind,
+			Text:   ri.Text,
+			Level:  ri.Level,
+			Title:  ri.Title,
+			Pairs:  ri.Pairs,
+			Detail: ri.Detail,
+		})
+	default:
+		// Unknown kind (e.g. protocol v1 leftovers): drop with a live status note.
+		if s.OnStatus != nil {
+			s.OnStatus(fmt.Sprintf("warn: dropped unknown render kind %q", ri.Kind))
+		}
+	}
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
@@ -473,6 +493,31 @@ func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, er
 		return nil, err
 	}
 	return out.Frame, nil
+}
+
+// CallCommand routes a slash command into pluginName (cap=commands, method=call).
+func (s *Server) CallCommand(pluginName, command, args string) (json.RawMessage, error) {
+	payload, err := json.Marshal(map[string]string{
+		"command": command,
+		"args":    args,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Call(pluginName, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     CommandsCap,
+		Method:  CommandsCallMethod,
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != nil {
+		return nil, out.Error
+	}
+	return out.Payload, nil
 }
 
 // CallStream is Call plus any evt frames attributed to the request id while waiting.
@@ -1050,6 +1095,10 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			}}); err != nil {
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
+			// Settle: durable assistant body as markdown_text for every Render Medium.
+			if llmOut.Content != "" && s.OnRender != nil {
+				s.OnRender(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content})
+			}
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
 				"role": "host",
@@ -1112,9 +1161,22 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				resultContent = toolOut.Content
 				additionalContexts = toolOut.AdditionalContexts
 			}
-			// Render Medium: tool call as expandable (default shown).
+			// Render Medium: summary_text card (pairs from args, detail = result + overflow).
 			if s.OnRender != nil {
-				s.OnRender("expandable", tc.Name, resultContent, string(tc.Arguments), "", "", true)
+				pairs, overflow := JSONToPairs(tc.Arguments, MaxSummaryPairs)
+				detail := resultContent
+				if overflow != "" {
+					if detail != "" {
+						detail += "\n"
+					}
+					detail += overflow
+				}
+				s.OnRender(RenderIntent{
+					Kind:   KindSummaryText,
+					Title:  tc.Name,
+					Pairs:  pairs,
+					Detail: TruncateRunes(detail, MaxSummaryDetail),
+				})
 			}
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "tool_result",
@@ -1263,6 +1325,9 @@ func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []stri
 func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
 	if s.OnToolCall != nil {
 		s.OnToolCall(tc.Name, tc.Arguments)
+	}
+	if s.OnRender != nil {
+		s.OnRender(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name)})
 	}
 	if tc.Name == SubagentToolName {
 		var in struct {

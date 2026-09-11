@@ -15,7 +15,7 @@ func buildSessionProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
 		"version": "0.1.0",
-		"protocol": 1,
+		"protocol": 2,
 		"provides": ["demo"],
 		"consumes": ["session"],
 		"entry": "`+name+`.exe"

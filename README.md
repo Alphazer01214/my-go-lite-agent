@@ -76,16 +76,16 @@ cd dist
 .\host.exe -plugins plugins -assembly examples\chat.json -repl
 ```
 
-输入多轮对话；`exit` 或 Ctrl+C 退出。
+输入多轮对话；`/help` 查看命令；`/exit` 或 Ctrl+C 退出。
 
 渲染默认全量展示（无需 `-verbose`）：
 
-- **Thinking…** — 尚无正文时的占位
-- **markdown** — 助手正文（流式；未流式时按 Markdown→ANSI 渲染）
-- **expandable** — 工具调用（`▾ 工具名` + 参数/结果）
-- **message** — 状态/错误行
+- **Thinking…** — 尚无正文时的淡化占位（`message_text` dim）
+- **markdown_text** — 助手正文（流式 raw；settle 按 Markdown→ANSI 渲染）
+- **summary_text** — 工具调用摘要卡（`⏺ 工具名` + 键值参数 + 截断详情）
+- **message_text** — 状态/错误行
 
-插件可通过 `pluginsdk.EmitMarkdown` / `EmitExpandable` / `EmitMessage` 向 Render Medium 发分类意图。
+插件可通过 `pluginsdk.EmitMarkdownText` / `EmitMessageText` / `EmitSummaryText` 向 Render Medium 发分类意图。
 
 带文件工具：
 
@@ -159,7 +159,7 @@ my-plugin/
 {
   "name": "session",
   "version": "0.1.0",
-  "protocol": 1,
+  "protocol": 2,
   "provides": ["session"],
   "consumes": [],
   "entry": "session.exe",

@@ -20,6 +20,14 @@ type Plan struct {
 	Mounted   []discovery.Found
 	Unmounted []discovery.Found
 	Missing   []string
+	// Rejected lists plugins that were discovered but refused (e.g. native Command name conflict).
+	Rejected []Rejected
+}
+
+// Rejected is a Plugin excluded from mount and why.
+type Rejected struct {
+	Name   string
+	Reason string
 }
 
 // Load reads an Assembly config file.
@@ -36,6 +44,7 @@ func Load(path string) (Config, error) {
 }
 
 // Resolve intersects cfg.Plugins with discovered plugins. Missing names stay in Plan.Missing.
+// Plugins whose name conflicts with a Host-native Command are rejected (ADR-0008).
 func Resolve(cfg Config, res discovery.Result) Plan {
 	byName := make(map[string]discovery.Found, len(res.Plugins))
 	for _, p := range res.Plugins {
@@ -49,11 +58,19 @@ func Resolve(cfg Config, res discovery.Result) Plan {
 
 	var plan Plan
 	for _, name := range cfg.Plugins {
-		if p, ok := byName[name]; ok {
-			plan.Mounted = append(plan.Mounted, p)
+		p, ok := byName[name]
+		if !ok {
+			plan.Missing = append(plan.Missing, name)
 			continue
 		}
-		plan.Missing = append(plan.Missing, name)
+		if p.Manifest.ConflictsWithNativeCommand() {
+			plan.Rejected = append(plan.Rejected, Rejected{
+				Name:   name,
+				Reason: fmt.Sprintf("plugin name %q conflicts with native command /%s", name, name),
+			})
+			continue
+		}
+		plan.Mounted = append(plan.Mounted, p)
 	}
 	for _, p := range res.Plugins {
 		if !want[p.Manifest.Name] {

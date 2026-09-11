@@ -65,6 +65,7 @@ func Scan(root string) Result {
 			res.Errors = append(res.Errors, ScanError{Dir: dir, Err: err})
 			continue
 		}
+		// protocol=1 is still mountable (ADR-0007); Host drops unknown render kinds.
 		res.Plugins = append(res.Plugins, Found{Dir: dir, Manifest: *m})
 	}
 

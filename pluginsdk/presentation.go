@@ -6,12 +6,16 @@ import "encoding/json"
 //
 // Cards are broadcast evt Frames: cap=presentation, method=card, no id.
 // Render intents are broadcast evt Frames: cap=presentation, method=render.
+//
+// Protocol v2 render kinds: markdown_text | message_text | summary_text.
 const (
 	PresentationCap       = "presentation"
 	PresentationMethod    = "card"
 	PresentationRender    = "render"
 	PresentationStreamEvt = "stream"
 	PresentationStatusEvt = "status"
+	CommandsCap           = "commands"
+	CommandsCallMethod    = "call"
 )
 
 // Card is one Presentation render intent (CONTEXT.md Presentation Card).
@@ -34,23 +38,28 @@ func (s *Server) EmitCard(c Card) error {
 type RenderKind string
 
 const (
-	RenderMarkdown   RenderKind = "markdown"
-	RenderExpandable RenderKind = "expandable"
-	RenderMessage    RenderKind = "message"
+	RenderMarkdownText RenderKind = "markdown_text"
+	RenderMessageText  RenderKind = "message_text"
+	RenderSummaryText  RenderKind = "summary_text"
 )
+
+// SummaryPair is one ordered key/value row on a summary_text card.
+type SummaryPair struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
 
 // RenderIntent is one classified block for the terminal (or other) Render Medium.
 type RenderIntent struct {
 	Kind RenderKind `json:"kind"`
-	// Markdown body (kind=markdown).
+	// Markdown body (kind=markdown_text).
 	Text string `json:"text,omitempty"`
-	// Expandable section (kind=expandable).
-	Title  string `json:"title,omitempty"`
-	Body   string `json:"body,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	Open   bool   `json:"open,omitempty"`
-	// Plain status line (kind=message).
-	Level string `json:"level,omitempty"` // info | warn | error
+	// Short status line (kind=message_text): info | warn | error | dim.
+	Level string `json:"level,omitempty"`
+	// Key/value summary (kind=summary_text).
+	Title  string        `json:"title,omitempty"`
+	Pairs  []SummaryPair `json:"pairs,omitempty"`
+	Detail string        `json:"detail,omitempty"`
 }
 
 // EmitRender sends a classified render intent (broadcast).
@@ -62,19 +71,17 @@ func (s *Server) EmitRender(ri RenderIntent) error {
 	return s.Emit(PresentationCap, PresentationRender, payload)
 }
 
-// EmitMarkdown is shorthand for a markdown body block.
-func (s *Server) EmitMarkdown(text string) error {
-	return s.EmitRender(RenderIntent{Kind: RenderMarkdown, Text: text})
+// EmitMarkdownText is shorthand for a markdown_text body block.
+func (s *Server) EmitMarkdownText(text string) error {
+	return s.EmitRender(RenderIntent{Kind: RenderMarkdownText, Text: text})
 }
 
-// EmitExpandable is shorthand for a collapsible section.
-func (s *Server) EmitExpandable(title, body, detail string, open bool) error {
-	return s.EmitRender(RenderIntent{
-		Kind: RenderExpandable, Title: title, Body: body, Detail: detail, Open: open,
-	})
+// EmitMessageText is shorthand for a message_text status line.
+func (s *Server) EmitMessageText(level, text string) error {
+	return s.EmitRender(RenderIntent{Kind: RenderMessageText, Level: level, Text: text})
 }
 
-// EmitMessage is shorthand for a plain status/error line.
-func (s *Server) EmitMessage(level, text string) error {
-	return s.EmitRender(RenderIntent{Kind: RenderMessage, Level: level, Text: text})
+// EmitSummaryText is shorthand for a summary_text card.
+func (s *Server) EmitSummaryText(title string, pairs []SummaryPair, detail string) error {
+	return s.EmitRender(RenderIntent{Kind: RenderSummaryText, Title: title, Pairs: pairs, Detail: detail})
 }

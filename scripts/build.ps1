@@ -19,23 +19,29 @@ function Build-Pkg([string]$pkg, [string]$out) {
     if ($LASTEXITCODE -ne 0) { throw "go build $pkg failed" }
 }
 
-function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]$consumes = "[]", [int]$timeoutMs = 0) {
+function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]$consumes = "[]", [int]$timeoutMs = 0, [string]$description = "", [string]$commands = "") {
     $dir = Join-Path $dist "plugins\$name"
     New-Item -ItemType Directory -Path $dir | Out-Null
     $exe = Join-Path $dir "$name.exe"
     Build-Pkg $pkg $exe
-    $timeoutField = ""
+    $extra = ""
     if ($timeoutMs -gt 0) {
-        $timeoutField = ",`n  `"timeoutMs`": $timeoutMs"
+        $extra += ",`n  `"timeoutMs`": $timeoutMs"
+    }
+    if ($description -ne "") {
+        $extra += ",`n  `"description`": `"$description`""
+    }
+    if ($commands -ne "") {
+        $extra += ",`n  `"commands`": $commands"
     }
     $manifest = @"
 {
   "name": "$name",
   "version": "0.1.0",
-  "protocol": 1,
+  "protocol": 2,
   "provides": $provides,
   "consumes": $consumes,
-  "entry": "$name.exe"$timeoutField
+  "entry": "$name.exe"$extra
 }
 "@
     # UTF-8 without BOM — Host's JSON parser rejects a BOM.
@@ -47,14 +53,14 @@ Push-Location $root
 try {
     Build-Pkg "./cmd/host" (Join-Path $dist "host.exe")
 
-    Install-Plugin "session"        "./plugins/session"        '["session"]'
-    Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]'
-    Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000
-    Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]'
-    Install-Plugin "filetools"      "./plugins/filetools"      '["tools"]'
-    Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]'
-    Install-Plugin "echo"           "./plugins/echo"           '["echo"]'
-    Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]'
+    Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "In-memory session log plugin"
+    Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]' "[]" 0 "Deterministic fake LLM for tests"
+    Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000 "OpenAI-compatible LLM provider" '[{"name":"config","description":"Show or set API key / model / baseURL","usage":"/llm-openai config [get|set key=value]"}]'
+    Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 "Echo tool with presentation card"
+    Install-Plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 "Read/write workspace files"
+    Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]' "[]" 0 "System prompt segment assembler"
+    Install-Plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 "Echo capability plugin"
+    Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]' "[]" 0 "Demo waterfall interceptor"
 
     Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
