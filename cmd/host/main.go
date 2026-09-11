@@ -28,6 +28,7 @@ func main() {
 	sessionDerive := flag.Bool("session-derive", false, "print session.derive Model Context")
 	sessionQuery := flag.Bool("session-query", false, "print session.query facts")
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
+	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	flag.Parse()
 
 	switch {
@@ -39,7 +40,7 @@ func main() {
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
-		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" {
+		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *turnInput != "" {
 			opts := sessionAgentOpts{
 				pluginsDir:   pluginsDir,
 				assemblyPath: assemblyPath,
@@ -47,6 +48,7 @@ func main() {
 				derive:       sessionDerive,
 				query:        sessionQuery,
 				requestJSON:  agentRequest,
+				turnInput:    turnInput,
 				dump:         dump,
 				invokePlugin: invokePlugin,
 				callCap:      callCap,
@@ -301,7 +303,7 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 	return nil
 }
 
-// sessionAgentOpts carries Host CLI options for the session/agent path.
+// sessionAgentOpts carries Host CLI options for the session/agent/loop path.
 type sessionAgentOpts struct {
 	pluginsDir   *string
 	assemblyPath *string
@@ -309,12 +311,13 @@ type sessionAgentOpts struct {
 	derive       *bool
 	query        *bool
 	requestJSON  *string
+	turnInput    *string
 	dump         *bool
 	invokePlugin *string
 	callCap      *string
 }
 
-// runSessionAgent mounts Plugins then runs session append/query/derive, agent/request, and optional invoke.
+// runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
 func runSessionAgent(opts sessionAgentOpts) error {
 	cfg, err := assembly.Load(*opts.assemblyPath)
 	if err != nil {
@@ -348,6 +351,17 @@ func runSessionAgent(opts sessionAgentOpts) error {
 			return err
 		}
 		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), seq)
+	}
+
+	if *opts.turnInput != "" {
+		out, err := srv.RunTurn(*opts.turnInput)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("turn ok user=%s assistant=%q chunks=%d\n", out.User, out.Assistant, len(out.Chunks))
+		for i, c := range out.Chunks {
+			fmt.Printf("chunk[%d]=%q\n", i, c)
+		}
 	}
 
 	if *opts.derive {

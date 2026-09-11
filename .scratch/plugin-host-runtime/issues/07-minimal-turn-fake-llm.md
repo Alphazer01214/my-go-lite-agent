@@ -4,10 +4,20 @@
 
 **Blocked by:** 06 — Session 插件与日志不变量
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 默认 Loop 使用 Host 内建实现，注入 session/llm（及 loop 所需最小 Capability）
-- [ ] 用户输入成为 Session 事实，并出现在下一次 Model Context
-- [ ] fake-llm 插件可流式 `evt` chunk，最终 `res` 形成 assistant 消息并追加进日志
-- [ ] 一轮结束后 Host 可干净 idle 或退出（按入口约定）
-- [ ] 主缝测试：单条用户消息 → 可派生出完整 assistant 回复；全程不依赖真实网络 LLM
+- [x] 默认 Loop 使用 Host 内建实现，注入 session/llm（及 loop 所需最小 Capability）
+- [x] 用户输入成为 Session 事实，并出现在下一次 Model Context
+- [x] fake-llm 插件可流式 `evt` chunk，最终 `res` 形成 assistant 消息并追加进日志
+- [x] 一轮结束后 Host 可干净 idle 或退出（按入口约定）
+- [x] 主缝测试：单条用户消息 → 可派生出完整 assistant 回复；全程不依赖真实网络 LLM
+
+## Answer
+
+Host `serve.RunTurn` 实现默认 Loop（ADR-0003）：`session.append(user)` → `AgentRequest(nil)` 强制日志不变量 → `CallStream(llm.complete)` 收集流式 `evt` chunk → `session.append(assistant)` → `derive` 返回完整 Model Context。`pluginsdk` 新增 `EmitTo`；`serve.CallStream` 把带 id 的 `evt` 归到对应 Call。`plugins/fakellm` 提供 `llm.complete`，流 3 个 chunk 后返回 `You said: …`。CLI：`-turn <input>`，可与 `-session-derive` 组合。主缝测试：一轮成功（chunk + assistant 可派生）；无 llm 提供方时 fail-loud。
+
+## Comments
+
+- Loop 在 Host 进程内，经同一 `Call`/`AgentRequest` 路径；外置 Loop 替换留给后续票（同 Capability 名）。
+- 本票无 tools；工具路径见 ticket 08。
+- 流式 chunk 用 `EmitTo(req.ID, …)` 归属请求；广播 `Emit` 仍可无 id。

@@ -68,6 +68,20 @@ func (s *Server) Emit(cap, method string, payload json.RawMessage) error {
 	})
 }
 
+// EmitTo sends an evt Frame tagged with a request id so Host can attribute it to a Call.
+func (s *Server) EmitTo(id, cap, method string, payload json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return protocol.WriteFrame(s.stdout, &protocol.Frame{
+		V:       protocol.Version,
+		ID:      id,
+		Type:    protocol.TypeEvt,
+		Cap:     cap,
+		Method:  method,
+		Payload: payload,
+	})
+}
+
 // Call invokes another Capability through Host (star topology). Blocks until res or error.
 func (s *Server) Call(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	id := fmt.Sprintf("sdk-%d", s.out.Add(1))

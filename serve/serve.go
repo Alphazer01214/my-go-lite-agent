@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,7 +33,14 @@ type wait struct {
 	caller string
 	target string
 	origID string
-	ch     chan *protocol.Frame
+	ch     chan *CallResult
+	events []*protocol.Frame
+}
+
+// CallResult carries one Call's final res plus any evt frames collected while waiting.
+type CallResult struct {
+	Frame  *protocol.Frame
+	Events []*protocol.Frame
 }
 
 type proc struct {
@@ -170,10 +178,10 @@ func (s *Server) markUnhealthy(pluginName string, gen int) {
 
 	for _, w := range hostFail {
 		select {
-		case w.ch <- &protocol.Frame{
+		case w.ch <- &CallResult{Frame: &protocol.Frame{
 			Type:  protocol.TypeRes,
 			Error: &protocol.FrameError{Code: "plugin_down", Message: pluginName + " closed"},
-		}:
+		}}:
 		default:
 		}
 	}
@@ -222,7 +230,20 @@ func (s *Server) handleFromPlugin(from string, f *protocol.Frame) {
 		s.routeRequest(from, f)
 	case protocol.TypeRes:
 		s.complete(f)
+	case protocol.TypeEvt:
+		s.collectEvent(f)
 	}
+}
+
+func (s *Server) collectEvent(f *protocol.Frame) {
+	if f.ID == "" {
+		return
+	}
+	s.mu.Lock()
+	if w, ok := s.pending[f.ID]; ok {
+		w.events = append(w.events, f)
+	}
+	s.mu.Unlock()
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
@@ -304,13 +325,17 @@ func (s *Server) complete(f *protocol.Frame) {
 	if ok {
 		delete(s.pending, f.ID)
 	}
+	var evts []*protocol.Frame
+	if ok && w != nil {
+		evts = w.events
+	}
 	s.mu.Unlock()
 	if !ok {
 		return
 	}
 	if w.kind == waitHost {
 		select {
-		case w.ch <- f:
+		case w.ch <- &CallResult{Frame: f, Events: evts}:
 		default:
 		}
 		return
@@ -336,6 +361,15 @@ func (s *Server) writeTo(plugin string, f *protocol.Frame) error {
 // Call sends a Host-initiated req to pluginName and waits for its res (with timeout).
 // Retries once on plugin_down after on-demand restart (crash recovery).
 func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, error) {
+	out, err := s.CallStream(pluginName, f)
+	if err != nil {
+		return nil, err
+	}
+	return out.Frame, nil
+}
+
+// CallStream is Call plus any evt frames attributed to the request id while waiting.
+func (s *Server) CallStream(pluginName string, f *protocol.Frame) (*CallResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt == 1 {
@@ -350,8 +384,8 @@ func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, er
 			lastErr = err
 			continue
 		}
-		if res.Error != nil && res.Error.Code == "plugin_down" && attempt == 0 {
-			lastErr = fmt.Errorf("%s", res.Error.Error())
+		if res.Frame.Error != nil && res.Frame.Error.Code == "plugin_down" && attempt == 0 {
+			lastErr = fmt.Errorf("%s", res.Frame.Error.Error())
 			continue
 		}
 		return res, nil
@@ -362,7 +396,7 @@ func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, er
 	return nil, lastErr
 }
 
-func (s *Server) callOnce(pluginName string, f *protocol.Frame) (*protocol.Frame, error) {
+func (s *Server) callOnce(pluginName string, f *protocol.Frame) (*CallResult, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -375,7 +409,7 @@ func (s *Server) callOnce(pluginName string, f *protocol.Frame) (*protocol.Frame
 	s.seq++
 	id := fmt.Sprintf("host-%d", s.seq)
 	f.ID = id
-	ch := make(chan *protocol.Frame, 1)
+	ch := make(chan *CallResult, 1)
 	s.pending[id] = &wait{kind: waitHost, target: pluginName, ch: ch}
 	s.mu.Unlock()
 
@@ -453,6 +487,17 @@ const SessionCap = "session"
 
 // AgentCap is the Host-owned Capability namespace for agent/request (and later agent.inject).
 const AgentCap = "agent"
+
+// LLMCap is the Capability name LLM Plugins must provide for the default Loop.
+const LLMCap = "llm"
+
+// TurnResult is one default-Loop turn (ADR-0003: Loop compiled into Host).
+type TurnResult struct {
+	User      string    `json:"user"`
+	Assistant string    `json:"assistant"`
+	Chunks    []string  `json:"chunks"`
+	Messages  []Message `json:"messages"`
+}
 
 // AgentRequestResult is the validated Model Context after the log invariant check.
 type AgentRequestResult struct {
@@ -578,6 +623,93 @@ func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
 		}
 	}
 	return &AgentRequestResult{Messages: derived, Rebuilt: len(claimed) == 0}, nil
+}
+
+// RunTurn is the Host-compiled default Agent Loop for one chat turn (no tools).
+//
+// Flow: session.append(user) → AgentRequest(rebuild) → llm.complete(stream) → session.append(assistant).
+func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
+	if strings.TrimSpace(userInput) == "" {
+		return nil, fmt.Errorf("agent loop: user input is required")
+	}
+
+	if _, err := s.AppendSessionFacts([]map[string]any{{
+		"type":    "message",
+		"role":    "user",
+		"content": userInput,
+	}}); err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+
+	// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
+	ar, err := s.AgentRequest(nil)
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+
+	s.mu.Lock()
+	llmOwner, ok := s.provides[LLMCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("agent loop: no plugin provides %q", LLMCap)
+	}
+
+	payload := MarshalPayload(map[string]any{"messages": ar.Messages})
+	out, err := s.CallStream(llmOwner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     LLMCap,
+		Method:  "complete",
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: llm.complete: %w", err)
+	}
+	if out.Frame.Error != nil {
+		return nil, fmt.Errorf("agent loop: llm.complete: %w", out.Frame.Error)
+	}
+
+	var llmOut struct {
+		Content string `json:"content"`
+	}
+	if len(out.Frame.Payload) > 0 {
+		if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
+			return nil, fmt.Errorf("agent loop: llm.complete: bad payload: %w", err)
+		}
+	}
+
+	var chunks []string
+	for _, ev := range out.Events {
+		if ev.Method != "chunk" {
+			continue
+		}
+		var c struct {
+			Delta string `json:"delta"`
+		}
+		if len(ev.Payload) > 0 {
+			_ = json.Unmarshal(ev.Payload, &c)
+		}
+		chunks = append(chunks, c.Delta)
+	}
+
+	if _, err := s.AppendSessionFacts([]map[string]any{{
+		"type":    "message",
+		"role":    "assistant",
+		"content": llmOut.Content,
+	}}); err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+
+	msgs, err := s.DeriveMessages()
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+	return &TurnResult{
+		User:      userInput,
+		Assistant: llmOut.Content,
+		Chunks:    chunks,
+		Messages:  msgs,
+	}, nil
 }
 
 func messagesEqual(a, b []Message) bool {
