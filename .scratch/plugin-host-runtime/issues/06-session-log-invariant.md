@@ -15,10 +15,14 @@
 
 ## Answer
 
-新增 `plugins/session`（基于 `pluginsdk` 的内存 append-only 日志，提供 `session.append/query/derive`）。Host `serve` 增加 `AgentRequest`/`DeriveMessages`/`AppendSessionFacts`：`agent.request` 在调用前用 `session.derive` 重建 Model Context；claimed 非空且与派生结果不一致时返回 `session_invariant_violation`。插件发出的 `cap=agent` 也由 Host 拦截，不旁路不变量。CLI：`-session-append` / `-session-derive` / `-agent-request`。主缝测试覆盖追加派生、合法重建、未入日志拒绝、空日志走私拒绝、空 claimed 走重建。
+新增 `plugins/session`（基于 `pluginsdk` 的内存 append-only 日志，提供 `session.append/query/derive`）。Host `serve` 增加 `AgentRequest`/`DeriveMessages`/`AppendSessionFacts`/`QuerySessionFacts`：`agent.request` 在调用前用 `session.derive` 重建 Model Context；claimed 非空且与派生结果不一致时返回 `session_invariant_violation`。Host 仅拦截 `agent.request`（其他 `agent.*` 可走插件路由，保留 ADR-0003 可替换性）。CLI：`-session-append` / `-session-query` / `-session-derive` / `-agent-request`，可与 `-invoke` 组合。主缝测试覆盖：追加派生、query、CLI 合法重建、CLI 未入日志拒绝、空日志走私拒绝、空 claimed 重建、插件经星型走私拒绝、插件经星型重建成功。
 
 ## Comments
 
 - 存储在插件进程内；换存储实现只需换 Session 插件二进制，Host 不变量逻辑不变。
 - 空 claimed（`[]`）语义为「从日志重建」；非空 claimed 必须与 derive 精确一致（v1 不做压缩投影）。
 - 默认 Loop（ticket 07）应经 `AgentRequest` 拿派生消息，不得自备可变对话数组。
+- Code review 修复：补 query 主缝；`agentprobe` fixture 覆盖插件侧拒绝路径；收紧拦截到 `agent.request`；`Rebuilt` 仅在空 claimed 时为 true。
+- `derive` 当前只投影 `type=="message"`；ticket 10 的 additionalContexts 入日志时须使用该 type 或扩展投影。
+- Host 侧 `AppendSessionFacts` 仍用 `map[string]any` 透传 fact；若后续要强类型可抽 `serve.Fact`。
+

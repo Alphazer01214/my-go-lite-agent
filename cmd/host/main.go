@@ -26,6 +26,7 @@ func main() {
 	callPlugin := flag.String("call-plugin", "", "after mount, Host-initiated req directly to this plugin name")
 	sessionAppend := flag.String("session-append", "", "JSON array of facts to append via session")
 	sessionDerive := flag.Bool("session-derive", false, "print session.derive Model Context")
+	sessionQuery := flag.Bool("session-query", false, "print session.query facts")
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	flag.Parse()
 
@@ -38,8 +39,19 @@ func main() {
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
-		if *sessionAppend != "" || *sessionDerive || *agentRequest != "" {
-			if err := runSessionAgent(*pluginsDir, *assemblyPath, *sessionAppend, *sessionDerive, *agentRequest, *dump); err != nil {
+		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" {
+			opts := sessionAgentOpts{
+				pluginsDir:   pluginsDir,
+				assemblyPath: assemblyPath,
+				appendJSON:   sessionAppend,
+				derive:       sessionDerive,
+				query:        sessionQuery,
+				requestJSON:  agentRequest,
+				dump:         dump,
+				invokePlugin: invokePlugin,
+				callCap:      callCap,
+			}
+			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
 			}
 			return
@@ -289,13 +301,26 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 	return nil
 }
 
-// runSessionAgent mounts Plugins then runs session append/derive and/or agent/request checks.
-func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, requestJSON string, dump bool) error {
-	cfg, err := assembly.Load(assemblyPath)
+// sessionAgentOpts carries Host CLI options for the session/agent path.
+type sessionAgentOpts struct {
+	pluginsDir   *string
+	assemblyPath *string
+	appendJSON   *string
+	derive       *bool
+	query        *bool
+	requestJSON  *string
+	dump         *bool
+	invokePlugin *string
+	callCap      *string
+}
+
+// runSessionAgent mounts Plugins then runs session append/query/derive, agent/request, and optional invoke.
+func runSessionAgent(opts sessionAgentOpts) error {
+	cfg, err := assembly.Load(*opts.assemblyPath)
 	if err != nil {
 		return err
 	}
-	res := discovery.Scan(pluginsDir)
+	res := discovery.Scan(*opts.pluginsDir)
 	if len(res.Errors) > 0 {
 		printDiscovery(res)
 		return fmt.Errorf("discovery failed before assembly")
@@ -304,7 +329,7 @@ func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, r
 	if len(plan.Missing) > 0 {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
-	if dump {
+	if *opts.dump {
 		dumpAssembly(plan, res)
 	}
 	srv, err := serve.Start(plan.Mounted)
@@ -313,9 +338,9 @@ func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, r
 	}
 	defer func() { _ = srv.Close() }()
 
-	if appendJSON != "" {
+	if *opts.appendJSON != "" {
 		var facts []map[string]any
-		if err := json.Unmarshal([]byte(appendJSON), &facts); err != nil {
+		if err := json.Unmarshal([]byte(*opts.appendJSON), &facts); err != nil {
 			return fmt.Errorf("parse -session-append: %w", err)
 		}
 		seq, err := srv.AppendSessionFacts(facts)
@@ -325,7 +350,7 @@ func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, r
 		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), seq)
 	}
 
-	if derive {
+	if *opts.derive {
 		msgs, err := srv.DeriveMessages()
 		if err != nil {
 			return err
@@ -334,9 +359,18 @@ func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, r
 		fmt.Printf("derive ok messages=%s\n", body)
 	}
 
-	if requestJSON != "" {
+	if *opts.query {
+		facts, err := srv.QuerySessionFacts(0, 0)
+		if err != nil {
+			return err
+		}
+		body, _ := json.Marshal(facts)
+		fmt.Printf("query ok facts=%s\n", body)
+	}
+
+	if *opts.requestJSON != "" {
 		var claimed []serve.Message
-		if err := json.Unmarshal([]byte(requestJSON), &claimed); err != nil {
+		if err := json.Unmarshal([]byte(*opts.requestJSON), &claimed); err != nil {
 			return fmt.Errorf("parse -agent-request: %w", err)
 		}
 		out, err := srv.AgentRequest(claimed)
@@ -345,6 +379,29 @@ func runSessionAgent(pluginsDir, assemblyPath, appendJSON string, derive bool, r
 		}
 		body, _ := json.Marshal(out)
 		fmt.Printf("agent/request ok rebuilt=%v messages=%s\n", out.Rebuilt, body)
+	}
+
+	if *opts.invokePlugin != "" {
+		payload := map[string]string{}
+		if *opts.callCap != "" {
+			payload["cap"] = *opts.callCap
+		}
+		frame := &protocol.Frame{
+			V:       1,
+			Type:    protocol.TypeReq,
+			Cap:     "demo",
+			Method:  "invoke",
+			Payload: serve.MarshalPayload(payload),
+		}
+		out, err := srv.Call(*opts.invokePlugin, frame)
+		if err != nil {
+			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
+		}
+		if out.Error != nil {
+			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
+			return fmt.Errorf("invoke failed: %s", out.Error.Code)
+		}
+		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
 	}
 	return nil
 }
