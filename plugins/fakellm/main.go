@@ -31,7 +31,10 @@ func main() {
 		reply := "You said: " + lastUser
 
 		// Stream deltas tagged with the request id so Host can attribute them to this Call.
-		parts := []string{"You ", "said: ", lastUser}
+		parts := []string{"You ", "said: "}
+		if lastUser != "" {
+			parts = append(parts, lastUser)
+		}
 		for _, p := range parts {
 			payload, _ := json.Marshal(map[string]string{"delta": p})
 			_ = s.EmitTo(req.ID, "llm", "chunk", payload)

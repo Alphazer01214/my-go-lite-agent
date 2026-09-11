@@ -46,11 +46,8 @@ func TestDefaultLoopOneTurn(t *testing.T) {
 	if !strings.Contains(s, "assistant") {
 		t.Fatalf("want assistant message in derived Model Context: %s", s)
 	}
-	if !strings.Contains(s, "You said: hello loop") && !strings.Contains(s, `You said: hello loop`) {
-		// content may be JSON-escaped; accept either form
-		if !strings.Contains(s, "You said:") {
-			t.Fatalf("want fake-llm assistant content in derive: %s", s)
-		}
+	if !strings.Contains(s, "You said:") {
+		t.Fatalf("want fake-llm assistant content in derive: %s", s)
 	}
 }
 

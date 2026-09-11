@@ -491,6 +491,16 @@ const AgentCap = "agent"
 // LLMCap is the Capability name LLM Plugins must provide for the default Loop.
 const LLMCap = "llm"
 
+// LoopCap is the replaceable Agent Loop Capability (ADR-0003). Host uses the
+// in-process default unless a mounted Plugin provides this Capability.
+const LoopCap = "loop"
+
+// LLMChunkMethod is the evt method LLM Plugins use to stream a delta.
+const LLMChunkMethod = "chunk"
+
+// LLMCompleteMethod is the req/res method LLM Plugins implement.
+const LLMCompleteMethod = "complete"
+
 // TurnResult is one default-Loop turn (ADR-0003: Loop compiled into Host).
 type TurnResult struct {
 	User      string    `json:"user"`
@@ -627,10 +637,18 @@ func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
 
 // RunTurn is the Host-compiled default Agent Loop for one chat turn (no tools).
 //
-// Flow: session.append(user) → AgentRequest(rebuild) → llm.complete(stream) → session.append(assistant).
+// If a mounted Plugin provides LoopCap, that external Loop is used (ADR-0003).
+// Default flow: session.append(user) → AgentRequest(rebuild) → llm.complete(stream) → session.append(assistant).
 func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return nil, fmt.Errorf("agent loop: user input is required")
+	}
+
+	s.mu.Lock()
+	loopOwner, hasExternalLoop := s.provides[LoopCap]
+	s.mu.Unlock()
+	if hasExternalLoop {
+		return s.runExternalTurn(loopOwner, userInput)
 	}
 
 	if _, err := s.AppendSessionFacts([]map[string]any{{
@@ -659,14 +677,14 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     LLMCap,
-		Method:  "complete",
+		Method:  LLMCompleteMethod,
 		Payload: payload,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("agent loop: llm.complete: %w", err)
+		return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, err)
 	}
 	if out.Frame.Error != nil {
-		return nil, fmt.Errorf("agent loop: llm.complete: %w", out.Frame.Error)
+		return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, out.Frame.Error)
 	}
 
 	var llmOut struct {
@@ -674,13 +692,13 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	}
 	if len(out.Frame.Payload) > 0 {
 		if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
-			return nil, fmt.Errorf("agent loop: llm.complete: bad payload: %w", err)
+			return nil, fmt.Errorf("agent loop: llm.%s: bad payload: %w", LLMCompleteMethod, err)
 		}
 	}
 
 	var chunks []string
 	for _, ev := range out.Events {
-		if ev.Method != "chunk" {
+		if ev.Method != LLMChunkMethod {
 			continue
 		}
 		var c struct {
@@ -710,6 +728,32 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		Chunks:    chunks,
 		Messages:  msgs,
 	}, nil
+}
+
+func (s *Server) runExternalTurn(owner, userInput string) (*TurnResult, error) {
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     LoopCap,
+		Method:  "turn",
+		Payload: MarshalPayload(map[string]string{"input": userInput}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("agent loop: %w", res.Error)
+	}
+	var out TurnResult
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return nil, fmt.Errorf("agent loop: bad loop.turn payload: %w", err)
+		}
+	}
+	if out.User == "" {
+		out.User = userInput
+	}
+	return &out, nil
 }
 
 func messagesEqual(a, b []Message) bool {

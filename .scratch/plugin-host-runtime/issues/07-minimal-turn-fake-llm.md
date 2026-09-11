@@ -18,6 +18,10 @@ Host `serve.RunTurn` 实现默认 Loop（ADR-0003）：`session.append(user)` �
 
 ## Comments
 
-- Loop 在 Host 进程内，经同一 `Call`/`AgentRequest` 路径；外置 Loop 替换留给后续票（同 Capability 名）。
-- 本票无 tools；工具路径见 ticket 08。
-- 流式 chunk 用 `EmitTo(req.ID, …)` 归属请求；广播 `Emit` 仍可无 id。
+- Loop 在 Host 进程内，经同一 `Call`/`AgentRequest` 路径；若挂载插件提供 `loop` Capability，则 `RunTurn` 走外置 Loop（ADR-0003 替换缝）。
+- 本票无 tools；工具路径见 ticket 08。system-prompt 注入亦留到后续 Loop 增强票。
+- 流式 chunk 用 `EmitTo(req.ID, …)` 归属请求；Host 在 `res` 返回时汇总 `evt`（wire 流式，尚未边收边回调）。
+- 方法名：代码用 `llm.complete` + `llm` chunk evt；spec Frame 示例中的 `llm.stream` 以本票为准对齐。
+- 无 id 的广播 `evt` 仍被 Host 忽略，留给 Presentation/UI 订阅票。
+- Code review 修复：外置 `loop` 替换缝；chunk 方法常量；loop 测试死代码清理。
+- CONTEXT.md 尚无「Agent Loop」词条，可由 domain-modeling 后续补。
