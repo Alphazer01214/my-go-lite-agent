@@ -555,6 +555,9 @@ const AgentCap = "agent"
 // LLMCap is the Capability name LLM Plugins must provide for the default Loop.
 const LLMCap = "llm"
 
+// SystemPromptCap is the Capability Context Manager Plugins provide (ADR-0006).
+const SystemPromptCap = "system-prompt"
+
 // LoopCap is the replaceable Agent Loop Capability (ADR-0003). Host uses the
 // in-process default unless a mounted Plugin provides this Capability.
 const LoopCap = "loop"
@@ -568,8 +571,11 @@ const LLMCompleteMethod = "complete"
 // ToolsCap is the Capability Tools Plugins provide (list/call).
 const ToolsCap = "tools"
 
-// MaxToolRounds bounds tool-call iterations inside one turn.
-const MaxToolRounds = 8
+// SubagentToolName is the model-facing tool Host injects to spawn a Subagent (CONTEXT.md).
+const SubagentToolName = "run_subagent"
+
+// MaxSteps bounds model hops (Steps) inside one Turn (CONTEXT.md Turn/Step).
+const MaxSteps = 8
 
 // ToolSchema is one model-facing tool registration from tools.list.
 type ToolSchema struct {
@@ -603,19 +609,24 @@ type AgentRequestResult struct {
 }
 
 // QuerySessionFacts lists Session Log facts via session.query.
-func (s *Server) QuerySessionFacts(afterSeq, limit int) ([]map[string]any, error) {
+// Empty sessionID targets the default Session.
+func (s *Server) QuerySessionFacts(sessionID string, afterSeq, limit int) ([]map[string]any, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[SessionCap]
 	s.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
 	}
+	payload := map[string]any{"afterSeq": afterSeq, "limit": limit}
+	if sessionID != "" {
+		payload["sessionId"] = sessionID
+	}
 	res, err := s.Call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     SessionCap,
 		Method:  "query",
-		Payload: MarshalPayload(map[string]int{"afterSeq": afterSeq, "limit": limit}),
+		Payload: MarshalPayload(payload),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session.query: %w", err)
@@ -636,19 +647,24 @@ func (s *Server) QuerySessionFacts(afterSeq, limit int) ([]map[string]any, error
 }
 
 // DeriveMessages rebuilds Model Context from the mounted Session Plugin (session.derive).
-func (s *Server) DeriveMessages() ([]Message, error) {
+// Empty sessionID targets the default Session.
+func (s *Server) DeriveMessages(sessionID string) ([]Message, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[SessionCap]
 	s.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
 	}
+	payload := json.RawMessage(`{}`)
+	if sessionID != "" {
+		payload = MarshalPayload(map[string]string{"sessionId": sessionID})
+	}
 	res, err := s.Call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     SessionCap,
 		Method:  "derive",
-		Payload: json.RawMessage(`{}`),
+		Payload: payload,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session.derive: %w", err)
@@ -669,7 +685,8 @@ func (s *Server) DeriveMessages() ([]Message, error) {
 }
 
 // AppendSessionFacts appends each fact to the mounted Session Plugin.
-func (s *Server) AppendSessionFacts(facts []map[string]any) (int, error) {
+// Empty sessionID targets the default Session.
+func (s *Server) AppendSessionFacts(sessionID string, facts []map[string]any) (int, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[SessionCap]
 	s.mu.Unlock()
@@ -678,12 +695,20 @@ func (s *Server) AppendSessionFacts(facts []map[string]any) (int, error) {
 	}
 	last := 0
 	for _, fact := range facts {
+		body := fact
+		if sessionID != "" {
+			body = make(map[string]any, len(fact)+1)
+			for k, v := range fact {
+				body[k] = v
+			}
+			body["sessionId"] = sessionID
+		}
 		res, err := s.Call(owner, &protocol.Frame{
 			V:       protocol.Version,
 			Type:    protocol.TypeReq,
 			Cap:     SessionCap,
 			Method:  "append",
-			Payload: MarshalPayload(fact),
+			Payload: MarshalPayload(body),
 		})
 		if err != nil {
 			return last, fmt.Errorf("session.append: %w", err)
@@ -706,8 +731,9 @@ func (s *Server) AppendSessionFacts(facts []map[string]any) (int, error) {
 //
 // claimed empty/nil → rebuild from session.derive and accept.
 // claimed non-empty → must match session.derive exactly, else session_invariant_violation.
-func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
-	derived, err := s.DeriveMessages()
+// Empty sessionID targets the default Session.
+func (s *Server) AgentRequest(sessionID string, claimed []Message) (*AgentRequestResult, error) {
+	derived, err := s.DeriveMessages(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("agent/request: %w", err)
 	}
@@ -720,12 +746,54 @@ func (s *Server) AgentRequest(claimed []Message) (*AgentRequestResult, error) {
 	return &AgentRequestResult{Messages: derived, Rebuilt: len(claimed) == 0}, nil
 }
 
+// AssembleSystemPrompt asks the mounted Context Manager for the assembled System Prompt.
+// Returns empty text when no plugin provides system-prompt (ADR-0006).
+func (s *Server) AssembleSystemPrompt() (string, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[SystemPromptCap]
+	s.mu.Unlock()
+	if !ok {
+		return "", nil
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     SystemPromptCap,
+		Method:  "assemble",
+		Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return "", fmt.Errorf("system-prompt.assemble: %w", err)
+	}
+	if res.Error != nil {
+		return "", fmt.Errorf("system-prompt.assemble: %w", res.Error)
+	}
+	var out struct {
+		Text string `json:"text"`
+	}
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return "", fmt.Errorf("system-prompt.assemble: bad payload: %w", err)
+		}
+	}
+	return out.Text, nil
+}
+
 // RunTurn is the Host-compiled default Agent Loop for one chat turn.
 //
 // If a mounted Plugin provides LoopCap, that external Loop is used (ADR-0003).
-// Default flow: session.append(user) → AgentRequest(rebuild) → llm.complete(tools)
-// → optional tools.call → session tool facts → repeat until final assistant reply.
+// Default flow: turn/start → system-prompt.assemble → session.append(system) → session.append(user)
+// → per Step: step/start → AgentRequest(rebuild) → llm.complete(tools)
+// → optional tools.call → session tool facts → step/end → repeat until final assistant reply
+// → turn/end.
 func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
+	return s.runTurn("", userInput, true, "")
+}
+
+// runTurn executes one Turn on sessionID (empty = default).
+// allowSubagent controls whether Host injects the run_subagent tool schema.
+// extraSystem is an additional System Prompt fragment logged inside the Turn.
+func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraSystem string) (*TurnResult, error) {
 	if strings.TrimSpace(userInput) == "" {
 		return nil, fmt.Errorf("agent loop: user input is required")
 	}
@@ -734,10 +802,51 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	loopOwner, hasExternalLoop := s.provides[LoopCap]
 	s.mu.Unlock()
 	if hasExternalLoop {
-		return s.runExternalTurn(loopOwner, userInput)
+		return s.runExternalTurn(loopOwner, sessionID, userInput)
 	}
 
-	if _, err := s.AppendSessionFacts([]map[string]any{{
+	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+		"type": "turn_start",
+		"role": "host",
+		"meta": map[string]any{"turn": 1},
+	}}); err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+	turnFailed := true
+	defer func() {
+		reason := "completed"
+		if turnFailed {
+			reason = "error"
+		}
+		_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
+			"type": "turn_end",
+			"role": "host",
+			"meta": map[string]any{"turn": 1, "reason": reason},
+		}})
+	}()
+
+	// System Prompt is assembled then logged before any model-visible user input (ADR-0005/0006).
+	sysText, err := s.AssembleSystemPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+	if extraSystem != "" {
+		if sysText != "" {
+			sysText += "\n\n"
+		}
+		sysText += extraSystem
+	}
+	if sysText != "" {
+		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+			"type":    "message",
+			"role":    "system",
+			"content": sysText,
+		}}); err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
+	}
+
+	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 		"type":    "message",
 		"role":    "user",
 		"content": userInput,
@@ -749,14 +858,35 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
+	// Inject Subagent tool only when a Tools Plugin is mounted (avoids forcing
+	// tool-calls on minimal session+llm assemblies).
+	s.mu.Lock()
+	_, hasTools := s.provides[ToolsCap]
+	s.mu.Unlock()
+	if allowSubagent && hasTools {
+		schemas = append(schemas, ToolSchema{
+			Name:        SubagentToolName,
+			Description: "Run a focused subagent on a new session and return its final reply.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
+		})
+	}
 
 	var allChunks []string
 	var toolNames []string
 	var assistant string
 
-	for round := 0; round < MaxToolRounds; round++ {
+	for step := 0; step < MaxSteps; step++ {
+		stepN := step + 1
+		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+			"type": "step_start",
+			"role": "host",
+			"meta": map[string]any{"turn": 1, "step": stepN},
+		}}); err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
+
 		// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
-		ar, err := s.AgentRequest(nil)
+		ar, err := s.AgentRequest(sessionID, nil)
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
@@ -772,6 +902,21 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		if len(schemas) > 0 {
 			reqBody["tools"] = schemas
 		}
+
+		// Request Header snapshot for audit/replay (CONTEXT.md Request Header).
+		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+			"type": "request_header",
+			"role": "host",
+			"meta": map[string]any{
+				"provider": "default",
+				"model":    "default",
+				"step":     stepN,
+				"turn":     1,
+			},
+		}}); err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
+
 		out, err := s.CallStream(llmOwner, &protocol.Frame{
 			V:       protocol.Version,
 			Type:    protocol.TypeReq,
@@ -812,10 +957,17 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		// Final assistant reply (no tool calls).
 		if len(llmOut.ToolCalls) == 0 {
 			assistant = llmOut.Content
-			if _, err := s.AppendSessionFacts([]map[string]any{{
+			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "message",
 				"role":    "assistant",
 				"content": llmOut.Content,
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+				"type": "step_end",
+				"role": "host",
+				"meta": map[string]any{"turn": 1, "step": stepN, "reason": "completed"},
 			}}); err != nil {
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
@@ -823,8 +975,13 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 		}
 
 		// Last allowed model hop: do not execute tools we cannot feed back.
-		if round == MaxToolRounds-1 {
-			return nil, fmt.Errorf("agent loop: exceeded %d model rounds", MaxToolRounds)
+		if step == MaxSteps-1 {
+			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
+				"type": "step_end",
+				"role": "host",
+				"meta": map[string]any{"turn": 1, "step": stepN, "reason": "max_steps"},
+			}})
+			return nil, fmt.Errorf("agent loop: exceeded %d steps", MaxSteps)
 		}
 
 		// One assistant fact carries content (if any) + all tool_calls, then execute.
@@ -840,7 +997,7 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 			}
 			callMeta = append(callMeta, item)
 		}
-		if _, err := s.AppendSessionFacts([]map[string]any{{
+		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type":    "tool_call",
 			"role":    "assistant",
 			"content": llmOut.Content,
@@ -859,7 +1016,7 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 				resultContent = toolOut.Content
 				additionalContexts = toolOut.AdditionalContexts
 			}
-			if _, err := s.AppendSessionFacts([]map[string]any{{
+			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "tool_result",
 				"role":    "tool",
 				"content": resultContent,
@@ -869,7 +1026,7 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 			}
 			// Additional Contexts land after the tool result (CONTEXT / US16).
 			for _, ac := range additionalContexts {
-				if _, err := s.AppendSessionFacts([]map[string]any{{
+				if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 					"type":    "message",
 					"role":    defaultSystemRole(ac.Role),
 					"content": ac.Content,
@@ -878,12 +1035,21 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 				}
 			}
 		}
+
+		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+			"type": "step_end",
+			"role": "host",
+			"meta": map[string]any{"turn": 1, "step": stepN, "reason": "tools"},
+		}}); err != nil {
+			return nil, fmt.Errorf("agent loop: %w", err)
+		}
 	}
 
-	msgs, err := s.DeriveMessages()
+	msgs, err := s.DeriveMessages(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
+	turnFailed = false
 	return &TurnResult{
 		User:      userInput,
 		Assistant: assistant,
@@ -931,8 +1097,94 @@ type CallToolResult struct {
 	AdditionalContexts []Message `json:"additionalContexts,omitempty"`
 }
 
-// CallTool executes one ToolCall through the mounted Tools Plugin.
+// CreateSession creates a Session by id via the mounted Session Plugin (idempotent).
+func (s *Server) CreateSession(sessionID, parentSession, origin string, delegationDepth int) error {
+	s.mu.Lock()
+	owner, ok := s.provides[SessionCap]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no plugin provides %q", SessionCap)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:      protocol.Version,
+		Type:   protocol.TypeReq,
+		Cap:    SessionCap,
+		Method: "create",
+		Payload: MarshalPayload(map[string]any{
+			"sessionId":       sessionID,
+			"parentSession":   parentSession,
+			"origin":          origin,
+			"delegationDepth": delegationDepth,
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("session.create: %w", err)
+	}
+	if res.Error != nil {
+		return fmt.Errorf("session.create: %w", res.Error)
+	}
+	return nil
+}
+
+// RunSubagent spawns a Subagent: new Session + default Loop (allowSubagent=false to avoid recursion).
+// v1 supports mode=sync only; async returns an error (spec Out of Scope / ticket 06).
+func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []string) (string, error) {
+	if strings.TrimSpace(input) == "" {
+		return "", &protocol.FrameError{Code: "bad_payload", Message: "subagent input is required"}
+	}
+	if mode == "async" {
+		return "", &protocol.FrameError{Code: "not_supported", Message: "async subagent is not supported in v1"}
+	}
+	if mode == "" {
+		mode = "sync"
+	}
+	s.mu.Lock()
+	s.seq++
+	childID := fmt.Sprintf("subagent-%d", s.seq)
+	s.mu.Unlock()
+
+	// Parent is the default Session when spawned from the default Turn (v1).
+	if err := s.CreateSession(childID, "default", "subagent", 1); err != nil {
+		return "", err
+	}
+	// v1: toolFilter reserved; child does not inherit run_subagent (no recursion).
+	_ = toolFilter
+
+	// extraSystem is appended inside the child Turn after turn_start (not outside the boundary).
+	res, err := s.runTurn(childID, input, false, systemPrompt)
+	if err != nil {
+		return "", err
+	}
+	return res.Assistant, nil
+}
+
+// CallTool executes one ToolCall through the mounted Tools Plugin,
+// or Host-run Subagent when the tool is run_subagent.
 func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
+	if tc.Name == SubagentToolName {
+		var in struct {
+			Input        string   `json:"input"`
+			Text         string   `json:"text"`
+			SystemPrompt string   `json:"systemPrompt"`
+			Mode         string   `json:"mode"`
+			Tools        []string `json:"tools"`
+		}
+		if len(tc.Arguments) > 0 {
+			if err := json.Unmarshal(tc.Arguments, &in); err != nil {
+				return nil, fmt.Errorf("tools.call %s: bad arguments: %w", SubagentToolName, err)
+			}
+		}
+		input := in.Input
+		if input == "" {
+			input = in.Text
+		}
+		out, err := s.RunSubagent(input, in.SystemPrompt, in.Mode, in.Tools)
+		if err != nil {
+			return nil, err
+		}
+		return &CallToolResult{Content: out}, nil
+	}
+
 	s.mu.Lock()
 	owner, ok := s.provides[ToolsCap]
 	s.mu.Unlock()
@@ -968,13 +1220,17 @@ func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
 	return &out, nil
 }
 
-func (s *Server) runExternalTurn(owner, userInput string) (*TurnResult, error) {
+func (s *Server) runExternalTurn(owner, sessionID, userInput string) (*TurnResult, error) {
+	payload := map[string]string{"input": userInput}
+	if sessionID != "" {
+		payload["sessionId"] = sessionID
+	}
 	res, err := s.Call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     LoopCap,
 		Method:  "turn",
-		Payload: MarshalPayload(map[string]string{"input": userInput}),
+		Payload: MarshalPayload(payload),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
@@ -1037,7 +1293,8 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 	switch f.Method {
 	case "request":
 		var in struct {
-			Messages []Message `json:"messages"`
+			SessionID string    `json:"sessionId"`
+			Messages  []Message `json:"messages"`
 		}
 		if len(f.Payload) > 0 {
 			if err := json.Unmarshal(f.Payload, &in); err != nil {
@@ -1046,7 +1303,7 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 				return
 			}
 		}
-		out, err := s.AgentRequest(in.Messages)
+		out, err := s.AgentRequest(in.SessionID, in.Messages)
 		if err != nil {
 			if fe, ok := err.(*protocol.FrameError); ok {
 				res.Error = fe
@@ -1081,12 +1338,13 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 }
 
 // AgentInject appends model-visible messages to the Session Log without starting a turn (US17).
-// Accepts {"role","content"} or {"messages":[{role,content},...]}.
+// Accepts {"role","content"} or {"messages":[{role,content},...]} or optional sessionId.
 func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
 	var in struct {
-		Role     string    `json:"role"`
-		Content  string    `json:"content"`
-		Messages []Message `json:"messages"`
+		SessionID string    `json:"sessionId"`
+		Role      string    `json:"role"`
+		Content   string    `json:"content"`
+		Messages  []Message `json:"messages"`
 	}
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &in); err != nil {
@@ -1108,7 +1366,7 @@ func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
 			"content": m.Content,
 		})
 	}
-	seq, err := s.AppendSessionFacts(facts)
+	seq, err := s.AppendSessionFacts(in.SessionID, facts)
 	if err != nil {
 		return nil, err
 	}

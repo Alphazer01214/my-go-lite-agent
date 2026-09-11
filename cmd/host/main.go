@@ -30,6 +30,7 @@ func main() {
 	agentRequest := flag.String("agent-request", "", "JSON array of claimed model messages for agent/request invariant check")
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
+	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
 	flag.Parse()
@@ -45,19 +46,20 @@ func main() {
 		}
 		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards {
 			opts := sessionAgentOpts{
-				pluginsDir:   pluginsDir,
-				assemblyPath: assemblyPath,
-				appendJSON:   sessionAppend,
-				derive:       sessionDerive,
-				query:        sessionQuery,
-				requestJSON:  agentRequest,
-				injectJSON:   agentInject,
-				turnInput:    turnInput,
-				dump:         dump,
-				invokePlugin: invokePlugin,
-				callCap:      callCap,
-				audit:        audit,
-				cards:        cards,
+				pluginsDir:    pluginsDir,
+				assemblyPath:  assemblyPath,
+				appendJSON:    sessionAppend,
+				derive:        sessionDerive,
+				query:         sessionQuery,
+				requestJSON:   agentRequest,
+				injectJSON:    agentInject,
+				turnInput:     turnInput,
+				dump:          dump,
+				invokePlugin:  invokePlugin,
+				callCap:       callCap,
+				invokePayload: invokePayload,
+				audit:         audit,
+				cards:         cards,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -332,19 +334,20 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 
 // sessionAgentOpts carries Host CLI options for the session/agent/loop path.
 type sessionAgentOpts struct {
-	pluginsDir   *string
-	assemblyPath *string
-	appendJSON   *string
-	derive       *bool
-	query        *bool
-	requestJSON  *string
-	injectJSON   *string
-	turnInput    *string
-	dump         *bool
-	invokePlugin *string
-	callCap      *string
-	audit        *bool
-	cards        *bool
+	pluginsDir    *string
+	assemblyPath  *string
+	appendJSON    *string
+	derive        *bool
+	query         *bool
+	requestJSON   *string
+	injectJSON    *string
+	turnInput     *string
+	dump          *bool
+	invokePlugin  *string
+	callCap       *string
+	invokePayload *string
+	audit         *bool
+	cards         *bool
 }
 
 // runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
@@ -384,7 +387,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		if err := json.Unmarshal([]byte(*opts.appendJSON), &facts); err != nil {
 			return fmt.Errorf("parse -session-append: %w", err)
 		}
-		seq, err := srv.AppendSessionFacts(facts)
+		seq, err := srv.AppendSessionFacts("", facts)
 		if err != nil {
 			return err
 		}
@@ -403,6 +406,36 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		fmt.Printf("inject ok count=%d lastSeq=%d\n", out["count"], out["lastSeq"])
 	}
 
+	// Invoke before turn so fixtures can register Prompt Segments or warm state.
+	if *opts.invokePlugin != "" {
+		payload := map[string]string{}
+		if *opts.callCap != "" {
+			payload["cap"] = *opts.callCap
+		}
+		var rawPayload json.RawMessage
+		if opts.invokePayload != nil && *opts.invokePayload != "" {
+			rawPayload = json.RawMessage(*opts.invokePayload)
+		} else {
+			rawPayload = serve.MarshalPayload(payload)
+		}
+		frame := &protocol.Frame{
+			V:       1,
+			Type:    protocol.TypeReq,
+			Cap:     "demo",
+			Method:  "invoke",
+			Payload: rawPayload,
+		}
+		out, err := srv.Call(*opts.invokePlugin, frame)
+		if err != nil {
+			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
+		}
+		if out.Error != nil {
+			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
+			return fmt.Errorf("invoke failed: %s", out.Error.Code)
+		}
+		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
+	}
+
 	if *opts.turnInput != "" {
 		out, err := srv.RunTurn(*opts.turnInput)
 		if err != nil {
@@ -418,31 +451,8 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 	}
 
-	if *opts.invokePlugin != "" {
-		payload := map[string]string{}
-		if *opts.callCap != "" {
-			payload["cap"] = *opts.callCap
-		}
-		frame := &protocol.Frame{
-			V:       1,
-			Type:    protocol.TypeReq,
-			Cap:     "demo",
-			Method:  "invoke",
-			Payload: serve.MarshalPayload(payload),
-		}
-		out, err := srv.Call(*opts.invokePlugin, frame)
-		if err != nil {
-			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
-		}
-		if out.Error != nil {
-			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
-			return fmt.Errorf("invoke failed: %s", out.Error.Code)
-		}
-		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
-	}
-
 	if *opts.derive {
-		msgs, err := srv.DeriveMessages()
+		msgs, err := srv.DeriveMessages("")
 		if err != nil {
 			return err
 		}
@@ -451,7 +461,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	}
 
 	if *opts.query {
-		facts, err := srv.QuerySessionFacts(0, 0)
+		facts, err := srv.QuerySessionFacts("", 0, 0)
 		if err != nil {
 			return err
 		}
@@ -464,7 +474,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		if err := json.Unmarshal([]byte(*opts.requestJSON), &claimed); err != nil {
 			return fmt.Errorf("parse -agent-request: %w", err)
 		}
-		out, err := srv.AgentRequest(claimed)
+		out, err := srv.AgentRequest("", claimed)
 		if err != nil {
 			return err
 		}

@@ -63,3 +63,39 @@ _Avoid_: 参数、请求体（规范名词是 Call Payload）
 **Additional Contexts**:
 Function 返回结果时附带的、在工具结果之后注入的模型可见消息。由 Loop 落入 Session Log，不是插件直接改写历史。
 _Avoid_: 附加上下文、注入内容（规范名词是 Additional Contexts）
+
+**Agent**:
+一个 Plugin：消费 llm、session、tool 等 Capability 并执行 Agent Loop。Host 可内建默认 Agent，外部 Agent 插件经 loop Capability 替换。一个 Agent 实例终身绑定一个 Session；Host 可托管多个 Agent 实例。
+_Avoid_: 智能体实例、机器人、bot、agent 组装（规范名词是 Agent）
+
+**Agent Loop**:
+驱动 Turn/Step 的执行策略：组装 Model Context、调用 LLM、调度工具、写回 Session Log。默认编译在 Host，可由 loop Capability 替换。
+_Avoid_: 主循环、orchestrator、执行器（规范名词是 Agent Loop，简称 Loop）
+
+**Turn**:
+Agent 对一批待处理输入的完整响应周期：由零个或多个 Step 组成，欠账清零后关闭。
+_Avoid_: 轮次（口语可用，规范名词是 Turn）、conversation round
+
+**Step**:
+一次模型请求 + 该响应引发的工具执行。Turn 内的最小完整执行单元。
+_Avoid_: 步骤、iteration、round（规范名词是 Step）
+
+**System Prompt**:
+以 system 角色进入模型的指令内容。作为 Session Log 的模型可见事实可被重建，不是旁路通道。
+_Avoid_: 系统提示、system message（可作别名，规范名词是 System Prompt）
+
+**Request Header**:
+一次模型调用的配置快照（provider、model、采样参数等），落入 Session Log 以便审计与重放。
+_Avoid_: 请求头、调用配置（规范名词是 Request Header）
+
+**Subagent**:
+由父 Agent 经 tool call 触发的独立 Agent 实例：拥有自己的 Session 与 Agent Loop，产出以 tool result 回传父 Agent。
+_Avoid_: 子智能体、nested agent、child agent（规范名词是 Subagent）
+
+**Context Manager**:
+提供 system-prompt Capability 的插件：持有 Prompt Segment 注册表，按序拼装 System Prompt。v1 只做组装，不做历史压缩。
+_Avoid_: 上下文管理器、prompt engine、prompt builder（规范名词是 Context Manager）
+
+**Prompt Segment**:
+可注册的 System Prompt 片段：带 name/order/text，由 Assembly 静态提供或插件运行时注册。
+_Avoid_: prompt 段、提示片段、section（可作别名，规范名词是 Prompt Segment）
