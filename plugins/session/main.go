@@ -1,17 +1,18 @@
-// Command session is an append-only Session Log Plugin (in-memory storage).
+// Command session is an append-only Session Log Plugin (file-backed JSONL + memory).
 //
 // Capability: session
-//   - create:  create a Session by id (idempotent); optional parentSession/origin/delegationDepth
-//   - append:  append one fact to a Session; returns {seq}
-//   - query:   list facts (optional sessionId/afterSeq/limit)
-//   - derive:  rebuild Model Context messages from one Session log (pure projection)
+//   - create / append / query / derive
 //
-// Empty sessionId targets the default Session (backward compatible).
-// Storage lives only in this process; swap the Plugin to replace the backend.
+// Persistence: each Session is one JSONL file under the data directory
+// (env SESSION_DATA_DIR, or ./sessions). Restart reloads facts.
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 
 const defaultSessionID = "default"
 
-// Fact is one append-only Session Log entry.
 type Fact struct {
 	Seq     int             `json:"seq"`
 	Type    string          `json:"type"`
@@ -30,7 +30,6 @@ type Fact struct {
 	Meta    json.RawMessage `json:"meta,omitempty"`
 }
 
-// Message is one model-visible chat message produced by derive.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
@@ -38,14 +37,12 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// ToolCall is a model-requested tool invocation projected from the log.
 type ToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
-// SessionMeta is storage metadata outside the fact log.
 type SessionMeta struct {
 	CreatedAt       int64  `json:"createdAt"`
 	ParentSession   string `json:"parentSession,omitempty"`
@@ -56,21 +53,37 @@ type SessionMeta struct {
 type store struct {
 	mu    sync.Mutex
 	facts []Fact
+	// path is the JSONL file; empty disables persistence.
+	path string
+	file *os.File
 }
 
 type registry struct {
 	mu       sync.Mutex
 	sessions map[string]*store
 	meta     map[string]SessionMeta
+	dataDir  string
 }
 
-func newRegistry() *registry {
+func dataDir() string {
+	if v := os.Getenv("SESSION_DATA_DIR"); v != "" {
+		return v
+	}
+	return "sessions"
+}
+
+func newRegistry(dir string) *registry {
+	if dir == "" {
+		dir = dataDir()
+	}
+	_ = os.MkdirAll(dir, 0o755)
 	r := &registry{
 		sessions: make(map[string]*store),
 		meta:     make(map[string]SessionMeta),
+		dataDir:  dir,
 	}
-	r.sessions[defaultSessionID] = &store{}
-	r.meta[defaultSessionID] = SessionMeta{CreatedAt: time.Now().UnixMilli()}
+	// Restore default session if present.
+	r.openStore(defaultSessionID)
 	return r
 }
 
@@ -81,35 +94,89 @@ func normalizeID(id string) string {
 	return id
 }
 
-func (r *registry) getOrCreate(id string) (*store, SessionMeta, bool) {
+func safeID(id string) string {
+	// Keep filenames boring.
+	b := make([]rune, 0, len(id))
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b = append(b, r)
+		} else {
+			b = append(b, '_')
+		}
+	}
+	if len(b) == 0 {
+		return "session"
+	}
+	return string(b)
+}
+
+func (r *registry) openStore(id string) *store {
 	id = normalizeID(id)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	st, ok := r.sessions[id]
-	if ok {
-		return st, r.meta[id], false
+	if st, ok := r.sessions[id]; ok {
+		return st
 	}
-	st = &store{}
+	st := &store{path: filepath.Join(r.dataDir, safeID(id)+".jsonl")}
+	st.load()
+	if f, err := os.OpenFile(st.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		st.file = f
+	}
 	r.sessions[id] = st
-	m := SessionMeta{CreatedAt: time.Now().UnixMilli()}
-	r.meta[id] = m
-	return st, m, true
+	if _, ok := r.meta[id]; !ok {
+		r.meta[id] = SessionMeta{CreatedAt: time.Now().UnixMilli()}
+	}
+	return st
+}
+
+func (r *registry) getOrCreate(id string) (*store, SessionMeta, bool) {
+	id = normalizeID(id)
+	st := r.openStore(id)
+	r.mu.Lock()
+	m := r.meta[id]
+	_, existed := r.meta[id]
+	r.mu.Unlock()
+	return st, m, !existed
 }
 
 func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 	id = normalizeID(id)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if st, ok := r.sessions[id]; ok {
-		_ = st
-		return r.meta[id], false, nil
+	if ex, ok := r.meta[id]; ok {
+		r.mu.Unlock()
+		return ex, false, nil
 	}
 	if m.CreatedAt == 0 {
 		m.CreatedAt = time.Now().UnixMilli()
 	}
-	r.sessions[id] = &store{}
 	r.meta[id] = m
+	r.mu.Unlock()
+	_ = r.openStore(id)
 	return m, true, nil
+}
+
+func (st *store) load() {
+	if st.path == "" {
+		return
+	}
+	f, err := os.Open(st.path)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var fact Fact
+		if err := json.Unmarshal(line, &fact); err != nil {
+			continue
+		}
+		st.facts = append(st.facts, fact)
+	}
 }
 
 func (st *store) append(in struct {
@@ -134,6 +201,10 @@ func (st *store) append(in struct {
 		Meta:    in.Meta,
 	}
 	st.facts = append(st.facts, f)
+	if st.file != nil {
+		raw, _ := json.Marshal(f)
+		_, _ = st.file.Write(append(raw, '\n'))
+	}
 	return f, nil
 }
 
@@ -164,13 +235,11 @@ func (st *store) derive() []Message {
 		case "tool_call":
 			var meta struct {
 				ToolCalls []struct {
-					// Host writes tool_call_id; ToolCall JSON uses id. Accept both.
 					ID         string          `json:"id"`
 					ToolCallID string          `json:"tool_call_id"`
 					Name       string          `json:"name"`
 					Arguments  json.RawMessage `json:"arguments"`
 				} `json:"tool_calls"`
-				// Legacy single-call shape.
 				ToolCallID string          `json:"tool_call_id"`
 				Name       string          `json:"name"`
 				Arguments  json.RawMessage `json:"arguments"`
@@ -187,17 +256,9 @@ func (st *store) derive() []Message {
 				calls = append(calls, ToolCall{ID: id, Name: c.Name, Arguments: c.Arguments})
 			}
 			if len(calls) == 0 && meta.ToolCallID != "" {
-				calls = []ToolCall{{
-					ID:        meta.ToolCallID,
-					Name:      meta.Name,
-					Arguments: meta.Arguments,
-				}}
+				calls = []ToolCall{{ID: meta.ToolCallID, Name: meta.Name, Arguments: meta.Arguments}}
 			}
-			msgs = append(msgs, Message{
-				Role:      f.Role,
-				Content:   f.Content,
-				ToolCalls: calls,
-			})
+			msgs = append(msgs, Message{Role: f.Role, Content: f.Content, ToolCalls: calls})
 		case "tool_result":
 			var meta struct {
 				ToolCallID string `json:"tool_call_id"`
@@ -205,11 +266,7 @@ func (st *store) derive() []Message {
 			if len(f.Meta) > 0 {
 				_ = json.Unmarshal(f.Meta, &meta)
 			}
-			msgs = append(msgs, Message{
-				Role:       f.Role,
-				Content:    f.Content,
-				ToolCallID: meta.ToolCallID,
-			})
+			msgs = append(msgs, Message{Role: f.Role, Content: f.Content, ToolCallID: meta.ToolCallID})
 		}
 	}
 	return msgs
@@ -217,7 +274,9 @@ func (st *store) derive() []Message {
 
 func main() {
 	s := pluginsdk.New()
-	reg := newRegistry()
+	dir := dataDir()
+	reg := newRegistry(dir)
+	fmt.Fprintf(os.Stderr, "session: dataDir=%s\n", dir)
 
 	s.Handle("session", "create", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
@@ -257,7 +316,7 @@ func main() {
 		if err := json.Unmarshal(req.Payload, &in); err != nil {
 			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 		}
-		st, _, _ := reg.getOrCreate(in.SessionID)
+		st := reg.openStore(in.SessionID)
 		f, err := st.append(struct {
 			Type    string          `json:"type"`
 			Role    string          `json:"role"`
@@ -277,11 +336,9 @@ func main() {
 			Limit     int    `json:"limit"`
 		}
 		if len(req.Payload) > 0 {
-			if err := json.Unmarshal(req.Payload, &in); err != nil {
-				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
-			}
+			_ = json.Unmarshal(req.Payload, &in)
 		}
-		st, _, _ := reg.getOrCreate(in.SessionID)
+		st := reg.openStore(in.SessionID)
 		facts := st.query(in.AfterSeq, in.Limit)
 		if facts == nil {
 			facts = []Fact{}
@@ -296,7 +353,7 @@ func main() {
 		if len(req.Payload) > 0 {
 			_ = json.Unmarshal(req.Payload, &in)
 		}
-		st, _, _ := reg.getOrCreate(in.SessionID)
+		st := reg.openStore(in.SessionID)
 		msgs := st.derive()
 		return json.Marshal(map[string]any{
 			"messages": msgs,

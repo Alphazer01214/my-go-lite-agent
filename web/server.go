@@ -90,6 +90,7 @@ func New(opts Options) *Server {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/trace", s.handleTracePage)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/api/message", s.handleMessage)
 	mux.HandleFunc("/api/command", s.handleCommand)
@@ -176,6 +177,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(shellHTML))
+}
+
+func (s *Server) handleTracePage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(traceHTML))
 }
 
 func (s *Server) handleSDK(w http.ResponseWriter, r *http.Request) {

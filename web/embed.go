@@ -7,3 +7,6 @@ var shellHTML string
 
 //go:embed static/sdk.js
 var sdkJS string
+
+//go:embed static/trace.html
+var traceHTML string

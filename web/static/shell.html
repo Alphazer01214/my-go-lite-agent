@@ -12,19 +12,19 @@
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
-#app{display:grid;grid-template-columns:260px 1fr 220px;grid-template-rows:1fr auto;height:100%}
-#sidebar,#toolbar-right{background:var(--panel);overflow:auto;padding:12px}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+#app{display:grid;grid-template-columns:260px 1fr 220px;grid-template-rows:1fr;height:100%;min-height:0}
+#sidebar,#toolbar-right{background:var(--panel);overflow:auto;min-height:0;padding:12px}
 #sidebar{border-right:1px solid var(--line)}
 #toolbar-right{border-left:1px solid var(--line)}
-#main{display:flex;flex-direction:column;min-width:0}
-#chat{flex:1;overflow:auto;padding:16px 20px}
+#main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+#chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
-#status{font-size:12px;color:var(--dim);padding:4px 20px;min-height:20px}
-#composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
-#input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 12px;font:inherit;resize:vertical;min-height:44px}
+#status{font-size:12px;color:var(--dim);padding:4px 20px;min-height:20px;flex-shrink:0}
+#composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel);flex-shrink:0}
+#input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 12px;font:inherit;resize:vertical;min-height:44px;max-height:160px}
 #send{background:var(--accent);color:#0b1020;border:0;border-radius:8px;padding:0 16px;font-weight:600;cursor:pointer}
 .msg{margin:0 0 14px;max-width:52rem}
 .msg.user{color:var(--dim)}
@@ -45,16 +45,20 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family
 .message{font-size:13px;margin:0 0 8px;color:var(--dim)}
 .message.error{color:var(--err)}
 .message.warn{color:#e0af68}
-.progress{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px}
+.progress,.thinking,.stream-live{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px;white-space:pre-wrap}
+.thinking{opacity:.75}
+.stream-live{opacity:.9;line-height:1.4}
 .slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:0 0 8px}
 .panel-root{margin-bottom:16px}
-h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
+h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
+.top-link{display:inline-block;font-size:12px;color:var(--accent);text-decoration:none;margin-bottom:12px}
 </style>
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
-    <h1 class="brand">live agent</h1>
+    <h1 class="brand">lite agent</h1>
+    <a class="top-link" href="/trace" target="_blank" rel="noreferrer">Session trace →</a>
     <div class="slot-label">sidebar</div>
     <div id="slot-sidebar" class="panel-root"></div>
   </aside>
@@ -81,7 +85,10 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
   var send = document.getElementById('send');
   var streamBuf = '';
   var progressEl = null;
-  var BT = String.fromCharCode(96); // `
+  var thinkingEl = null;
+  var liveEl = null;
+  var historyLoaded = false;
+  var BT = String.fromCharCode(96);
   var FENCE = BT+BT+BT;
 
   function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
@@ -89,7 +96,6 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
   function md(src){
     if(!src) return '';
     var s = String(src).replace(/\r\n/g,'\n');
-    // fenced code
     var fenceRe = new RegExp(FENCE+'([\\\\w-]*)\\\\n([\\\\s\\\\S]*?)'+FENCE,'g');
     s = s.replace(fenceRe, function(_,lang,code){
       return '<pre><code>'+esc(code)+'</code></pre>';
@@ -117,12 +123,14 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     return parts.join('\n');
   }
 
+  function scrollChat(){ chat.scrollTop = chat.scrollHeight; }
+
   function appendAssistant(html){
     var el = document.createElement('div');
     el.className = 'msg assistant';
     el.innerHTML = html || '';
     chat.appendChild(el);
-    chat.scrollTop = chat.scrollHeight;
+    scrollChat();
     return el;
   }
   function appendUser(text){
@@ -130,7 +138,7 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     el.className = 'msg user';
     el.textContent = text;
     chat.appendChild(el);
-    chat.scrollTop = chat.scrollHeight;
+    scrollChat();
   }
   function appendPre(text, cls){
     var el = document.createElement('pre');
@@ -140,72 +148,19 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     el.style.fontSize = '12px';
     el.textContent = text;
     chat.appendChild(el);
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-  function loadHistory(){
-    fetch('/api/history').then(function(r){return r.json();}).then(function(b){
-      (b.messages||[]).forEach(function(m){
-        if(m.role === 'user') appendUser(m.content);
-        else if(m.role === 'assistant') appendAssistant(md(m.content));
-      });
-    }).catch(function(){});
-  }
-
-  function loadTrace(){
-    fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
-      var host = document.getElementById('panel-host-trace');
-      if(!host){
-        host = document.createElement('div');
-        host.id = 'panel-host-trace';
-        host.className = 'panel-root';
-        var slot = document.getElementById('slot-sidebar');
-        if(slot) slot.appendChild(host);
-      }
-      var facts = b.facts || [];
-      var lines = facts.map(function(f){
-        var t = f.type || '';
-        if(t === 'turn_start') return '▶ turn';
-        if(t === 'step_start') return '  step ' + ((f.meta&&f.meta.step)||'?');
-        if(t === 'step_end') return '  step end (' + ((f.meta&&f.meta.reason)||'') + ')';
-        if(t === 'tool_call') {
-          var names = [];
-          var tcs = (f.meta && f.meta.tool_calls) || [];
-          tcs.forEach(function(tc){ names.push(tc.name); });
-          return '  ⏺ ' + (names.join(',')||'tool');
-        }
-        if(t === 'tool_result') return '    → ' + String(f.content||'').slice(0,80);
-        if(t === 'request_header') return '  llm request';
-        if(t === 'turn_end') return '■ turn end';
-        return null;
-      }).filter(Boolean);
-      host.innerHTML = '<div class="slot-label">session trace</div><pre style="font-size:11px;color:var(--dim);white-space:pre-wrap;margin:0">' +
-        esc(lines.join('\n') || '(empty)') + '</pre>';
-    }).catch(function(){});
-  }
-
-  function loadToolsHint(){
-    fetch('/api/plugins').then(function(r){return r.json();}).then(function(b){
-      window.__liteCommands = ['help','lp','refresh'].concat((b.plugins||[]).map(function(p){return p.name;}));
-      var plugins = b.plugins||[];
-      var hasTools = plugins.some(function(p){
-        return (p.provides||[]).indexOf('tools') >= 0;
-      });
-      var names = plugins.map(function(p){return p.name;}).join(', ');
-      if(names && !document.getElementById('plugin-list-note')){
-        var n = document.createElement('div');
-        n.id = 'plugin-list-note';
-        n.className = 'message';
-        n.textContent = 'plugins: ' + names + (hasTools ? '' : '  (no tools — use assembly agent.json)');
-        var side = document.getElementById('slot-sidebar');
-        if(side) side.insertBefore(n, side.firstChild);
-      }
-    }).catch(function(){});
+    scrollChat();
   }
   function clearProgress(){
     if(progressEl){ progressEl.remove(); progressEl = null; }
   }
+  function clearThinking(){
+    if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; }
+  }
+  function clearLive(){
+    if(liveEl){ liveEl.remove(); liveEl = null; }
+  }
   function ensureProgress(){
+    clearThinking();
     if(!progressEl){
       progressEl = document.createElement('div');
       progressEl.className = 'progress';
@@ -213,10 +168,27 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     }
     return progressEl;
   }
+  function ensureThinking(){
+    if(!thinkingEl){
+      thinkingEl = document.createElement('div');
+      thinkingEl.className = 'thinking';
+      thinkingEl.textContent = 'Thinking…';
+      chat.appendChild(thinkingEl);
+      scrollChat();
+    }
+  }
+  function ensureLive(){
+    clearThinking();
+    if(!liveEl){
+      liveEl = document.createElement('div');
+      liveEl.className = 'stream-live';
+      chat.appendChild(liveEl);
+    }
+    return liveEl;
+  }
 
   function onPresentation(raw){
-    clearProgress();
-    // Host may nest under data; accept the intent object directly too.
+    clearProgress(); clearThinking(); clearLive();
     var data = raw && raw.kind !== undefined ? raw : (raw && raw.data) || raw || {};
     var kind = data.kind || data.Kind;
     var text = data.text !== undefined ? data.text : data.Text;
@@ -230,7 +202,7 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
       el.className = 'message' + (level === 'error' ? ' error' : level === 'warn' ? ' warn' : '');
       el.textContent = text || '';
       chat.appendChild(el);
-      chat.scrollTop = chat.scrollHeight;
+      scrollChat();
       return;
     }
     if(kind === 'summary_text'){
@@ -247,7 +219,7 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
       card.innerHTML = '<header>'+esc(title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(detail||'')+'</div>';
       card.querySelector('header').onclick = function(){ card.classList.toggle('open'); };
       chat.appendChild(card);
-      chat.scrollTop = chat.scrollHeight;
+      scrollChat();
     }
   }
 
@@ -256,10 +228,7 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     var host = document.getElementById(hostId);
     if(!host) return;
     var node = document.getElementById('panel-'+op.id);
-    if(op.op === 'clear'){
-      if(node) node.remove();
-      return;
-    }
+    if(op.op === 'clear'){ if(node) node.remove(); return; }
     if(!node){
       node = document.createElement('div');
       node.id = 'panel-'+op.id;
@@ -271,6 +240,22 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
   }
 
+  function loadHistory(force){
+    fetch('/api/history').then(function(r){return r.json();}).then(function(b){
+      var msgs = b.messages||[];
+      if(historyLoaded && !force) return;
+      if(force){
+        // Full rehydrate: wipe previous history-only nodes is complex; only fill if chat empty.
+        if(chat.children.length > 0 && historyLoaded) return;
+      }
+      msgs.forEach(function(m){
+        if(m.role === 'user') appendUser(m.content);
+        else if(m.role === 'assistant') appendAssistant(md(m.content));
+      });
+      historyLoaded = true;
+    }).catch(function(){});
+  }
+
   function openSSE(){
     var es = new EventSource('/events?replay=1');
     es.addEventListener('presentation', function(e){
@@ -280,17 +265,22 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     es.addEventListener('panel', function(e){ applyPanel(JSON.parse(e.data).data); });
     es.addEventListener('stream', function(e){
       var d = JSON.parse(e.data).data;
-      streamBuf += d.delta || '';
-      var p = ensureProgress();
-      p.textContent = 'Generating… ' + Array.from(streamBuf).length + ' chars';
+      var delta = d.delta || '';
+      streamBuf += delta;
+      var live = ensureLive();
+      live.textContent = streamBuf;
+      scrollChat();
     });
     es.addEventListener('status', function(e){
       var d = JSON.parse(e.data).data;
-      statusEl.textContent = d.status || '';
-      if(d.status === 'idle'){
+      var st = d.status || '';
+      statusEl.textContent = st;
+      if(st === 'running'){
+        if(!streamBuf) ensureThinking();
+      }
+      if(st === 'idle'){
         streamBuf = '';
-        clearProgress();
-        loadTrace();
+        clearProgress(); clearThinking(); clearLive();
       }
     });
     es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
@@ -317,6 +307,7 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     }
     appendUser(text);
     streamBuf = '';
+    clearLive(); clearThinking();
     fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:text})});
   }
 
@@ -325,10 +316,10 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
   });
 
-  loadHistory();
-  loadTrace();
-  loadToolsHint();
+  loadHistory(false);
   openSSE();
+  // Re-hydrate once SSE is warm in case first fetch raced an empty session.
+  setTimeout(function(){ loadHistory(true); }, 400);
 })();
 </script>
 </body>

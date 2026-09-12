@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>session trace — lite agent</title>
+<style>
+:root{--bg:#0f1115;--panel:#161a22;--ink:#e8eaed;--dim:#9aa0a6;--accent:#7aa2f7;--line:#2a2f3a;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+body{display:flex;flex-direction:column}
+header{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:center;background:var(--panel)}
+header a{color:var(--accent);text-decoration:none;font-size:13px}
+header h1{font-size:14px;margin:0;font-weight:600}
+#list{flex:1;overflow:auto;padding:16px 20px 40px}
+.item{border-left:2px solid var(--line);margin:0 0 10px;padding:6px 0 6px 12px}
+.item.user{border-color:#7aa2f7}
+.item.assistant{border-color:#9ece6a}
+.item.system{border-color:#bb9af7}
+.item.tool_call{border-color:#e0af68}
+.item.tool_result{border-color:#f7768e}
+.item.meta{border-color:#565f89;opacity:.85}
+.kind{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin-bottom:2px}
+.role{font-weight:600;font-size:13px}
+.body{font-size:13px;white-space:pre-wrap;margin-top:4px;line-height:1.45}
+.body.mono{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.seq{float:right;font-size:11px;color:var(--dim);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← Chat</a>
+  <h1>Session trace</h1>
+  <span id="count" style="font-size:12px;color:var(--dim)"></span>
+</header>
+<div id="list"></div>
+<script>
+(function(){
+  function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function render(facts){
+    var list = document.getElementById('list');
+    list.innerHTML = '';
+    document.getElementById('count').textContent = facts.length + ' facts';
+    facts.forEach(function(f){
+      var t = f.type || 'message';
+      var role = f.role || '';
+      var el = document.createElement('div');
+      el.className = 'item ' + t + (role==='user'||role==='assistant'||role==='system' ? ' '+role : '');
+      var title = t;
+      if(t === 'message') title = role || 'message';
+      var body = '';
+      var mono = false;
+      if(t === 'message'){
+        body = f.content || '';
+      } else if(t === 'tool_call'){
+        var tcs = (f.meta && f.meta.tool_calls) || [];
+        body = tcs.map(function(tc){
+          return (tc.name||'tool') + ' ' + (tc.arguments ? JSON.stringify(tc.arguments) : '');
+        }).join('\n');
+        if(!body) body = f.content || '';
+        mono = true;
+      } else if(t === 'tool_result'){
+        body = f.content || '';
+        mono = true;
+      } else if(t === 'request_header'){
+        body = JSON.stringify(f.meta||{}, null, 0);
+        mono = true;
+      } else if(t === 'step_start' || t === 'step_end' || t === 'turn_start' || t === 'turn_end'){
+        body = JSON.stringify(f.meta||{});
+        mono = true;
+      } else {
+        body = f.content || JSON.stringify(f.meta||{});
+        mono = true;
+      }
+      el.innerHTML = '<span class="seq">#'+(f.seq||'')+'</span><div class="kind">'+esc(title)+'</div>' +
+        (f.content && t!=='message' && t!=='tool_result' ? '<div class="role">'+esc(String(f.content).slice(0,120))+'</div>' : '') +
+        '<div class="body'+(mono?' mono':'')+'">'+esc(body)+'</div>';
+      list.appendChild(el);
+    });
+  }
+  function load(){
+    fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
+      render(b.facts||[]);
+    });
+  }
+  load();
+  setInterval(load, 2000);
+})();
+</script>
+</body>
+</html>
