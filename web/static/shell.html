@@ -92,8 +92,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .trace-detail.open{display:block}
 
 .msg{margin:0 0 14px;max-width:52rem}
-.msg.user{color:var(--dim)}
-.msg.user:before{content:"you · ";color:var(--dim);font-size:12px}
+.msg.user{color:var(--ink);background:var(--panel2);border-radius:10px;padding:10px 12px}
+.msg.user:before{content:"you";display:block;color:var(--dim);font-size:11px;margin-bottom:4px}
 .msg.assistant{line-height:1.55}
 .msg.assistant pre{background:#0b0e14;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--mono);font-size:13px}
 .msg.assistant code{font-family:var(--mono);font-size:0.92em;background:#1a1f2a;padding:1px 4px;border-radius:4px}
@@ -101,23 +101,28 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .msg.assistant h1,.msg.assistant h2,.msg.assistant h3{margin:0.6em 0 0.35em;line-height:1.25}
 .msg.assistant ul{margin:0.3em 0;padding-left:1.2em}
 .msg.assistant blockquote{border-left:3px solid var(--line);margin:0.4em 0;padding:0.1em 0 0.1em 0.8em;color:var(--dim)}
-.tool-card{border:1px solid var(--line);border-radius:8px;margin:0 0 12px;background:#12161f;overflow:hidden}
-.tool-card header{display:flex;gap:8px;align-items:center;padding:8px 10px;cursor:pointer;font-size:13px}
-.tool-card header:before{content:"⏺";color:var(--accent)}
-.tool-card .pairs{padding:0 12px 8px 28px;font-size:12px;color:var(--dim);font-family:var(--mono)}
-.tool-card .detail{display:none;padding:0 12px 10px 28px;font-size:12px;color:var(--ink);white-space:pre-wrap;font-family:var(--mono)}
-.tool-card.open .detail{display:block}
-.message{font-size:13px;margin:0 0 8px;color:var(--dim)}
+
+/* dsh-style disclosure rows: everything except user + final assistant is folded */
+.disc{margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+.disc>summary{
+  list-style:none;cursor:pointer;padding:7px 10px;font-size:12px;color:var(--dim);
+  display:flex;gap:8px;align-items:center;user-select:none
+}
+.disc>summary::-webkit-details-marker{display:none}
+.disc>summary:before{content:"▸";font-size:10px;color:var(--dim)}
+.disc[open]>summary:before{content:"▾"}
+.disc>summary .s-title{color:var(--ink);font-weight:600}
+.disc>summary .s-meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11px}
+.disc>.disc-body{padding:0 10px 10px 26px;font-size:12px;color:var(--dim);white-space:pre-wrap;font-family:var(--mono)}
+.disc.think>summary:before{content:"▸"}
+.disc.tool>summary .s-title{color:var(--accent)}
+.disc.live{border-color:#334}
+.disc.live>summary:before{content:"◉";color:var(--accent)}
+
+.message{font-size:12px;margin:0 0 8px;color:var(--dim)}
 .message.error{color:var(--err)}
 .message.warn{color:#e0af68}
-.progress,.thinking,.stream-live{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px;white-space:pre-wrap}
-.thinking{opacity:.75}
-.stream-live{opacity:.9;line-height:1.45;border-left:2px solid #334;padding-left:8px}
-.stream-live.frozen{opacity:.7;border-left-color:#2a2f3a;cursor:pointer}
-.stream-live.frozen:before{content:"▸ thinking · click to expand";display:block;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
-.stream-live.frozen.expanded:before{content:"▾ thinking"}
-.stream-live.frozen .body{display:none;white-space:pre-wrap}
-.stream-live.frozen.expanded .body{display:block}
+.progress{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:8px}
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
@@ -170,7 +175,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   var sessionLabel = document.getElementById('session-label');
   var traceList = document.getElementById('trace-list');
   var streamBuf = '';
-  var progressEl = null, thinkingEl = null, liveEl = null;
+  var progressEl = null, thinkingEl = null, liveEl = null, liveBody = null, liveMeta = null;
   var historyReady = false;
   var running = false;
   var BT = String.fromCharCode(96);
@@ -249,35 +254,59 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   }
   function clearProgress(){ if(progressEl){ progressEl.remove(); progressEl = null; } }
   function clearThinking(){ if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; } }
-  function freezeLive(){
-    if(liveEl && streamBuf){
-      liveEl.classList.add('frozen');
-      var t = streamBuf;
-      if(t.length > 2000) t = t.slice(0,2000) + '…';
-      liveEl.innerHTML = '<div class="body">'+esc(t)+'</div>';
-      liveEl.onclick = function(){ liveEl.classList.toggle('expanded'); };
-      liveEl = null; streamBuf = '';
-      return;
-    }
-    if(liveEl){ liveEl.remove(); liveEl = null; }
-    if(thinkingEl && thinkingEl.textContent === 'Thinking…') clearThinking();
+
+  // dsh-style disclosure row
+  function makeDisc(cls, title, meta, bodyText, open){
+    var d = document.createElement('details');
+    d.className = 'disc ' + (cls||'');
+    if(open) d.open = true;
+    var sum = document.createElement('summary');
+    var t = document.createElement('span');
+    t.className = 's-title';
+    t.textContent = title;
+    var m = document.createElement('span');
+    m.className = 's-meta';
+    m.textContent = meta || '';
+    sum.appendChild(t); sum.appendChild(m);
+    var body = document.createElement('div');
+    body.className = 'disc-body';
+    body.textContent = bodyText || '';
+    d.appendChild(sum); d.appendChild(body);
+    return d;
   }
-  function ensureThinking(){
-    if(!thinkingEl){
-      thinkingEl = document.createElement('div');
-      thinkingEl.className = 'thinking';
-      thinkingEl.textContent = 'Thinking…';
-      chat.appendChild(thinkingEl); scrollChat();
-    }
-  }
+
+  // Live stream: open Think disclosure; settle may replace it with final answer.
   function ensureLive(){
     clearThinking();
     if(!liveEl){
-      liveEl = document.createElement('div');
-      liveEl.className = 'stream-live';
+      liveEl = makeDisc('think live', 'Thinking', '', '', true);
       chat.appendChild(liveEl);
+      liveBody = liveEl.querySelector('.disc-body');
+      liveMeta = liveEl.querySelector('.s-meta');
     }
     return liveEl;
+  }
+  function setLiveText(t){
+    ensureLive();
+    if(liveBody) liveBody.textContent = t;
+    if(liveMeta) liveMeta.textContent = (t.length>60 ? t.slice(0,60)+'…' : t);
+    scrollChat();
+  }
+  function removeLive(){
+    if(liveEl){ liveEl.remove(); liveEl=null; liveBody=null; liveMeta=null; }
+    streamBuf = '';
+  }
+  // Keep stream as collapsed Think (unless empty).
+  function freezeLive(){
+    if(liveEl && streamBuf){
+      liveEl.classList.remove('live');
+      liveEl.open = false;
+      liveEl = null; liveBody = null; liveMeta = null;
+      streamBuf = '';
+      return;
+    }
+    removeLive();
+    clearThinking();
   }
 
   function onPresentation(raw){
@@ -286,33 +315,43 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
     var kind = data.kind || data.Kind;
     var text = data.text !== undefined ? data.text : data.Text;
     if(kind === 'markdown_text'){
-      freezeLive(); clearThinking();
+      // Final assistant body is always expanded. Drop live stream if it was the same answer.
+      var settled = (text || '').trim();
+      if(streamBuf && settled && streamBuf.replace(/\s+/g,' ').indexOf(settled.slice(0,40).replace(/\s+/g,' '))>=0){
+        removeLive(); // stream was the answer — avoid double print
+      } else {
+        freezeLive(); // keep as Think disclosure
+      }
+      clearThinking();
       appendAssistant(md(text || ''));
       return;
     }
     if(kind === 'message_text'){
-      if(liveEl && streamBuf) freezeLive(); else clearThinking();
       var level = data.level || data.Level || '';
-      var el = document.createElement('div');
-      el.className = 'message' + (level === 'error' ? ' error' : level === 'warn' ? ' warn' : '');
-      el.textContent = text || '';
-      chat.appendChild(el); scrollChat();
+      // Non-final status: fold as dim one-liner disclosure (dsh-like).
+      freezeLive();
+      var row = makeDisc('', 'status', text || '', '', false);
+      if(level === 'error') row.style.borderColor = 'var(--err)';
+      chat.appendChild(row); scrollChat();
       return;
     }
     if(kind === 'summary_text'){
-      freezeLive(); clearThinking();
-      var card = document.createElement('div');
-      card.className = 'tool-card';
+      freezeLive();
       var pairsArr = data.pairs || data.Pairs || [];
-      var pairs = pairsArr.map(function(p){
-        var k = p.key !== undefined ? p.key : p.Key;
-        var v = p.value !== undefined ? p.value : p.Value;
-        return '<div>'+esc(k)+': '+esc(v)+'</div>';
-      }).join('');
       var title = data.title !== undefined ? data.title : data.Title;
       var detail = data.detail !== undefined ? data.detail : data.Detail;
-      card.innerHTML = '<header>'+esc(title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(detail||'')+'</div>';
-      card.querySelector('header').onclick = function(){ card.classList.toggle('open'); };
+      var meta = pairsArr.map(function(p){
+        var k = p.key !== undefined ? p.key : p.Key;
+        var v = p.value !== undefined ? p.value : p.Value;
+        return k+'='+String(v).slice(0,40);
+      }).join('  ');
+      var body = pairsArr.map(function(p){
+        var k = p.key !== undefined ? p.key : p.Key;
+        var v = p.value !== undefined ? p.value : p.Value;
+        return k+': '+v;
+      }).join('\n');
+      if(detail) body += (body?'\n\n':'') + detail;
+      var card = makeDisc('tool', '⏺ '+(title||'tool'), meta, body, false);
       chat.appendChild(card); scrollChat();
     }
   }
@@ -334,27 +373,31 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
     return t;
   }
 
+  function appendTraceFact(f){
+    if(!f || !f.type) return;
+    var t = f.type;
+    var role = f.role || '';
+    var cls = t === 'message' && role ? role : t;
+    var row = document.createElement('div');
+    row.className = 'trace-row ' + cls;
+    var kind = t === 'message' ? (role||'msg') : t;
+    row.innerHTML = '<span class="t-kind">'+esc(kind)+'</span><span class="t-sum">'+esc(traceSummary(f))+'</span><span class="t-seq">#'+(f.seq||'')+'</span>';
+    var det = document.createElement('div');
+    det.className = 'trace-detail';
+    var detail = f.content || '';
+    if(f.meta) detail += (detail?'\n\n':'') + JSON.stringify(f.meta, null, 2);
+    det.textContent = detail || '(empty)';
+    row.onclick = function(){ row.classList.toggle('open'); det.classList.toggle('open'); };
+    traceList.appendChild(row); traceList.appendChild(det);
+    traceList.scrollTop = traceList.scrollHeight;
+  }
+
   function loadTrace(){
     fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
       var facts = b.facts || [];
       if(b.sessionId) sessionLabel.textContent = b.sessionId;
       traceList.innerHTML = '';
-      facts.forEach(function(f){
-        var t = f.type || 'message';
-        var role = f.role || '';
-        var cls = t === 'message' && role ? role : t;
-        var row = document.createElement('div');
-        row.className = 'trace-row ' + cls;
-        var kind = t === 'message' ? (role||'msg') : t;
-        row.innerHTML = '<span class="t-kind">'+esc(kind)+'</span><span class="t-sum">'+esc(traceSummary(f))+'</span><span class="t-seq">#'+(f.seq||'')+'</span>';
-        var det = document.createElement('div');
-        det.className = 'trace-detail';
-        var detail = f.content || '';
-        if(f.meta) detail += (detail?'\n\n':'') + JSON.stringify(f.meta, null, 2);
-        det.textContent = detail || '(empty)';
-        row.onclick = function(){ row.classList.toggle('open'); det.classList.toggle('open'); };
-        traceList.appendChild(row); traceList.appendChild(det);
-      });
+      facts.forEach(appendTraceFact);
       traceList.scrollTop = traceList.scrollHeight;
     }).catch(function(){});
   }
@@ -440,22 +483,25 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
       if(!historyReady) return;
       var d = JSON.parse(e.data).data;
       streamBuf += d.delta || '';
-      var live = ensureLive();
-      live.textContent = streamBuf;
-      scrollChat();
+      setLiveText(streamBuf);
+    });
+    es.addEventListener('session', function(e){
+      if(!historyReady) return;
+      var env = JSON.parse(e.data);
+      var fact = env.data !== undefined ? env.data : env;
+      appendTraceFact(fact);
     });
     es.addEventListener('status', function(e){
       var d = JSON.parse(e.data).data;
       var st = d.status || '';
       statusEl.textContent = st;
-      if(st === 'running' && historyReady){ setRunning(true); if(!streamBuf) ensureThinking(); }
+      if(st === 'running' && historyReady){ setRunning(true); }
       if(st === 'idle' || st.indexOf('error:')===0 || st.indexOf('session:')===0){
         if(st === 'idle' || st.indexOf('error:')===0){
           setRunning(false);
-          streamBuf = '';
           clearProgress(); clearThinking();
-          if(liveEl){ liveEl = null; }
-          loadTrace(); loadSessions();
+          if(liveEl) freezeLive();
+          loadSessions();
         }
         if(st.indexOf('session:')===0) sessionLabel.textContent = st.slice(8);
       }

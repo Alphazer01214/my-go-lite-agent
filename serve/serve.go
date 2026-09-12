@@ -944,6 +944,13 @@ func (s *Server) AppendSessionFacts(sessionID string, facts []map[string]any) (i
 			return last, fmt.Errorf("session.append: bad payload: %w", err)
 		}
 		last = out.Seq
+		// Live Session Log for Web trace (topic=session).
+		factOut := make(map[string]any, len(body)+1)
+		for k, v := range body {
+			factOut[k] = v
+		}
+		factOut["seq"] = out.Seq
+		s.publish(Event{Topic: "session", Data: factOut})
 	}
 	return last, nil
 }
