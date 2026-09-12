@@ -57,7 +57,7 @@ Push-Location $root
 try {
     Build-Pkg "./cmd/host" (Join-Path $dist "host.exe")
 
-    Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "In-memory session log plugin"
+    Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "File-backed session log plugin (JSONL)"
     Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]' "[]" 0 "Deterministic fake LLM for tests"
     Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000 "OpenAI-compatible LLM provider" '[{"name":"config","description":"Show or set API key / model / baseURL","usage":"/llm-openai config [get|set key=value]"}]'
     Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 "Echo tool with presentation card"
@@ -70,6 +70,13 @@ try {
 
     Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
+    # Ship the working llm-openai config (apiKey included) so dist is runnable out of the box.
+    $llmCfg = Join-Path $root "plugins\llm-openai\config.json"
+    if (-not (Test-Path $llmCfg)) {
+        throw "missing plugins\llm-openai\config.json — required for release build (contains apiKey)"
+    }
+    Copy-Item $llmCfg (Join-Path $dist "plugins\llm-openai\") -Force
+    Write-Host "copied llm-openai config.json (with apiKey) -> dist\plugins\llm-openai\"
 
     Copy-Item (Join-Path $root "examples\assembly.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\assembly-with-tools.json") (Join-Path $dist "examples\") -Force
