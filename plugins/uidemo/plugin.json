@@ -1,0 +1,13 @@
+{
+  "name": "uidemo",
+  "version": "0.1.0",
+  "protocol": 2,
+  "provides": [],
+  "consumes": [],
+  "entry": "uidemo.exe",
+  "description": "Web Panel demo (mode switch)",
+  "ui": {
+    "entry": "ui/index.html",
+    "slots": ["sidebar"]
+  }
+}

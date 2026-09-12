@@ -12,11 +12,31 @@ const (
 	PresentationCap       = "presentation"
 	PresentationMethod    = "card"
 	PresentationRender    = "render"
+	PresentationPanel     = "panel"
 	PresentationStreamEvt = "stream"
 	PresentationStatusEvt = "status"
 	CommandsCap           = "commands"
 	CommandsCallMethod    = "call"
+	UICap                 = "ui"
+	UICallMethod          = "action"
 )
+
+// PanelOp is one Web Medium panel mutation (set|append|clear). See CONTEXT.md Panel.
+type PanelOp struct {
+	Op   string `json:"op"`
+	Slot string `json:"slot"`
+	ID   string `json:"id"`
+	HTML string `json:"html,omitempty"`
+}
+
+// EmitPanel sends a Panel injection op as a broadcast evt Frame.
+func (s *Server) EmitPanel(op PanelOp) error {
+	payload, err := json.Marshal(op)
+	if err != nil {
+		return err
+	}
+	return s.Emit(PresentationCap, PresentationPanel, payload)
+}
 
 // Card is one Presentation render intent (CONTEXT.md Presentation Card).
 type Card struct {

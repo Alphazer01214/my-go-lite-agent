@@ -65,6 +65,9 @@ type Server struct {
 	gen      map[string]int
 	audit    []AuditEntry
 	cards    []PresentationCard
+	panels   []PanelOp
+	subs     []*Subscriber
+	turnMu   sync.Mutex
 	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
 	OnStreamDelta func(delta string)
 	// OnStatus is the live Render Medium hook for agent idle/running.
@@ -74,6 +77,23 @@ type Server struct {
 	// OnRender is the live Render Medium hook for presentation.render intents.
 	OnRender func(ri RenderIntent)
 }
+
+// PanelOp is one Web Medium panel mutation (ADR-0009).
+type PanelOp struct {
+	Op   string `json:"op"`
+	Slot string `json:"slot"`
+	ID   string `json:"id"`
+	HTML string `json:"html,omitempty"`
+}
+
+// PresentationPanelMethod is a Panel injection op (set|append|clear).
+const PresentationPanelMethod = "panel"
+
+// UICap is the Capability for UI Action routing from the Web Shell.
+const UICap = "ui"
+
+// UIActionMethod is the method Plugins implement to handle UI Actions.
+const UIActionMethod = "action"
 
 // PresentationCap is the Capability used for Presentation Card evt frames.
 const PresentationCap = "presentation"
@@ -306,6 +326,9 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 	if f.Cap == PresentationCap && f.Method == PresentationRenderMethod {
 		s.dispatchRender(f)
 	}
+	if f.Cap == PresentationCap && f.Method == PresentationPanelMethod {
+		s.dispatchPanel(f)
+	}
 	if f.ID == "" {
 		return
 	}
@@ -322,9 +345,6 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 }
 
 func (s *Server) dispatchRender(f *protocol.Frame) {
-	if s.OnRender == nil {
-		return
-	}
 	var ri struct {
 		Kind   string        `json:"kind"`
 		Text   string        `json:"text"`
@@ -336,22 +356,38 @@ func (s *Server) dispatchRender(f *protocol.Frame) {
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &ri)
 	}
+	intent := RenderIntent{
+		Kind:   ri.Kind,
+		Text:   ri.Text,
+		Level:  ri.Level,
+		Title:  ri.Title,
+		Pairs:  ri.Pairs,
+		Detail: ri.Detail,
+	}
 	switch ri.Kind {
 	case KindMarkdownText, KindMessageText, KindSummaryText:
-		s.OnRender(RenderIntent{
-			Kind:   ri.Kind,
-			Text:   ri.Text,
-			Level:  ri.Level,
-			Title:  ri.Title,
-			Pairs:  ri.Pairs,
-			Detail: ri.Detail,
-		})
+		if s.OnRender != nil {
+			s.OnRender(intent)
+		}
+		s.publish(Event{Topic: "presentation", Data: intent})
 	default:
-		// Unknown kind (e.g. protocol v1 leftovers): drop with a live status note.
 		if s.OnStatus != nil {
 			s.OnStatus(fmt.Sprintf("warn: dropped unknown render kind %q", ri.Kind))
 		}
 	}
+}
+
+func (s *Server) dispatchPanel(f *protocol.Frame) {
+	var op PanelOp
+	if len(f.Payload) > 0 {
+		if err := json.Unmarshal(f.Payload, &op); err != nil {
+			return
+		}
+	}
+	if op.ID == "" {
+		return
+	}
+	s.publish(Event{Topic: "panel", Data: op})
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
@@ -509,6 +545,51 @@ func (s *Server) CallCommand(pluginName, command, args string) (json.RawMessage,
 		Type:    protocol.TypeReq,
 		Cap:     CommandsCap,
 		Method:  CommandsCallMethod,
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != nil {
+		return nil, out.Error
+	}
+	return out.Payload, nil
+}
+
+// CallUIAction routes a UI Action into pluginName (cap=ui, method=action).
+func (s *Server) CallUIAction(pluginName string, payload json.RawMessage) (json.RawMessage, error) {
+	out, err := s.Call(pluginName, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     UICap,
+		Method:  UIActionMethod,
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != nil {
+		return nil, out.Error
+	}
+	return out.Payload, nil
+}
+
+// CallByCap routes cap.method to the Plugin that provides cap.
+func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[cap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no plugin provides %q", cap)
+	}
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	out, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     cap,
+		Method:  method,
 		Payload: payload,
 	})
 	if err != nil {
@@ -879,6 +960,15 @@ func (s *Server) emitStatus(status string) {
 	if s.OnStatus != nil {
 		s.OnStatus(status)
 	}
+	s.publish(Event{Topic: "status", Data: map[string]string{"status": status}})
+}
+
+// emitRenderIntent notifies the CLI hook and all Subscribers (Web Medium).
+func (s *Server) emitRenderIntent(ri RenderIntent) {
+	if s.OnRender != nil {
+		s.OnRender(ri)
+	}
+	s.publish(Event{Topic: "presentation", Data: ri})
 }
 
 // extractStreamDelta returns text delta from llm.chunk or presentation.stream chunk frames.
@@ -907,6 +997,9 @@ func extractStreamDelta(f *protocol.Frame) (string, bool) {
 // → optional tools.call → session tool facts → step/end → repeat until final assistant reply
 // → turn/end.
 func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
+	// One turn at a time across CLI and Web (spec §7 / ADR-0009).
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
 	return s.runTurn("", userInput, true, "")
 }
 
@@ -1060,6 +1153,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				if s.OnStreamDelta != nil {
 					s.OnStreamDelta(delta)
 				}
+				s.publish(Event{Topic: "stream", Data: map[string]string{"delta": delta}})
 			}
 		})
 		if err != nil {
@@ -1096,8 +1190,8 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
 			// Settle: durable assistant body as markdown_text for every Render Medium.
-			if llmOut.Content != "" && s.OnRender != nil {
-				s.OnRender(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content})
+			if llmOut.Content != "" {
+				s.emitRenderIntent(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content})
 			}
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
@@ -1162,22 +1256,20 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				additionalContexts = toolOut.AdditionalContexts
 			}
 			// Render Medium: summary_text card (pairs from args, detail = result + overflow).
-			if s.OnRender != nil {
-				pairs, overflow := JSONToPairs(tc.Arguments, MaxSummaryPairs)
-				detail := resultContent
-				if overflow != "" {
-					if detail != "" {
-						detail += "\n"
-					}
-					detail += overflow
+			pairs, overflow := JSONToPairs(tc.Arguments, MaxSummaryPairs)
+			detail := resultContent
+			if overflow != "" {
+				if detail != "" {
+					detail += "\n"
 				}
-				s.OnRender(RenderIntent{
-					Kind:   KindSummaryText,
-					Title:  tc.Name,
-					Pairs:  pairs,
-					Detail: TruncateRunes(detail, MaxSummaryDetail),
-				})
+				detail += overflow
 			}
+			s.emitRenderIntent(RenderIntent{
+				Kind:   KindSummaryText,
+				Title:  tc.Name,
+				Pairs:  pairs,
+				Detail: TruncateRunes(detail, MaxSummaryDetail),
+			})
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "tool_result",
 				"role":    "tool",
@@ -1326,9 +1418,7 @@ func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
 	if s.OnToolCall != nil {
 		s.OnToolCall(tc.Name, tc.Arguments)
 	}
-	if s.OnRender != nil {
-		s.OnRender(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name)})
-	}
+	s.emitRenderIntent(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name)})
 	if tc.Name == SubagentToolName {
 		var in struct {
 			Input        string   `json:"input"`

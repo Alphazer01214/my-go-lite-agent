@@ -17,6 +17,12 @@ type CommandSpec struct {
 	Usage       string `json:"usage"`
 }
 
+// UISpec declares optional Web Medium Panel assets (ADR-0009).
+type UISpec struct {
+	Entry string   `json:"entry"`
+	Slots []string `json:"slots,omitempty"`
+}
+
 // Manifest is plugin.json next to a Plugin executable.
 type Manifest struct {
 	Name        string        `json:"name"`
@@ -28,6 +34,7 @@ type Manifest struct {
 	TimeoutMs   int           `json:"timeoutMs,omitempty"`
 	Description string        `json:"description,omitempty"`
 	Commands    []CommandSpec `json:"commands,omitempty"`
+	UI          *UISpec       `json:"ui,omitempty"`
 }
 
 // CurrentProtocol is the Frame/manifest protocol version this Host speaks.

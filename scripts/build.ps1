@@ -61,6 +61,8 @@ try {
     Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]' "[]" 0 "System prompt segment assembler"
     Install-Plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 "Echo capability plugin"
     Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]' "[]" 0 "Demo waterfall interceptor"
+    Install-Plugin "uidemo"         "./plugins/uidemo"         '[]' "[]" 0 "Web Panel demo (mode switch)"
+    Copy-Item (Join-Path $root "plugins\uidemo\ui") (Join-Path $dist "plugins\uidemo\") -Recurse -Force
 
     Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force

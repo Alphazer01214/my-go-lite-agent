@@ -94,6 +94,24 @@ cd dist
 .\host.exe -plugins plugins -assembly examples\agent.json -repl
 ```
 
+### Web Medium（浏览器）
+
+```powershell
+.\host.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788
+# 可与终端 REPL 并存：
+.\host.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788 -repl
+```
+
+打开 `http://127.0.0.1:7788`：
+
+- Host **Shell** 提供布局、默认聊天面（markdown / 工具卡 / 流式进度）与命令输入
+- 插件经 Manifest `"ui": {"entry":"ui/index.html","slots":["sidebar"]}` 或运行时 `EmitPanel` 向 Panel 槽注入（完全信任作者，零 Node）
+- 控件用 `data-la-plugin` 等属性或 `LiteAgent.emitUIAction` 回传 `cap=ui,method=action`
+- 作者 SDK：`GET /sdk/lite-agent.js`（可拷贝进插件 `ui/`）
+- 新标签页 `?replay=1` 回放最近事件
+
+示例面板插件：`plugins/uidemo`。
+
 ### 单发一轮（脚本友好）
 
 ```powershell

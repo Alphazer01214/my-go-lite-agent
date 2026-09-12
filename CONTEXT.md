@@ -36,6 +36,14 @@ _Avoid_: 视图、前端组件、渲染器（规范名词是 Presentation）
 Presentation 面的结构化渲染意图：从 args/result 纯函数投影（如问卷、diff 卡）。不做 I/O，回放可重现。与瞬态 stream/status 信号不同。
 _Avoid_: UI 组件、视图模型
 
+**Panel**:
+Web Render Medium 中一块可被插件填充的 UI 槽位（sidebar / main-overlay / toolbar-right 等）。插件经声明式组件树或同文档注入向 Panel 提供内容；Host 只保留页面壳与聊天主流程。
+_Avoid_: 页面、视图区、slot（可作别名，规范名词是 Panel）
+
+**UI Action**:
+Panel 内控件触发的回传事件：Host 将其包成 `cap=ui, method=action` 的 req 发给目标插件。与 Command 同属交互入口，但绑定在组件树节点上而非 `/` 前缀。
+_Avoid_: 回调、事件总线消息（规范名词是 UI Action）
+
 **Command**:
 主窗口内以 `/` 触发的交互入口。原生命令由 Host 内建；插件经 Manifest 的 commands 声明附加命令。与原生命令同名的插件不予加载。
 _Avoid_: 指令、slash command（可作别名，规范名词是 Command）
@@ -45,8 +53,12 @@ _Avoid_: 指令、slash command（可作别名，规范名词是 Command）
 _Avoid_: 清单、plugin config（config 是运行参数，不是 Manifest）
 
 **Render Medium**:
-消费 Presentation 信号并向用户展示的媒介。Host 内建 CLI 是默认实现；契约按可多消费者订阅设计。
+消费 Presentation 信号并向用户展示的媒介。Host 内建 CLI 是默认实现；Web Medium 为第二实现（内嵌 HTTP + 浏览器壳）。契约按可多消费者订阅设计。
 _Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
+
+**Shell**:
+Web Render Medium 的 Host 原生骨架：页面布局、Panel 槽位、默认聊天面（消费 markdown_text / message_text / summary_text / stream）、命令输入与事件桥。插件不得替换聊天主流程，只能向 Panel 注入。
+_Avoid_: 前端框架、主界面（规范名词是 Shell）
 
 **Waterfall**:
 环绕式拦截链：下游处理完才返回，监听方不放行则短路。Host 内建强制链 + 可选外部 Interceptor。

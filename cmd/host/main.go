@@ -34,6 +34,7 @@ func main() {
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or /exit to quit)")
+	serveAddr := flag.String("serve", "", "start Web Medium on this address (e.g. 127.0.0.1:7788); combine with -repl")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
@@ -47,6 +48,12 @@ func main() {
 	case *assemblyPath != "":
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
+		}
+		if *serveAddr != "" {
+			if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *repl, dump); err != nil {
+				fatal(err)
+			}
+			return
 		}
 		if *repl {
 			if err := runREPL(*pluginsDir, *assemblyPath, dump); err != nil {
@@ -677,6 +684,11 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		os.Exit(0)
 	}()
 
+	return runREPLLoop(srv, cp)
+}
+
+// runREPLLoop is the interactive stdin loop (shared by -repl and -serve -repl).
+func runREPLLoop(srv *serve.Server, cp *commandPlane) error {
 	fmt.Println("lite agent REPL — type a message; /help for commands; Tab completes /commands; /exit to leave.")
 	for {
 		line, err := readLineRaw("> ", cp.completeSlash)

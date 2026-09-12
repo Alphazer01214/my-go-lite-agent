@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>lite agent</title>
+<style>
+:root {
+  --bg:#0f1115; --panel:#161a22; --ink:#e8eaed; --dim:#9aa0a6;
+  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+#app{display:grid;grid-template-columns:260px 1fr 220px;grid-template-rows:1fr auto;height:100%}
+#sidebar,#toolbar-right{background:var(--panel);overflow:auto;padding:12px}
+#sidebar{border-right:1px solid var(--line)}
+#toolbar-right{border-left:1px solid var(--line)}
+#main{display:flex;flex-direction:column;min-width:0}
+#chat{flex:1;overflow:auto;padding:16px 20px}
+#main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
+#main-overlay:empty{display:none}
+#main-overlay>*{pointer-events:auto}
+#status{font-size:12px;color:var(--dim);padding:4px 20px;min-height:20px}
+#composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
+#input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 12px;font:inherit;resize:vertical;min-height:44px}
+#send{background:var(--accent);color:#0b1020;border:0;border-radius:8px;padding:0 16px;font-weight:600;cursor:pointer}
+.msg{margin:0 0 14px;max-width:52rem}
+.msg.user{color:var(--dim)}
+.msg.user:before{content:"you · ";color:var(--dim);font-size:12px}
+.msg.assistant{line-height:1.55}
+.msg.assistant pre{background:#0b0e14;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--mono);font-size:13px}
+.msg.assistant code{font-family:var(--mono);font-size:0.92em;background:#1a1f2a;padding:1px 4px;border-radius:4px}
+.msg.assistant pre code{background:none;padding:0}
+.msg.assistant h1,.msg.assistant h2,.msg.assistant h3{margin:0.6em 0 0.35em;line-height:1.25}
+.msg.assistant ul{margin:0.3em 0;padding-left:1.2em}
+.msg.assistant blockquote{border-left:3px solid var(--line);margin:0.4em 0;padding:0.1em 0 0.1em 0.8em;color:var(--dim)}
+.tool-card{border:1px solid var(--line);border-radius:8px;margin:0 0 12px;background:#12161f;overflow:hidden}
+.tool-card header{display:flex;gap:8px;align-items:center;padding:8px 10px;cursor:pointer;font-size:13px}
+.tool-card header:before{content:"⏺";color:var(--accent)}
+.tool-card .pairs{padding:0 12px 8px 28px;font-size:12px;color:var(--dim);font-family:var(--mono)}
+.tool-card .detail{display:none;padding:0 12px 10px 28px;font-size:12px;color:var(--ink);white-space:pre-wrap;font-family:var(--mono)}
+.tool-card.open .detail{display:block}
+.message{font-size:13px;margin:0 0 8px;color:var(--dim)}
+.message.error{color:var(--err)}
+.message.warn{color:#e0af68}
+.progress{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px}
+.slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:0 0 8px}
+.panel-root{margin-bottom:16px}
+h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1 class="brand">live agent</h1>
+    <div class="slot-label">sidebar</div>
+    <div id="slot-sidebar" class="panel-root"></div>
+  </aside>
+  <section id="main">
+    <div id="chat"></div>
+    <div id="status"></div>
+    <div id="composer">
+      <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
+      <button id="send">Send</button>
+    </div>
+  </section>
+  <aside id="toolbar-right">
+    <div class="slot-label">toolbar-right</div>
+    <div id="slot-toolbar-right" class="panel-root"></div>
+  </aside>
+</div>
+<div id="main-overlay"></div>
+<script src="/sdk/lite-agent.js"></script>
+<script>
+(function(){
+  var chat = document.getElementById('chat');
+  var statusEl = document.getElementById('status');
+  var input = document.getElementById('input');
+  var send = document.getElementById('send');
+  var streamBuf = '';
+  var progressEl = null;
+  var BT = String.fromCharCode(96); // `
+  var FENCE = BT+BT+BT;
+
+  function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+  function md(src){
+    if(!src) return '';
+    var s = String(src).replace(/\r\n/g,'\n');
+    // fenced code
+    var fenceRe = new RegExp(FENCE+'([\\\\w-]*)\\\\n([\\\\s\\\\S]*?)'+FENCE,'g');
+    s = s.replace(fenceRe, function(_,lang,code){
+      return '<pre><code>'+esc(code)+'</code></pre>';
+    });
+    s = s.replace(/^### (.*)$/gm,'<h3>$1</h3>');
+    s = s.replace(/^## (.*)$/gm,'<h2>$1</h2>');
+    s = s.replace(/^# (.*)$/gm,'<h1>$1</h1>');
+    s = s.replace(/^---$/gm,'<hr/>');
+    s = s.replace(/^> (.*)$/gm,'<blockquote>$1</blockquote>');
+    s = s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    var codeRe = new RegExp(BT+'([^'+BT+']+)'+BT,'g');
+    s = s.replace(codeRe,'<code>$1</code>');
+    s = s.replace(/\*([^*]+)\*/g,'<em>$1</em>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    s = s.replace(/^(?:- |\* )(.*)(?:\n(?:- |\* ).*)*/gm, function(block){
+      var items = block.split(/\n/).map(function(l){return l.replace(/^(?:- |\* )/,'');}).map(function(t){return '<li>'+t+'</li>';}).join('');
+      return '<ul>'+items+'</ul>';
+    });
+    var parts = s.split(/\n{2,}/).map(function(p){
+      p = p.trim();
+      if(!p) return '';
+      if(/^<(h\d|ul|pre|blockquote|hr)/.test(p)) return p;
+      return '<p>'+p.replace(/\n/g,'<br/>')+'</p>';
+    });
+    return parts.join('\n');
+  }
+
+  function appendAssistant(html){
+    var el = document.createElement('div');
+    el.className = 'msg assistant';
+    el.innerHTML = html || '';
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+    return el;
+  }
+  function appendUser(text){
+    var el = document.createElement('div');
+    el.className = 'msg user';
+    el.textContent = text;
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function clearProgress(){
+    if(progressEl){ progressEl.remove(); progressEl = null; }
+  }
+  function ensureProgress(){
+    if(!progressEl){
+      progressEl = document.createElement('div');
+      progressEl.className = 'progress';
+      chat.appendChild(progressEl);
+    }
+    return progressEl;
+  }
+
+  function onPresentation(data){
+    clearProgress();
+    if(data.kind === 'markdown_text'){
+      appendAssistant(md(data.text));
+      return;
+    }
+    if(data.kind === 'message_text'){
+      var el = document.createElement('div');
+      el.className = 'message' + (data.level === 'error' ? ' error' : data.level === 'warn' ? ' warn' : '');
+      el.textContent = data.text || '';
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+      return;
+    }
+    if(data.kind === 'summary_text'){
+      var card = document.createElement('div');
+      card.className = 'tool-card';
+      var pairs = (data.pairs||[]).map(function(p){return '<div>'+esc(p.key)+': '+esc(p.value)+'</div>';}).join('');
+      card.innerHTML = '<header>'+esc(data.title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(data.detail||'')+'</div>';
+      card.querySelector('header').onclick = function(){ card.classList.toggle('open'); };
+      chat.appendChild(card);
+      chat.scrollTop = chat.scrollHeight;
+    }
+  }
+
+  function applyPanel(op){
+    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : 'slot-'+op.slot;
+    var host = document.getElementById(hostId);
+    if(!host) return;
+    var node = document.getElementById('panel-'+op.id);
+    if(op.op === 'clear'){
+      if(node) node.remove();
+      return;
+    }
+    if(!node){
+      node = document.createElement('div');
+      node.id = 'panel-'+op.id;
+      node.className = 'panel-root';
+      host.appendChild(node);
+    }
+    if(op.op === 'set') node.innerHTML = op.html || '';
+    if(op.op === 'append') node.insertAdjacentHTML('beforeend', op.html || '');
+    if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
+  }
+
+  function openSSE(){
+    var es = new EventSource('/events?replay=1');
+    es.addEventListener('presentation', function(e){ onPresentation(JSON.parse(e.data).data); });
+    es.addEventListener('panel', function(e){ applyPanel(JSON.parse(e.data).data); });
+    es.addEventListener('stream', function(e){
+      var d = JSON.parse(e.data).data;
+      streamBuf += d.delta || '';
+      var p = ensureProgress();
+      p.textContent = 'Generating… ' + Array.from(streamBuf).length + ' chars';
+    });
+    es.addEventListener('status', function(e){
+      var d = JSON.parse(e.data).data;
+      statusEl.textContent = d.status || '';
+      if(d.status === 'idle'){ streamBuf = ''; clearProgress(); }
+    });
+    es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
+  }
+
+  function sendLine(){
+    var text = input.value.trim();
+    if(!text) return;
+    input.value = '';
+    if(text.charAt(0) === '/'){
+      appendUser(text);
+      if(text === '/exit'){
+        var m = document.createElement('div');
+        m.className = 'message warn';
+        m.textContent = '/exit is CLI-only; close this tab or use the terminal.';
+        chat.appendChild(m);
+        return;
+      }
+      fetch('/api/command', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({line:text})})
+        .then(function(r){return r.json();})
+        .then(function(body){
+          var m = document.createElement('div');
+          m.className = body.error ? 'message error' : 'message';
+          m.textContent = body.error || 'ok';
+          chat.appendChild(m);
+          chat.scrollTop = chat.scrollHeight;
+        });
+      return;
+    }
+    appendUser(text);
+    streamBuf = '';
+    fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:text})});
+  }
+
+  send.onclick = sendLine;
+  input.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
+  });
+
+  fetch('/api/plugins').then(function(r){return r.json();}).then(function(b){
+    window.__liteCommands = ['help','lp','refresh'].concat((b.plugins||[]).map(function(p){return p.name;}));
+  }).catch(function(){});
+
+  openSSE();
+})();
+</script>
+</body>
+</html>
