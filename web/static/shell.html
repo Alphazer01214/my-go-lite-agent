@@ -7,18 +7,34 @@
 <style>
 :root {
   --bg:#0f1115; --panel:#161a22; --ink:#e8eaed; --dim:#9aa0a6;
-  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e;
+  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e; --ok:#9ece6a;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
-#app{display:grid;grid-template-columns:260px 1fr 220px;grid-template-rows:1fr;height:100%;min-height:0}
-#sidebar,#toolbar-right{background:var(--panel);overflow:auto;min-height:0;padding:12px}
-#sidebar{border-right:1px solid var(--line)}
-#toolbar-right{border-left:1px solid var(--line)}
-#main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+#app{display:grid;grid-template-columns:240px 1fr;height:100%;min-height:0}
+#sidebar{background:var(--panel);border-right:1px solid var(--line);overflow:auto;min-height:0;padding:12px}
+#main{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-width:0;min-height:0}
+#chat-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
+#trace-col{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
+#trace-head{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
+#trace-head a{color:var(--accent);text-decoration:none;font-size:12px}
+#trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
+.trace-row{padding:6px 12px;font-size:12px;border-bottom:1px solid transparent;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
+.trace-row:hover{background:#1a1f2a}
+.trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-family:var(--mono)}
+.trace-row .t-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.trace-row .t-seq{flex:0 0 auto;font-size:10px;color:var(--dim);font-family:var(--mono)}
+.trace-row.user .t-kind{color:#7aa2f7}
+.trace-row.assistant .t-kind{color:var(--ok)}
+.trace-row.system .t-kind{color:#bb9af7}
+.trace-row.tool_call .t-kind{color:#e0af68}
+.trace-row.tool_result .t-kind{color:#f7768e}
+.trace-row.open{background:#1a1f2a}
+.trace-detail{display:none;padding:4px 12px 10px 92px;font-size:11px;color:var(--dim);white-space:pre-wrap;font-family:var(--mono);border-bottom:1px solid var(--line)}
+.trace-detail.open{display:block}
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
@@ -47,33 +63,37 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .message.warn{color:#e0af68}
 .progress,.thinking,.stream-live{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px;white-space:pre-wrap}
 .thinking{opacity:.75}
-.stream-live{opacity:.9;line-height:1.4}
-.slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:0 0 8px}
-.panel-root{margin-bottom:16px}
+.stream-live{opacity:.9;line-height:1.45;border-left:2px solid #334;padding-left:8px}
+.stream-live.frozen{opacity:.65;border-left-color:#2a2f3a}
 h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
-.top-link{display:inline-block;font-size:12px;color:var(--accent);text-decoration:none;margin-bottom:12px}
+.side-note{font-size:12px;color:var(--dim);margin:0 0 10px;line-height:1.4}
+.slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:12px 0 8px}
+.panel-root{margin-bottom:8px}
 </style>
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <h1 class="brand">lite agent</h1>
-    <a class="top-link" href="/trace" target="_blank" rel="noreferrer">Session trace →</a>
-    <div class="slot-label">sidebar</div>
     <div id="slot-sidebar" class="panel-root"></div>
   </aside>
   <section id="main">
-    <div id="chat"></div>
-    <div id="status"></div>
-    <div id="composer">
-      <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
-      <button id="send">Send</button>
+    <div id="chat-col">
+      <div id="chat"></div>
+      <div id="status"></div>
+      <div id="composer">
+        <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
+        <button id="send">Send</button>
+      </div>
     </div>
+    <aside id="trace-col">
+      <div id="trace-head">
+        <span>Session trace</span>
+        <a href="/trace" target="_blank" rel="noreferrer">full page ↗</a>
+      </div>
+      <div id="trace-list"></div>
+    </aside>
   </section>
-  <aside id="toolbar-right">
-    <div class="slot-label">toolbar-right</div>
-    <div id="slot-toolbar-right" class="panel-root"></div>
-  </aside>
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>
@@ -83,11 +103,12 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   var statusEl = document.getElementById('status');
   var input = document.getElementById('input');
   var send = document.getElementById('send');
+  var traceList = document.getElementById('trace-list');
   var streamBuf = '';
   var progressEl = null;
   var thinkingEl = null;
   var liveEl = null;
-  var historyLoaded = false;
+  var historyReady = false;
   var BT = String.fromCharCode(96);
   var FENCE = BT+BT+BT;
 
@@ -97,9 +118,7 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     if(!src) return '';
     var s = String(src).replace(/\r\n/g,'\n');
     var fenceRe = new RegExp(FENCE+'([\\\\w-]*)\\\\n([\\\\s\\\\S]*?)'+FENCE,'g');
-    s = s.replace(fenceRe, function(_,lang,code){
-      return '<pre><code>'+esc(code)+'</code></pre>';
-    });
+    s = s.replace(fenceRe, function(_,lang,code){ return '<pre><code>'+esc(code)+'</code></pre>'; });
     s = s.replace(/^### (.*)$/gm,'<h3>$1</h3>');
     s = s.replace(/^## (.*)$/gm,'<h2>$1</h2>');
     s = s.replace(/^# (.*)$/gm,'<h1>$1</h1>');
@@ -114,53 +133,54 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       var items = block.split(/\n/).map(function(l){return l.replace(/^(?:- |\* )/,'');}).map(function(t){return '<li>'+t+'</li>';}).join('');
       return '<ul>'+items+'</ul>';
     });
-    var parts = s.split(/\n{2,}/).map(function(p){
+    return s.split(/\n{2,}/).map(function(p){
       p = p.trim();
       if(!p) return '';
       if(/^<(h\d|ul|pre|blockquote|hr)/.test(p)) return p;
       return '<p>'+p.replace(/\n/g,'<br/>')+'</p>';
-    });
-    return parts.join('\n');
+    }).join('\n');
   }
 
   function scrollChat(){ chat.scrollTop = chat.scrollHeight; }
-
   function appendAssistant(html){
     var el = document.createElement('div');
     el.className = 'msg assistant';
     el.innerHTML = html || '';
-    chat.appendChild(el);
-    scrollChat();
-    return el;
+    chat.appendChild(el); scrollChat(); return el;
   }
   function appendUser(text){
     var el = document.createElement('div');
     el.className = 'msg user';
     el.textContent = text;
-    chat.appendChild(el);
-    scrollChat();
+    chat.appendChild(el); scrollChat();
   }
   function appendPre(text, cls){
     var el = document.createElement('pre');
     el.className = cls || 'message';
-    el.style.whiteSpace = 'pre-wrap';
-    el.style.fontFamily = 'var(--mono)';
-    el.style.fontSize = '12px';
+    el.style.cssText = 'white-space:pre-wrap;font-family:var(--mono);font-size:12px';
     el.textContent = text;
-    chat.appendChild(el);
-    scrollChat();
+    chat.appendChild(el); scrollChat();
   }
-  function clearProgress(){
-    if(progressEl){ progressEl.remove(); progressEl = null; }
-  }
-  function clearThinking(){
-    if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; }
-  }
-  function clearLive(){
+
+  function clearProgress(){ if(progressEl){ progressEl.remove(); progressEl = null; } }
+  function clearThinking(){ if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; } }
+
+  // Convert live stream into a kept dim block so tools don't swallow thinking.
+  function freezeLive(){
+    if(liveEl && streamBuf){
+      liveEl.classList.add('frozen');
+      var t = streamBuf;
+      if(t.length > 400) t = t.slice(0,400) + '…';
+      liveEl.textContent = t;
+      liveEl = null;
+      return;
+    }
     if(liveEl){ liveEl.remove(); liveEl = null; }
+    if(thinkingEl && thinkingEl.textContent === 'Thinking…') clearThinking();
   }
+
   function ensureProgress(){
-    clearThinking();
+    freezeLive();
     if(!progressEl){
       progressEl = document.createElement('div');
       progressEl.className = 'progress';
@@ -188,15 +208,18 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   }
 
   function onPresentation(raw){
-    clearProgress(); clearThinking(); clearLive();
+    clearProgress();
     var data = raw && raw.kind !== undefined ? raw : (raw && raw.data) || raw || {};
     var kind = data.kind || data.Kind;
     var text = data.text !== undefined ? data.text : data.Text;
     if(kind === 'markdown_text'){
+      freezeLive(); clearThinking();
       appendAssistant(md(text || ''));
       return;
     }
     if(kind === 'message_text'){
+      // Keep prior stream visible; only drop the placeholder Thinking line.
+      if(liveEl && streamBuf) freezeLive(); else clearThinking();
       var level = data.level || data.Level || '';
       var el = document.createElement('div');
       el.className = 'message' + (level === 'error' ? ' error' : level === 'warn' ? ' warn' : '');
@@ -206,6 +229,7 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       return;
     }
     if(kind === 'summary_text'){
+      freezeLive(); clearThinking();
       var card = document.createElement('div');
       card.className = 'tool-card';
       var pairsArr = data.pairs || data.Pairs || [];
@@ -223,10 +247,107 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     }
   }
 
+  function traceSummary(f){
+    var t = f.type || '';
+    var role = f.role || '';
+    if(t === 'message') return (role||'msg') + ' · ' + String(f.content||'').replace(/\s+/g,' ').slice(0,80);
+    if(t === 'tool_call'){
+      var names = ((f.meta&&f.meta.tool_calls)||[]).map(function(tc){return tc.name;}).join(',');
+      return 'call ' + (names||'?');
+    }
+    if(t === 'tool_result') return 'result · ' + String(f.content||'').replace(/\s+/g,' ').slice(0,80);
+    if(t === 'request_header') return 'llm request';
+    if(t === 'step_start') return 'step ' + ((f.meta&&f.meta.step)||'');
+    if(t === 'step_end') return 'step end · ' + ((f.meta&&f.meta.reason)||'');
+    if(t === 'turn_start') return 'turn start';
+    if(t === 'turn_end') return 'turn end · ' + ((f.meta&&f.meta.reason)||'');
+    return t;
+  }
+
+  function loadTrace(){
+    fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
+      var facts = b.facts || [];
+      traceList.innerHTML = '';
+      facts.forEach(function(f){
+        var t = f.type || 'message';
+        var role = f.role || '';
+        var cls = t;
+        if(t === 'message' && role) cls = role;
+        var row = document.createElement('div');
+        row.className = 'trace-row ' + cls;
+        var kind = t === 'message' ? (role||'msg') : t;
+        row.innerHTML = '<span class="t-kind">'+esc(kind)+'</span>' +
+          '<span class="t-sum">'+esc(traceSummary(f))+'</span>' +
+          '<span class="t-seq">#'+(f.seq||'')+'</span>';
+        var det = document.createElement('div');
+        det.className = 'trace-detail';
+        var detail = f.content || '';
+        if(f.meta) detail += (detail?'\n\n':'') + JSON.stringify(f.meta, null, 2);
+        det.textContent = detail || '(empty)';
+        row.onclick = function(){
+          row.classList.toggle('open');
+          det.classList.toggle('open');
+        };
+        traceList.appendChild(row);
+        traceList.appendChild(det);
+      });
+      traceList.scrollTop = traceList.scrollHeight;
+    }).catch(function(){});
+  }
+
+  function loadHistory(){
+    return fetch('/api/history').then(function(r){return r.json();}).then(function(b){
+      chat.innerHTML = '';
+      (b.messages||[]).forEach(function(m){
+        if(m.role === 'user') appendUser(m.content);
+        else if(m.role === 'assistant') appendAssistant(md(m.content));
+      });
+      historyReady = true;
+      scrollChat();
+    }).catch(function(){ historyReady = true; });
+  }
+
+  function openSSE(){
+    // No replay for presentation: past turns come from /api/history.
+    // replay=1 is still used for panels only via filtering below.
+    var es = new EventSource('/events?replay=1');
+    es.addEventListener('presentation', function(e){
+      if(!historyReady) return; // drop replayed past while bootstrapping
+      var env = JSON.parse(e.data);
+      onPresentation(env.data !== undefined ? env.data : env);
+    });
+    es.addEventListener('panel', function(e){ applyPanel(JSON.parse(e.data).data); });
+    es.addEventListener('stream', function(e){
+      if(!historyReady) return;
+      var d = JSON.parse(e.data).data;
+      streamBuf += d.delta || '';
+      var live = ensureLive();
+      live.textContent = streamBuf;
+      scrollChat();
+    });
+    es.addEventListener('status', function(e){
+      var d = JSON.parse(e.data).data;
+      var st = d.status || '';
+      statusEl.textContent = st;
+      if(st === 'running' && historyReady && !streamBuf) ensureThinking();
+      if(st === 'idle'){
+        streamBuf = '';
+        clearProgress(); clearThinking();
+        if(liveEl){ liveEl = null; }
+        loadTrace();
+      }
+    });
+    es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
+  }
+
   function applyPanel(op){
-    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : 'slot-'+op.slot;
+    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : (op.slot === 'sidebar' ? 'slot-sidebar' : 'slot-'+op.slot);
     var host = document.getElementById(hostId);
-    if(!host) return;
+    if(!host){
+      if(op.slot === 'toolbar-right' || op.slot === 'main-overlay'){
+        host = document.getElementById('main-overlay');
+      } else return;
+    }
     var node = document.getElementById('panel-'+op.id);
     if(op.op === 'clear'){ if(node) node.remove(); return; }
     if(!node){
@@ -238,52 +359,6 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     if(op.op === 'set') node.innerHTML = op.html || '';
     if(op.op === 'append') node.insertAdjacentHTML('beforeend', op.html || '');
     if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
-  }
-
-  function loadHistory(force){
-    fetch('/api/history').then(function(r){return r.json();}).then(function(b){
-      var msgs = b.messages||[];
-      if(historyLoaded && !force) return;
-      if(force){
-        // Full rehydrate: wipe previous history-only nodes is complex; only fill if chat empty.
-        if(chat.children.length > 0 && historyLoaded) return;
-      }
-      msgs.forEach(function(m){
-        if(m.role === 'user') appendUser(m.content);
-        else if(m.role === 'assistant') appendAssistant(md(m.content));
-      });
-      historyLoaded = true;
-    }).catch(function(){});
-  }
-
-  function openSSE(){
-    var es = new EventSource('/events?replay=1');
-    es.addEventListener('presentation', function(e){
-      var env = JSON.parse(e.data);
-      onPresentation(env.data !== undefined ? env.data : env);
-    });
-    es.addEventListener('panel', function(e){ applyPanel(JSON.parse(e.data).data); });
-    es.addEventListener('stream', function(e){
-      var d = JSON.parse(e.data).data;
-      var delta = d.delta || '';
-      streamBuf += delta;
-      var live = ensureLive();
-      live.textContent = streamBuf;
-      scrollChat();
-    });
-    es.addEventListener('status', function(e){
-      var d = JSON.parse(e.data).data;
-      var st = d.status || '';
-      statusEl.textContent = st;
-      if(st === 'running'){
-        if(!streamBuf) ensureThinking();
-      }
-      if(st === 'idle'){
-        streamBuf = '';
-        clearProgress(); clearThinking(); clearLive();
-      }
-    });
-    es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
   }
 
   function sendLine(){
@@ -307,7 +382,8 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     }
     appendUser(text);
     streamBuf = '';
-    clearLive(); clearThinking();
+    if(liveEl){ liveEl.remove(); liveEl = null; }
+    clearThinking();
     fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:text})});
   }
 
@@ -316,10 +392,11 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
   });
 
-  loadHistory(false);
-  openSSE();
-  // Re-hydrate once SSE is warm in case first fetch raced an empty session.
-  setTimeout(function(){ loadHistory(true); }, 400);
+  // Bootstrap: history first, then accept live presentation.
+  loadHistory().then(function(){
+    loadTrace();
+    openSSE();
+  });
 })();
 </script>
 </body>
