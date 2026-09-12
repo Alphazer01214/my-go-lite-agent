@@ -68,6 +68,7 @@ type Server struct {
 	panels   []PanelOp
 	subs     []*Subscriber
 	turnMu   sync.Mutex
+	job      *jobHolder
 	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
 	OnStreamDelta func(delta string)
 	// OnStatus is the live Render Medium hook for agent idle/running.
@@ -155,6 +156,13 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		pending:  make(map[string]*wait),
 		gen:      make(map[string]int),
 	}
+	job, err := newJob()
+	if err != nil {
+		// Non-fatal: fall back to explicit Close/killTree only.
+		fmt.Fprintf(os.Stderr, "warn: job object unavailable: %v\n", err)
+	} else {
+		s.job = job
+	}
 	for _, p := range mounted {
 		for _, capName := range p.Manifest.Provides {
 			if owner, ok := s.provides[capName]; ok {
@@ -198,18 +206,33 @@ func (s *Server) launch(found discovery.Found) error {
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return fmt.Errorf("stdout %s: %w", name, err)
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return fmt.Errorf("start %s: %w", name, err)
+	}
+	// Bind child to Host lifetime (Windows Job Object: kill-on-parent-close).
+	s.mu.Lock()
+	job := s.job
+	s.mu.Unlock()
+	if err := job.assign(cmd); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: assign %s to job: %v\n", name, err)
 	}
 	to := DefaultCallTimeout
 	if found.Manifest.TimeoutMs > 0 {
 		to = time.Duration(found.Manifest.TimeoutMs) * time.Millisecond
 	}
+	s.mu.Lock()
 	s.gen[name]++
 	g := s.gen[name]
+	if old, ok := s.plugins[name]; ok && old != nil && old.stdin != nil {
+		old.wmu.Lock()
+		_ = old.stdin.Close()
+		old.wmu.Unlock()
+	}
 	s.plugins[name] = &proc{
 		found:   found,
 		cmd:     cmd,
@@ -218,6 +241,7 @@ func (s *Server) launch(found discovery.Found) error {
 		timeout: to,
 		gen:     g,
 	}
+	s.mu.Unlock()
 	go s.readLoop(name, g, stdout)
 	return nil
 }
@@ -292,10 +316,13 @@ func (s *Server) ensureAlive(name string) error {
 	old := p.cmd
 	s.mu.Unlock()
 
-	// Reap old process without hanging the caller.
-	if old != nil && old.Process != nil {
-		_ = old.Process.Kill()
-		_, _ = old.Process.Wait()
+	// Reap old process without hanging the caller. Do not Wait here:
+	// Close owns Wait; a second Wait on the same Cmd panics.
+	if old != nil {
+		s.mu.Lock()
+		// best-effort stdin close if we still hold it
+		s.mu.Unlock()
+		killTree(old)
 	}
 	s.mu.Lock()
 	// Another goroutine may have restarted already.
@@ -669,7 +696,7 @@ func (s *Server) callOnce(pluginName string, f *protocol.Frame, onEvent func(*pr
 	}
 }
 
-// Close shuts down every Plugin: stdin EOF, grace wait, then kill.
+// Close shuts down every Plugin: stdin EOF, grace wait, then kill tree.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -681,15 +708,22 @@ func (s *Server) Close() error {
 	for _, p := range s.plugins {
 		plugins = append(plugins, p)
 	}
+	job := s.job
+	s.job = nil
 	s.mu.Unlock()
 
 	for _, p := range plugins {
 		p.wmu.Lock()
-		_ = p.stdin.Close()
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+		}
 		p.wmu.Unlock()
 	}
 	deadline := time.Now().Add(DefaultShutdownGrace)
 	for _, p := range plugins {
+		if p.cmd == nil || p.cmd.Process == nil {
+			continue
+		}
 		done := make(chan error, 1)
 		go func(cmd *exec.Cmd) { done <- cmd.Wait() }(p.cmd)
 		remain := time.Until(deadline)
@@ -699,9 +733,17 @@ func (s *Server) Close() error {
 		select {
 		case <-done:
 		case <-time.After(remain):
-			_ = p.cmd.Process.Kill()
-			<-done
+			killTree(p.cmd)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
 		}
+	}
+	// Closing the Job Object (KILL_ON_JOB_CLOSE) reaps any stragglers,
+	// including when Host itself is dying without a clean Close of each child.
+	if job != nil {
+		job.close()
 	}
 	return nil
 }

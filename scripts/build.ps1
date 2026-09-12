@@ -7,11 +7,15 @@ $dist = Join-Path $root "dist"
 $go = "go"
 
 if (Test-Path $dist) {
-    Remove-Item -Recurse -Force $dist
+    try {
+        Remove-Item -Recurse -Force $dist -ErrorAction Stop
+    } catch {
+        Write-Warning "dist is locked (cwd or running process); overwriting in place. Close terminals using dist\ and stop host.exe for a clean wipe."
+    }
 }
-New-Item -ItemType Directory -Path $dist | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $dist "plugins") | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $dist "examples") | Out-Null
+New-Item -ItemType Directory -Path $dist -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $dist "plugins") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $dist "examples") -Force | Out-Null
 
 function Build-Pkg([string]$pkg, [string]$out) {
     Write-Host "build $pkg -> $out"
