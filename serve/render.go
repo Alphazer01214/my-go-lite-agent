@@ -29,13 +29,14 @@ type SummaryPair struct {
 }
 
 // RenderIntent is one classified main-window block for the Render Medium.
+// JSON field names match pluginsdk so Web SSE and Frame payloads share one wire shape.
 type RenderIntent struct {
-	Kind   string
-	Text   string
-	Level  string
-	Title  string
-	Pairs  []SummaryPair
-	Detail string
+	Kind   string        `json:"kind"`
+	Text   string        `json:"text,omitempty"`
+	Level  string        `json:"level,omitempty"`
+	Title  string        `json:"title,omitempty"`
+	Pairs  []SummaryPair `json:"pairs,omitempty"`
+	Detail string        `json:"detail,omitempty"`
 }
 
 // TruncateRunes shortens s to max runes, appending … when cut.

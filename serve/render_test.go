@@ -55,3 +55,20 @@ func TestFormatRunningLine(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestRenderIntentJSONShape(t *testing.T) {
+	raw, err := json.Marshal(RenderIntent{Kind: KindMarkdownText, Text: "# hi", Level: "dim", Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["kind"] != KindMarkdownText {
+		t.Fatalf("want lowercase kind, got %v", m["kind"])
+	}
+	if m["text"] != "# hi" {
+		t.Fatalf("want lowercase text, got %v", m["text"])
+	}
+}

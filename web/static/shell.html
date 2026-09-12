@@ -144,25 +144,37 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     return progressEl;
   }
 
-  function onPresentation(data){
+  function onPresentation(raw){
     clearProgress();
-    if(data.kind === 'markdown_text'){
-      appendAssistant(md(data.text));
+    // Host may nest under data; accept the intent object directly too.
+    var data = raw && raw.kind !== undefined ? raw : (raw && raw.data) || raw || {};
+    var kind = data.kind || data.Kind;
+    var text = data.text !== undefined ? data.text : data.Text;
+    if(kind === 'markdown_text'){
+      appendAssistant(md(text || ''));
       return;
     }
-    if(data.kind === 'message_text'){
+    if(kind === 'message_text'){
+      var level = data.level || data.Level || '';
       var el = document.createElement('div');
-      el.className = 'message' + (data.level === 'error' ? ' error' : data.level === 'warn' ? ' warn' : '');
-      el.textContent = data.text || '';
+      el.className = 'message' + (level === 'error' ? ' error' : level === 'warn' ? ' warn' : '');
+      el.textContent = text || '';
       chat.appendChild(el);
       chat.scrollTop = chat.scrollHeight;
       return;
     }
-    if(data.kind === 'summary_text'){
+    if(kind === 'summary_text'){
       var card = document.createElement('div');
       card.className = 'tool-card';
-      var pairs = (data.pairs||[]).map(function(p){return '<div>'+esc(p.key)+': '+esc(p.value)+'</div>';}).join('');
-      card.innerHTML = '<header>'+esc(data.title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(data.detail||'')+'</div>';
+      var pairsArr = data.pairs || data.Pairs || [];
+      var pairs = pairsArr.map(function(p){
+        var k = p.key !== undefined ? p.key : p.Key;
+        var v = p.value !== undefined ? p.value : p.Value;
+        return '<div>'+esc(k)+': '+esc(v)+'</div>';
+      }).join('');
+      var title = data.title !== undefined ? data.title : data.Title;
+      var detail = data.detail !== undefined ? data.detail : data.Detail;
+      card.innerHTML = '<header>'+esc(title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(detail||'')+'</div>';
       card.querySelector('header').onclick = function(){ card.classList.toggle('open'); };
       chat.appendChild(card);
       chat.scrollTop = chat.scrollHeight;
@@ -191,7 +203,10 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
 
   function openSSE(){
     var es = new EventSource('/events?replay=1');
-    es.addEventListener('presentation', function(e){ onPresentation(JSON.parse(e.data).data); });
+    es.addEventListener('presentation', function(e){
+      var env = JSON.parse(e.data);
+      onPresentation(env.data !== undefined ? env.data : env);
+    });
     es.addEventListener('panel', function(e){ applyPanel(JSON.parse(e.data).data); });
     es.addEventListener('stream', function(e){
       var d = JSON.parse(e.data).data;
