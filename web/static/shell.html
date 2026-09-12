@@ -13,16 +13,17 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
-#app{display:grid;grid-template-columns:240px 1fr;height:100%;min-height:0}
-#sidebar{background:var(--panel);border-right:1px solid var(--line);overflow:auto;min-height:0;padding:12px}
-#main{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-width:0;min-height:0}
-#chat-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+/* Center workspace only: left chat + right trace as two halves. */
+#app{display:flex;flex-direction:column;height:100%;min-height:0}
+#split{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0}
+#chat-col,#trace-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+#chat-col{border-right:1px solid var(--line)}
+#pane-head{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+#pane-head a{color:var(--accent);text-decoration:none}
+#brand-mini{font-weight:600;color:var(--ink);font-size:12px}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
-#trace-col{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
-#trace-head{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
-#trace-head a{color:var(--accent);text-decoration:none;font-size:12px}
 #trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
-.trace-row{padding:6px 12px;font-size:12px;border-bottom:1px solid transparent;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
+.trace-row{padding:6px 12px;font-size:12px;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
 .trace-row:hover{background:#1a1f2a}
 .trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-family:var(--mono)}
 .trace-row .t-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
@@ -73,27 +74,24 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
 </head>
 <body>
 <div id="app">
-  <aside id="sidebar">
-    <h1 class="brand">lite agent</h1>
-    <div id="slot-sidebar" class="panel-root"></div>
-  </aside>
-  <section id="main">
-    <div id="chat-col">
+  <div id="split">
+    <section id="chat-col">
+      <div id="pane-head"><span>Chat</span><span id="brand-mini">lite agent</span></div>
       <div id="chat"></div>
       <div id="status"></div>
-      <div id="composer">
-        <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
-        <button id="send">Send</button>
-      </div>
-    </div>
-    <aside id="trace-col">
-      <div id="trace-head">
+    </section>
+    <section id="trace-col">
+      <div id="pane-head">
         <span>Session trace</span>
         <a href="/trace" target="_blank" rel="noreferrer">full page ↗</a>
       </div>
       <div id="trace-list"></div>
-    </aside>
-  </section>
+    </section>
+  </div>
+  <div id="composer">
+    <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
+    <button id="send">Send</button>
+  </div>
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>
@@ -341,13 +339,10 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   }
 
   function applyPanel(op){
-    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : (op.slot === 'sidebar' ? 'slot-sidebar' : 'slot-'+op.slot);
+    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : 'main-overlay';
+    // No fixed side columns: plugin panels land in overlay (or extend later).
     var host = document.getElementById(hostId);
-    if(!host){
-      if(op.slot === 'toolbar-right' || op.slot === 'main-overlay'){
-        host = document.getElementById('main-overlay');
-      } else return;
-    }
+    if(!host) return;
     var node = document.getElementById('panel-'+op.id);
     if(op.op === 'clear'){ if(node) node.remove(); return; }
     if(!node){
