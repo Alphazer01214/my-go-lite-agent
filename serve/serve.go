@@ -1063,6 +1063,39 @@ func (s *Server) TurnCancelled() bool {
 	return s.turnCancel.Load()
 }
 
+// ListSessions returns mounted Session Plugin session ids (for Web history rail).
+func (s *Server) ListSessions() ([]map[string]any, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[SessionCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     SessionCap,
+		Method:  "list",
+		Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session.list: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("session.list: %w", res.Error)
+	}
+	var out struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if len(res.Payload) > 0 {
+		_ = json.Unmarshal(res.Payload, &out)
+	}
+	if out.Sessions == nil {
+		out.Sessions = []map[string]any{}
+	}
+	return out.Sessions, nil
+}
+
 // NewSessionID creates a Session (auto id when empty) and returns the id.
 func (s *Server) NewSessionID(id string) (string, error) {
 	if id == "" {

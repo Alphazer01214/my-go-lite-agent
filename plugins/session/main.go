@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -344,6 +345,41 @@ func main() {
 			facts = []Fact{}
 		}
 		return json.Marshal(map[string]any{"facts": facts})
+	})
+
+	s.Handle("session", "list", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		type item struct {
+			ID    string `json:"id"`
+			Title string `json:"title,omitempty"`
+			Seq   int    `json:"seq,omitempty"`
+		}
+		var list []item
+		entries, _ := os.ReadDir(reg.dataDir)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+				continue
+			}
+			id := strings.TrimSuffix(e.Name(), ".jsonl")
+			st := reg.openStore(id)
+			facts := st.query(0, 0)
+			title := id
+			seq := 0
+			for _, f := range facts {
+				seq = f.Seq
+				if f.Type == "message" && f.Role == "user" && f.Content != "" {
+					title = f.Content
+					if len([]rune(title)) > 40 {
+						title = string([]rune(title)[:40]) + "…"
+					}
+					break
+				}
+			}
+			list = append(list, item{ID: id, Title: title, Seq: seq})
+		}
+		if list == nil {
+			list = []item{}
+		}
+		return json.Marshal(map[string]any{"sessions": list})
 	})
 
 	s.Handle("session", "derive", func(req *pluginsdk.Request) (json.RawMessage, error) {

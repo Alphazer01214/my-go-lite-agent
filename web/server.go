@@ -117,6 +117,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/trace", s.handleTrace)
 	mux.HandleFunc("/api/session/new", s.handleSessionNew)
 	mux.HandleFunc("/api/session", s.handleSessionGet)
+	mux.HandleFunc("/api/sessions", s.handleSessionsList)
+	mux.HandleFunc("/api/session/select", s.handleSessionSelect)
 	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
@@ -381,6 +383,36 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	sid := s.currentSession()
 	writeJSON(w, map[string]any{"sessionId": sid})
+}
+
+func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Srv == nil {
+		writeJSON(w, map[string]any{"sessions": []any{}, "current": s.currentSession()})
+		return
+	}
+	list, err := s.opts.Srv.ListSessions()
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error(), "sessions": []any{}, "current": s.currentSession()})
+		return
+	}
+	writeJSON(w, map[string]any{"sessions": list, "current": s.currentSession()})
+}
+
+func (s *Server) handleSessionSelect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.SessionID == "" {
+		http.Error(w, "sessionId required", http.StatusBadRequest)
+		return
+	}
+	s.setCurrentSession(in.SessionID)
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + in.SessionID}})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": in.SessionID})
 }
 
 func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {

@@ -6,27 +6,69 @@
 <title>lite agent</title>
 <style>
 :root {
-  --bg:#0f1115; --panel:#161a22; --ink:#e8eaed; --dim:#9aa0a6;
-  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e; --ok:#9ece6a;
+  --bg:#0f1115; --panel:#161a22; --panel2:#12161f; --ink:#e8eaed; --dim:#9aa0a6;
+  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e; --ok:#9ece6a; --stop:#f7768e;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
-/* Center workspace only: left chat + right trace as two halves. */
-#app{display:flex;flex-direction:column;height:100%;min-height:0}
-#split{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0}
+
+/* 3-column grid: history | (chat | trace) */
+#app{
+  display:grid;
+  grid-template-columns:240px minmax(0,1fr);
+  height:100%;
+  min-height:0;
+}
+#rail{
+  background:var(--panel2);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
+}
+#rail-head{padding:12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+#rail-head .brand{font-size:13px;font-weight:600;flex:1}
+#btn-new{background:var(--accent);color:#0b1020;border:0;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer}
+#session-list{flex:1;overflow-y:auto;padding:8px;min-height:0}
+.sess-item{
+  padding:8px 10px;border-radius:8px;font-size:12px;color:var(--dim);
+  cursor:pointer;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.sess-item:hover{background:#1a1f2a;color:var(--ink)}
+.sess-item.active{background:#1a1f2a;color:var(--ink);border:1px solid var(--line)}
+
+/* center workspace */
+#center{display:flex;flex-direction:column;min-width:0;min-height:0}
+#split{
+  flex:1;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(280px,0.85fr);
+  min-height:0;min-width:0;
+}
 #chat-col,#trace-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 #chat-col{border-right:1px solid var(--line)}
-#pane-head{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0}
+#pane-head{
+  padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);
+  font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0
+}
 #pane-head a{color:var(--accent);text-decoration:none}
-#pane-head .tools{display:flex;gap:6px;align-items:center}
-#pane-head button{background:#1a1f2a;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
-#pane-head button:hover{border-color:var(--accent)}
-#pane-head button:disabled{opacity:.4;cursor:default}
-#brand-mini{font-weight:600;color:var(--ink);font-size:12px}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
 #trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
+
+#composer{
+  display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);
+  background:var(--panel);flex-shrink:0;align-items:flex-end
+}
+#input{
+  flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);
+  border-radius:10px;padding:10px 12px;font:inherit;resize:none;min-height:44px;max-height:160px
+}
+#btn-send{
+  background:var(--accent);color:#0b1020;border:0;border-radius:10px;
+  padding:0 18px;height:44px;font-weight:700;cursor:pointer;font-size:13px;min-width:72px
+}
+#btn-send.running{background:var(--stop);color:#fff}
+#status{font-size:12px;color:var(--dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
+
 .trace-row{padding:6px 12px;font-size:12px;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
 .trace-row:hover{background:#1a1f2a}
 .trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-family:var(--mono)}
@@ -40,13 +82,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .trace-row.open{background:#1a1f2a}
 .trace-detail{display:none;padding:4px 12px 10px 92px;font-size:11px;color:var(--dim);white-space:pre-wrap;font-family:var(--mono);border-bottom:1px solid var(--line)}
 .trace-detail.open{display:block}
-#main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
-#main-overlay:empty{display:none}
-#main-overlay>*{pointer-events:auto}
-#status{font-size:12px;color:var(--dim);padding:4px 20px;min-height:20px;flex-shrink:0}
-#composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel);flex-shrink:0}
-#input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 12px;font:inherit;resize:vertical;min-height:44px;max-height:160px}
-#send{background:var(--accent);color:#0b1020;border:0;border-radius:8px;padding:0 16px;font-weight:600;cursor:pointer}
+
 .msg{margin:0 0 14px;max-width:52rem}
 .msg.user{color:var(--dim)}
 .msg.user:before{content:"you · ";color:var(--dim);font-size:12px}
@@ -70,66 +106,88 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .thinking{opacity:.75}
 .stream-live{opacity:.9;line-height:1.45;border-left:2px solid #334;padding-left:8px}
 .stream-live.frozen{opacity:.7;border-left-color:#2a2f3a;cursor:pointer}
-.stream-live.frozen:before{content:"▸ thinking · click to expand/collapse";display:block;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.stream-live.frozen:before{content:"▸ thinking · click to expand";display:block;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
 .stream-live.frozen.expanded:before{content:"▾ thinking"}
 .stream-live.frozen .body{display:none;white-space:pre-wrap}
 .stream-live.frozen.expanded .body{display:block}
-h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
-.side-note{font-size:12px;color:var(--dim);margin:0 0 10px;line-height:1.4}
-.slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:12px 0 8px}
-.panel-root{margin-bottom:8px}
+#main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
+#main-overlay:empty{display:none}
+#main-overlay>*{pointer-events:auto}
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="split">
-    <section id="chat-col">
-      <div id="pane-head">
-        <span class="tools">
-          <span id="brand-mini">lite agent</span>
-          <button id="btn-new" title="New session">New</button>
-          <button id="btn-stop" title="Stop generation" disabled>Stop</button>
-        </span>
-        <span id="session-label" style="color:var(--dim);font-family:var(--mono);font-size:11px"></span>
-      </div>
-      <div id="chat"></div>
-      <div id="status"></div>
-    </section>
-    <section id="trace-col">
-      <div id="pane-head">
-        <span>Session trace</span>
-        <a href="/trace" target="_blank" rel="noreferrer">full page ↗</a>
-      </div>
-      <div id="trace-list"></div>
-    </section>
-  </div>
-  <div id="composer">
-    <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
-    <button id="send">Send</button>
-  </div>
+  <aside id="rail">
+    <div id="rail-head">
+      <span class="brand">lite agent</span>
+      <button id="btn-new" title="New chat">＋</button>
+    </div>
+    <div id="session-list"></div>
+  </aside>
+  <section id="center">
+    <div id="split">
+      <section id="chat-col">
+        <div id="pane-head"><span>Chat</span><span id="session-label" style="font-family:var(--mono);font-size:11px"></span></div>
+        <div id="chat"></div>
+        <div id="status"></div>
+      </section>
+      <section id="trace-col">
+        <div id="pane-head"><span>Session trace</span><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
+        <div id="trace-list"></div>
+      </section>
+    </div>
+    <div id="composer">
+      <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
+      <button id="btn-send" title="Send">Send</button>
+    </div>
+  </section>
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous"/>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"
-  onload="window.__katexReady=true"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
 <script>
 (function(){
   var chat = document.getElementById('chat');
   var statusEl = document.getElementById('status');
   var input = document.getElementById('input');
-  var send = document.getElementById('send');
+  var btnSend = document.getElementById('btn-send');
+  var btnNew = document.getElementById('btn-new');
+  var sessionList = document.getElementById('session-list');
+  var sessionLabel = document.getElementById('session-label');
   var traceList = document.getElementById('trace-list');
   var streamBuf = '';
-  var progressEl = null;
-  var thinkingEl = null;
-  var liveEl = null;
+  var progressEl = null, thinkingEl = null, liveEl = null;
   var historyReady = false;
+  var running = false;
   var BT = String.fromCharCode(96);
   var FENCE = BT+BT+BT;
 
   function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function scrollChat(){ chat.scrollTop = chat.scrollHeight; }
+
+  function setRunning(on){
+    running = on;
+    btnSend.classList.toggle('running', on);
+    btnSend.textContent = on ? 'Stop' : 'Send';
+    btnSend.title = on ? 'Stop generation' : 'Send';
+  }
+
+  function renderMath(root){
+    if(!window.katex || !window.renderMathInElement) return;
+    try {
+      window.renderMathInElement(root || chat, {
+        delimiters: [
+          {left:'$$', right:'$$', display:true},
+          {left:'\\[', right:'\\]', display:true},
+          {left:'$', right:'$', display:false},
+          {left:'\\(', right:'\\)', display:false}
+        ],
+        throwOnError: false
+      });
+    } catch(e){}
+  }
 
   function md(src){
     if(!src) return '';
@@ -158,31 +216,11 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     }).join('\n');
   }
 
-  function scrollChat(){ chat.scrollTop = chat.scrollHeight; }
-
-  function renderMath(root){
-    if(!window.katex || !window.renderMathInElement) return;
-    try {
-      window.renderMathInElement(root || chat, {
-        delimiters: [
-          {left:'$$', right:'$$', display:true},
-          {left:'\\[', right:'\\]', display:true},
-          {left:'$', right:'$', display:false},
-          {left:'\\(', right:'\\)', display:false}
-        ],
-        throwOnError: false
-      });
-    } catch(e){}
-  }
-
   function appendAssistant(html){
     var el = document.createElement('div');
     el.className = 'msg assistant';
     el.innerHTML = html || '';
-    chat.appendChild(el);
-    renderMath(el);
-    scrollChat();
-    return el;
+    chat.appendChild(el); renderMath(el); scrollChat(); return el;
   }
   function appendUser(text){
     var el = document.createElement('div');
@@ -197,11 +235,8 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     el.textContent = text;
     chat.appendChild(el); scrollChat();
   }
-
   function clearProgress(){ if(progressEl){ progressEl.remove(); progressEl = null; } }
   function clearThinking(){ if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; } }
-
-  // Convert live stream into a kept, collapsible dim block so tools don't swallow thinking.
   function freezeLive(){
     if(liveEl && streamBuf){
       liveEl.classList.add('frozen');
@@ -209,30 +244,18 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       if(t.length > 2000) t = t.slice(0,2000) + '…';
       liveEl.innerHTML = '<div class="body">'+esc(t)+'</div>';
       liveEl.onclick = function(){ liveEl.classList.toggle('expanded'); };
-      liveEl = null;
-      streamBuf = '';
+      liveEl = null; streamBuf = '';
       return;
     }
     if(liveEl){ liveEl.remove(); liveEl = null; }
     if(thinkingEl && thinkingEl.textContent === 'Thinking…') clearThinking();
-  }
-
-  function ensureProgress(){
-    freezeLive();
-    if(!progressEl){
-      progressEl = document.createElement('div');
-      progressEl.className = 'progress';
-      chat.appendChild(progressEl);
-    }
-    return progressEl;
   }
   function ensureThinking(){
     if(!thinkingEl){
       thinkingEl = document.createElement('div');
       thinkingEl.className = 'thinking';
       thinkingEl.textContent = 'Thinking…';
-      chat.appendChild(thinkingEl);
-      scrollChat();
+      chat.appendChild(thinkingEl); scrollChat();
     }
   }
   function ensureLive(){
@@ -256,14 +279,12 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       return;
     }
     if(kind === 'message_text'){
-      // Keep prior stream visible; only drop the placeholder Thinking line.
       if(liveEl && streamBuf) freezeLive(); else clearThinking();
       var level = data.level || data.Level || '';
       var el = document.createElement('div');
       el.className = 'message' + (level === 'error' ? ' error' : level === 'warn' ? ' warn' : '');
       el.textContent = text || '';
-      chat.appendChild(el);
-      scrollChat();
+      chat.appendChild(el); scrollChat();
       return;
     }
     if(kind === 'summary_text'){
@@ -280,8 +301,7 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       var detail = data.detail !== undefined ? data.detail : data.Detail;
       card.innerHTML = '<header>'+esc(title||'tool')+'</header><div class="pairs">'+pairs+'</div><div class="detail">'+esc(detail||'')+'</div>';
       card.querySelector('header').onclick = function(){ card.classList.toggle('open'); };
-      chat.appendChild(card);
-      scrollChat();
+      chat.appendChild(card); scrollChat();
     }
   }
 
@@ -305,32 +325,63 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   function loadTrace(){
     fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
       var facts = b.facts || [];
+      if(b.sessionId) sessionLabel.textContent = b.sessionId;
       traceList.innerHTML = '';
       facts.forEach(function(f){
         var t = f.type || 'message';
         var role = f.role || '';
-        var cls = t;
-        if(t === 'message' && role) cls = role;
+        var cls = t === 'message' && role ? role : t;
         var row = document.createElement('div');
         row.className = 'trace-row ' + cls;
         var kind = t === 'message' ? (role||'msg') : t;
-        row.innerHTML = '<span class="t-kind">'+esc(kind)+'</span>' +
-          '<span class="t-sum">'+esc(traceSummary(f))+'</span>' +
-          '<span class="t-seq">#'+(f.seq||'')+'</span>';
+        row.innerHTML = '<span class="t-kind">'+esc(kind)+'</span><span class="t-sum">'+esc(traceSummary(f))+'</span><span class="t-seq">#'+(f.seq||'')+'</span>';
         var det = document.createElement('div');
         det.className = 'trace-detail';
         var detail = f.content || '';
         if(f.meta) detail += (detail?'\n\n':'') + JSON.stringify(f.meta, null, 2);
         det.textContent = detail || '(empty)';
-        row.onclick = function(){
-          row.classList.toggle('open');
-          det.classList.toggle('open');
-        };
-        traceList.appendChild(row);
-        traceList.appendChild(det);
+        row.onclick = function(){ row.classList.toggle('open'); det.classList.toggle('open'); };
+        traceList.appendChild(row); traceList.appendChild(det);
       });
       traceList.scrollTop = traceList.scrollHeight;
     }).catch(function(){});
+  }
+
+  function loadSessions(){
+    fetch('/api/sessions').then(function(r){return r.json();}).then(function(b){
+      var cur = b.current || '';
+      var list = b.sessions || [];
+      sessionList.innerHTML = '';
+      if(!list.length){
+        var empty = document.createElement('div');
+        empty.className = 'sess-item';
+        empty.textContent = 'No sessions yet';
+        sessionList.appendChild(empty);
+        return;
+      }
+      list.forEach(function(s){
+        var id = s.id || '';
+        var title = s.title || id;
+        var el = document.createElement('div');
+        el.className = 'sess-item' + (id === cur ? ' active' : '');
+        el.textContent = title;
+        el.title = id;
+        el.onclick = function(){ selectSession(id); };
+        sessionList.appendChild(el);
+      });
+    }).catch(function(){});
+  }
+
+  function selectSession(id){
+    fetch('/api/session/select', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({sessionId:id})})
+      .then(function(r){return r.json();}).then(function(){
+        sessionLabel.textContent = id;
+        historyReady = false;
+        return loadHistory();
+      }).then(function(){
+        historyReady = true;
+        loadTrace(); loadSessions();
+      });
   }
 
   function loadHistory(){
@@ -345,12 +396,25 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     }).catch(function(){ historyReady = true; });
   }
 
+  function applyPanel(op){
+    var host = document.getElementById('main-overlay');
+    if(!host) return;
+    var node = document.getElementById('panel-'+op.id);
+    if(op.op === 'clear'){ if(node) node.remove(); return; }
+    if(!node){
+      node = document.createElement('div');
+      node.id = 'panel-'+op.id;
+      host.appendChild(node);
+    }
+    if(op.op === 'set') node.innerHTML = op.html || '';
+    if(op.op === 'append') node.insertAdjacentHTML('beforeend', op.html || '');
+    if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
+  }
+
   function openSSE(){
-    // No replay for presentation: past turns come from /api/history.
-    // replay=1 is still used for panels only via filtering below.
     var es = new EventSource('/events?replay=1');
     es.addEventListener('presentation', function(e){
-      if(!historyReady) return; // drop replayed past while bootstrapping
+      if(!historyReady) return;
       var env = JSON.parse(e.data);
       onPresentation(env.data !== undefined ? env.data : env);
     });
@@ -367,60 +431,36 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       var d = JSON.parse(e.data).data;
       var st = d.status || '';
       statusEl.textContent = st;
-      if(st === 'running' && historyReady){
-        setRunning(true);
-        if(!streamBuf) ensureThinking();
-      }
-      if(st === 'idle' || st === 'cancelling' || st.indexOf('error:')===0 || st.indexOf('session:')===0){
+      if(st === 'running' && historyReady){ setRunning(true); if(!streamBuf) ensureThinking(); }
+      if(st === 'idle' || st.indexOf('error:')===0 || st.indexOf('session:')===0){
         if(st === 'idle' || st.indexOf('error:')===0){
           setRunning(false);
           streamBuf = '';
           clearProgress(); clearThinking();
           if(liveEl){ liveEl = null; }
-          loadTrace();
+          loadTrace(); loadSessions();
         }
-        if(st.indexOf('session:')===0){
-          sessionLabel.textContent = st.slice(8);
-        }
+        if(st.indexOf('session:')===0) sessionLabel.textContent = st.slice(8);
       }
     });
     es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
   }
 
-  function applyPanel(op){
-    var hostId = op.slot === 'main-overlay' ? 'main-overlay' : 'main-overlay';
-    // No fixed side columns: plugin panels land in overlay (or extend later).
-    var host = document.getElementById(hostId);
-    if(!host) return;
-    var node = document.getElementById('panel-'+op.id);
-    if(op.op === 'clear'){ if(node) node.remove(); return; }
-    if(!node){
-      node = document.createElement('div');
-      node.id = 'panel-'+op.id;
-      node.className = 'panel-root';
-      host.appendChild(node);
+  function sendOrStop(){
+    if(running){
+      fetch('/api/turn/cancel', {method:'POST'}).then(function(){ setRunning(false); });
+      return;
     }
-    if(op.op === 'set') node.innerHTML = op.html || '';
-    if(op.op === 'append') node.insertAdjacentHTML('beforeend', op.html || '');
-    if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
-  }
-
-  function sendLine(){
     var text = input.value.trim();
     if(!text) return;
     input.value = '';
     if(text.charAt(0) === '/'){
       appendUser(text);
-      if(text === '/exit'){
-        appendPre('/exit is CLI-only; close this tab or use the terminal.', 'message warn');
-        return;
-      }
       fetch('/api/command', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({line:text})})
         .then(function(r){return r.json();})
         .then(function(body){
           if(body.error) appendPre(body.error, 'message error');
           else if(body.output) appendPre(body.output, 'message');
-          else appendPre('ok', 'message');
         });
       return;
     }
@@ -428,17 +468,14 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     streamBuf = '';
     if(liveEl){ liveEl.remove(); liveEl = null; }
     clearThinking();
+    setRunning(true);
     fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:text})});
   }
 
-  var btnNew = document.getElementById('btn-new');
-  var btnStop = document.getElementById('btn-stop');
-  var sessionLabel = document.getElementById('session-label');
-
-  function setRunning(on){
-    btnStop.disabled = !on;
-  }
-
+  btnSend.onclick = sendOrStop;
+  input.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendOrStop(); }
+  });
   btnNew.onclick = function(){
     fetch('/api/session/new', {method:'POST'}).then(function(r){return r.json();}).then(function(b){
       if(!b.ok){ appendPre(b.error||'new session failed','message error'); return; }
@@ -448,27 +485,16 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       if(liveEl){ liveEl.remove(); liveEl=null; }
       clearThinking(); clearProgress();
       historyReady = true;
-      loadTrace();
+      loadTrace(); loadSessions();
       appendPre('new session ' + (b.sessionId||''), 'message');
     });
   };
-  btnStop.onclick = function(){
-    fetch('/api/turn/cancel', {method:'POST'}).then(function(){ setRunning(false); });
-  };
 
-  send.onclick = sendLine;
-  input.addEventListener('keydown', function(e){
-    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
-  });
-
-  // Bootstrap: history first, then accept live presentation.
   fetch('/api/session').then(function(r){return r.json();}).then(function(b){
     if(b.sessionId) sessionLabel.textContent = b.sessionId;
   }).catch(function(){});
-  loadHistory().then(function(){
-    loadTrace();
-    openSSE();
-  });
+  loadSessions();
+  loadHistory().then(function(){ loadTrace(); openSSE(); });
 })();
 </script>
 </body>
