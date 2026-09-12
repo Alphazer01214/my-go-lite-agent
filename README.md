@@ -76,12 +76,13 @@ cd dist
 .\host.exe -plugins plugins -assembly examples\chat.json -repl
 ```
 
-输入多轮对话；`/help` 查看命令；`/exit` 或 Ctrl+C 退出。
+输入多轮对话；`/help` 查看命令；`/` 后按 Tab 可补全命令/插件名；`/exit` 或 Ctrl+C 退出。
 
 渲染默认全量展示（无需 `-verbose`）：
 
 - **Thinking…** — 尚无正文时的淡化占位（`message_text` dim）
-- **markdown_text** — 助手正文（流式 raw；settle 按 Markdown→ANSI 渲染）
+- **Generating… N chars** — 流式过程中的单行进度；正文在 settle 后以 Markdown→ANSI 完整渲染
+- **markdown_text** — 助手正文（标题/列表/代码块/表格/链接）
 - **summary_text** — 工具调用摘要卡（`⏺ 工具名` + 键值参数 + 截断详情）
 - **message_text** — 状态/错误行
 

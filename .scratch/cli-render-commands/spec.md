@@ -64,9 +64,9 @@ CallTool 结束  → summary_text  title=tool, pairs=关键 args（截断）, de
 
 ### 4. Settle 与 markdown_text
 
-- 流式 chunk 仍实时 raw 打印（现状）。
-- Turn settle 后 Host 将 assistant 正文以 `markdown_text` 发出（多消费者 Render Medium 契约）。
-- CLI：若本轮已 streamedLive 则忽略该次 markdown_text（避免双打）；否则用 markdown 渲染。
+- 流式过程：单行 dim 进度 `Generating… N chars`（不把 raw delta 当正文）。
+- Turn settle 后 Host 将 assistant 正文以 `markdown_text` 发出；CLI **始终**用 goldmark→ANSI 渲染（流式回复也能看到 Markdown）。
+- 无 settle 信号时，`end()` 用 TurnResult.Assistant 兜底渲染。
 
 ### 5. Command 平面
 
@@ -81,7 +81,7 @@ CallTool 结束  → summary_text  title=tool, pairs=关键 args（截断）, de
 | `/` + 回车 | 等价 `/help` |
 
 - 未知命令：`unknown command: foo` + 编辑距离 ≤2 的「did you mean」。
-- 不做 Tab 补全（避免第三方 readline）。
+- Tab 补全：`golang.org/x/term` raw 模式；补全原生命令、插件名、插件子命令；歧义时列出候选。
 
 **插件命令：**
 
@@ -163,12 +163,13 @@ CallTool 结束  → summary_text  title=tool, pairs=关键 args（截断）, de
 - summary_text：Host 工具路径必发；截断 rune 边界（中文）有测。
 - markdown：goldmark 输出含表格/列表的 ANSI；`mdansi.Plain` 宽度测保留。
 - commands：`/help` `/lp` `/exit` `/refresh` 冒烟；`/plugin subcmd` 路由到插件 handler；冲突插件不挂载且 stderr 有提示；`/help plugin` 只读 Manifest。
-- settle：streamedLive 时不双打 markdown；非流式路径 settle 出 markdown_text。
+- settle：流式仅显示进度行；markdown_text 始终全量渲染。
+- Tab：`completeSlash` 对 `/h`、`/`、`/plugin ` 有单测。
 - Card / Session Log 不变量不回归。
 
 ## Out of Scope
 
-- 流式增量 markdown、权限确认、diff 高亮、spinner、Tab 补全。
+- 流式**增量** markdown 高亮（settle 全量已做）、权限确认（sandbox）、diff 高亮。
 - Session 持久化 / `/clear` 清 Session / `/compact`。
 - 热插拔、多 Render Medium 实例、Web UI。
 - 真实多 provider 目录、token 计量。

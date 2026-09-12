@@ -45,7 +45,7 @@ func TestREPLTwoTurnsSameSession(t *testing.T) {
 	}()
 
 	go func() {
-		_, _ = stdin.Write([]byte("first-marker\nsecond-marker\n/exit\n"))
+		_, _ = stdin.Write([]byte("first-marker\r\nsecond-marker\r\n/exit\r\n"))
 		_ = stdin.Close()
 	}()
 

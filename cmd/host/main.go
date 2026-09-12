@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -402,13 +401,14 @@ func (r *turnRenderer) onStream(delta string) {
 		return
 	}
 	r.streamBuf.WriteString(delta)
-	// Live progressive text for responsiveness; markdown pass runs on settle if we didn't stream.
+	// Dim one-line progress; durable body is painted as markdown_text at settle.
 	if !r.streamedLive {
 		r.clearThinking()
 		r.streamedLive = true
-		r.gotContent = true
 	}
-	fmt.Print(delta)
+	n := len([]rune(r.streamBuf.String()))
+	fmt.Printf("\r\x1b[2K\x1b[2mGenerating… %d chars\x1b[0m", n)
+	r.gotContent = true
 }
 
 func (r *turnRenderer) onTool(name string, args json.RawMessage) {
@@ -416,12 +416,19 @@ func (r *turnRenderer) onTool(name string, args json.RawMessage) {
 	r.clearThinking()
 }
 
+func (r *turnRenderer) clearProgress() {
+	if r.streamedLive {
+		fmt.Print("\r\x1b[2K")
+		r.streamedLive = false
+	}
+}
+
 func (r *turnRenderer) onRender(ri serve.RenderIntent) {
 	r.clearThinking()
+	r.clearProgress()
 	switch ri.Kind {
 	case serve.KindMarkdownText:
-		// Settle markdown_text: skip if we already streamed the same body live.
-		if r.streamedLive {
+		if ri.Text == "" {
 			return
 		}
 		r.gotContent = true
@@ -465,9 +472,9 @@ func (r *turnRenderer) renderSummaryText(title string, pairs []serve.SummaryPair
 
 func (r *turnRenderer) end(assistant string) {
 	r.clearThinking()
-	// If nothing was streamed live and settle didn't already paint markdown_text,
-	// fall back to rendering the durable assistant body as markdown.
-	if !r.streamedLive && !r.gotContent && assistant != "" {
+	r.clearProgress()
+	// Fallback when Host did not emit settle markdown_text.
+	if !r.gotContent && assistant != "" {
 		fmt.Print(mdansi.Render(assistant))
 		r.gotContent = true
 	}
@@ -670,16 +677,19 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		os.Exit(0)
 	}()
 
-	fmt.Println("lite agent REPL — type a message; /help for commands; /exit to leave.")
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	fmt.Println("lite agent REPL — type a message; /help for commands; Tab completes /commands; /exit to leave.")
 	for {
-		fmt.Print("> ")
-		if !in.Scan() {
+		line, err := readLineRaw("> ", cp.completeSlash)
+		if err != nil {
+			if err.Error() == "interrupted" {
+				fmt.Println("\nshutting down…")
+				_ = srv.Close()
+				return nil
+			}
 			fmt.Println()
 			break
 		}
-		line := strings.TrimSpace(in.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -707,7 +717,7 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		r.end(out.Assistant)
 		restore()
 	}
-	return in.Err()
+	return nil
 }
 
 func printRejected(rejected []assembly.Rejected) {
