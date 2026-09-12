@@ -1,5 +1,6 @@
 dist/
 *.exe
+.idea/
 
 # Local secrets — never commit real keys (keep *.example.json)
 plugins/**/config.json
