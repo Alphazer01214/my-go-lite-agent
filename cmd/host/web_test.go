@@ -83,8 +83,8 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(body), "slot-sidebar") {
-		t.Fatalf("shell missing slots")
+	if !strings.Contains(string(body), "id=\"split\"") && !strings.Contains(string(body), "chat-col") {
+		t.Fatalf("shell missing split layout")
 	}
 
 	// Post a message; fakellm should settle markdown over SSE eventually.

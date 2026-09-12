@@ -18,8 +18,12 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 #split{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0}
 #chat-col,#trace-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 #chat-col{border-right:1px solid var(--line)}
-#pane-head{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+#pane-head{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0}
 #pane-head a{color:var(--accent);text-decoration:none}
+#pane-head .tools{display:flex;gap:6px;align-items:center}
+#pane-head button{background:#1a1f2a;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+#pane-head button:hover{border-color:var(--accent)}
+#pane-head button:disabled{opacity:.4;cursor:default}
 #brand-mini{font-weight:600;color:var(--ink);font-size:12px}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
 #trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
@@ -65,7 +69,11 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .progress,.thinking,.stream-live{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:10px;white-space:pre-wrap}
 .thinking{opacity:.75}
 .stream-live{opacity:.9;line-height:1.45;border-left:2px solid #334;padding-left:8px}
-.stream-live.frozen{opacity:.65;border-left-color:#2a2f3a}
+.stream-live.frozen{opacity:.7;border-left-color:#2a2f3a;cursor:pointer}
+.stream-live.frozen:before{content:"▸ thinking · click to expand/collapse";display:block;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.stream-live.frozen.expanded:before{content:"▾ thinking"}
+.stream-live.frozen .body{display:none;white-space:pre-wrap}
+.stream-live.frozen.expanded .body{display:block}
 h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
 .side-note{font-size:12px;color:var(--dim);margin:0 0 10px;line-height:1.4}
 .slot-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--dim);margin:12px 0 8px}
@@ -76,7 +84,14 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
 <div id="app">
   <div id="split">
     <section id="chat-col">
-      <div id="pane-head"><span>Chat</span><span id="brand-mini">lite agent</span></div>
+      <div id="pane-head">
+        <span class="tools">
+          <span id="brand-mini">lite agent</span>
+          <button id="btn-new" title="New session">New</button>
+          <button id="btn-stop" title="Stop generation" disabled>Stop</button>
+        </span>
+        <span id="session-label" style="color:var(--dim);font-family:var(--mono);font-size:11px"></span>
+      </div>
       <div id="chat"></div>
       <div id="status"></div>
     </section>
@@ -95,6 +110,10 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous"/>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"
+  onload="window.__katexReady=true"></script>
 <script>
 (function(){
   var chat = document.getElementById('chat');
@@ -140,11 +159,30 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   }
 
   function scrollChat(){ chat.scrollTop = chat.scrollHeight; }
+
+  function renderMath(root){
+    if(!window.katex || !window.renderMathInElement) return;
+    try {
+      window.renderMathInElement(root || chat, {
+        delimiters: [
+          {left:'$$', right:'$$', display:true},
+          {left:'\\[', right:'\\]', display:true},
+          {left:'$', right:'$', display:false},
+          {left:'\\(', right:'\\)', display:false}
+        ],
+        throwOnError: false
+      });
+    } catch(e){}
+  }
+
   function appendAssistant(html){
     var el = document.createElement('div');
     el.className = 'msg assistant';
     el.innerHTML = html || '';
-    chat.appendChild(el); scrollChat(); return el;
+    chat.appendChild(el);
+    renderMath(el);
+    scrollChat();
+    return el;
   }
   function appendUser(text){
     var el = document.createElement('div');
@@ -163,14 +201,16 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
   function clearProgress(){ if(progressEl){ progressEl.remove(); progressEl = null; } }
   function clearThinking(){ if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; } }
 
-  // Convert live stream into a kept dim block so tools don't swallow thinking.
+  // Convert live stream into a kept, collapsible dim block so tools don't swallow thinking.
   function freezeLive(){
     if(liveEl && streamBuf){
       liveEl.classList.add('frozen');
       var t = streamBuf;
-      if(t.length > 400) t = t.slice(0,400) + '…';
-      liveEl.textContent = t;
+      if(t.length > 2000) t = t.slice(0,2000) + '…';
+      liveEl.innerHTML = '<div class="body">'+esc(t)+'</div>';
+      liveEl.onclick = function(){ liveEl.classList.toggle('expanded'); };
       liveEl = null;
+      streamBuf = '';
       return;
     }
     if(liveEl){ liveEl.remove(); liveEl = null; }
@@ -327,12 +367,21 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
       var d = JSON.parse(e.data).data;
       var st = d.status || '';
       statusEl.textContent = st;
-      if(st === 'running' && historyReady && !streamBuf) ensureThinking();
-      if(st === 'idle'){
-        streamBuf = '';
-        clearProgress(); clearThinking();
-        if(liveEl){ liveEl = null; }
-        loadTrace();
+      if(st === 'running' && historyReady){
+        setRunning(true);
+        if(!streamBuf) ensureThinking();
+      }
+      if(st === 'idle' || st === 'cancelling' || st.indexOf('error:')===0 || st.indexOf('session:')===0){
+        if(st === 'idle' || st.indexOf('error:')===0){
+          setRunning(false);
+          streamBuf = '';
+          clearProgress(); clearThinking();
+          if(liveEl){ liveEl = null; }
+          loadTrace();
+        }
+        if(st.indexOf('session:')===0){
+          sessionLabel.textContent = st.slice(8);
+        }
       }
     });
     es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
@@ -382,12 +431,40 @@ h1.brand{font-size:14px;margin:0 0 8px;font-weight:600}
     fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:text})});
   }
 
+  var btnNew = document.getElementById('btn-new');
+  var btnStop = document.getElementById('btn-stop');
+  var sessionLabel = document.getElementById('session-label');
+
+  function setRunning(on){
+    btnStop.disabled = !on;
+  }
+
+  btnNew.onclick = function(){
+    fetch('/api/session/new', {method:'POST'}).then(function(r){return r.json();}).then(function(b){
+      if(!b.ok){ appendPre(b.error||'new session failed','message error'); return; }
+      sessionLabel.textContent = b.sessionId || '';
+      chat.innerHTML = '';
+      streamBuf = '';
+      if(liveEl){ liveEl.remove(); liveEl=null; }
+      clearThinking(); clearProgress();
+      historyReady = true;
+      loadTrace();
+      appendPre('new session ' + (b.sessionId||''), 'message');
+    });
+  };
+  btnStop.onclick = function(){
+    fetch('/api/turn/cancel', {method:'POST'}).then(function(){ setRunning(false); });
+  };
+
   send.onclick = sendLine;
   input.addEventListener('keydown', function(e){
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
   });
 
   // Bootstrap: history first, then accept live presentation.
+  fetch('/api/session').then(function(r){return r.json();}).then(function(b){
+    if(b.sessionId) sessionLabel.textContent = b.sessionId;
+  }).catch(function(){});
   loadHistory().then(function(){
     loadTrace();
     openSSE();

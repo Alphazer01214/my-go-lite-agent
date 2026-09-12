@@ -48,6 +48,22 @@ type Server struct {
 
 	// plugin name -> dir for /plugin-ui/
 	uiDirs map[string]string
+
+	// current default session for the Web Shell ("" = Host default).
+	sessMu sync.Mutex
+	sessID string
+}
+
+func (s *Server) currentSession() string {
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	return s.sessID
+}
+
+func (s *Server) setCurrentSession(id string) {
+	s.sessMu.Lock()
+	s.sessID = id
+	s.sessMu.Unlock()
 }
 
 // Event is one SSE payload.
@@ -99,6 +115,9 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/trace", s.handleTrace)
+	mux.HandleFunc("/api/session/new", s.handleSessionNew)
+	mux.HandleFunc("/api/session", s.handleSessionGet)
+	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
 	s.http = &http.Server{Addr: opts.Addr, Handler: mux}
@@ -249,20 +268,25 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Text string `json:"text"`
+		Text      string `json:"text"`
+		SessionID string `json:"sessionId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Text) == "" {
 		http.Error(w, "text required", http.StatusBadRequest)
 		return
 	}
+	sid := in.SessionID
+	if sid == "" {
+		sid = s.currentSession()
+	}
 	// Run turn asynchronously so the request returns; events stream on /events.
 	go func() {
-		_, err := s.opts.Srv.RunTurn(in.Text)
+		_, err := s.opts.Srv.RunTurnOn(sid, in.Text)
 		if err != nil {
 			s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "error:" + err.Error()}})
 		}
 	}()
-	writeJSON(w, map[string]any{"ok": true})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +315,11 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"messages": []any{}})
 		return
 	}
-	msgs, err := s.opts.Srv.DeriveMessages("")
+	sid := r.URL.Query().Get("sessionId")
+	if sid == "" {
+		sid = s.currentSession()
+	}
+	msgs, err := s.opts.Srv.DeriveMessages(sid)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error(), "messages": []any{}})
 		return
@@ -310,7 +338,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, item{Role: m.Role, Content: m.Content})
 	}
-	writeJSON(w, map[string]any{"messages": list})
+	writeJSON(w, map[string]any{"messages": list, "sessionId": sid})
 }
 
 // handleTrace returns Session Log facts as a turn/step trajectory for the sidebar.
@@ -319,12 +347,54 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"facts": []any{}})
 		return
 	}
-	facts, err := s.opts.Srv.QuerySessionFacts("", 0, 0)
+	sid := r.URL.Query().Get("sessionId")
+	if sid == "" {
+		sid = s.currentSession()
+	}
+	facts, err := s.opts.Srv.QuerySessionFacts(sid, 0, 0)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error(), "facts": []any{}})
 		return
 	}
-	writeJSON(w, map[string]any{"facts": facts})
+	writeJSON(w, map[string]any{"facts": facts, "sessionId": sid})
+}
+
+func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.Srv == nil {
+		http.Error(w, "no agent server", http.StatusServiceUnavailable)
+		return
+	}
+	id, err := s.opts.Srv.NewSessionID("")
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	s.setCurrentSession(id)
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + id}})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": id})
+}
+
+func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
+	sid := s.currentSession()
+	writeJSON(w, map[string]any{"sessionId": sid})
+}
+
+func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.Srv == nil {
+		http.Error(w, "no agent server", http.StatusServiceUnavailable)
+		return
+	}
+	s.opts.Srv.CancelTurn()
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "cancelling"}})
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {

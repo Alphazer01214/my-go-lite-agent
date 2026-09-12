@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/discovery"
@@ -68,6 +69,7 @@ type Server struct {
 	panels   []PanelOp
 	subs     []*Subscriber
 	turnMu   sync.Mutex
+	turnCancel atomic.Bool
 	job      *jobHolder
 	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
 	OnStreamDelta func(delta string)
@@ -1039,10 +1041,37 @@ func extractStreamDelta(f *protocol.Frame) (string, bool) {
 // → optional tools.call → session tool facts → step/end → repeat until final assistant reply
 // → turn/end.
 func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
+	return s.RunTurnOn("", userInput)
+}
+
+// RunTurnOn is RunTurn bound to a Session id (empty = default).
+func (s *Server) RunTurnOn(sessionID, userInput string) (*TurnResult, error) {
 	// One turn at a time across CLI and Web (spec §7 / ADR-0009).
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
-	return s.runTurn("", userInput, true, "")
+	s.turnCancel.Store(false)
+	return s.runTurn(sessionID, userInput, true, "")
+}
+
+// CancelTurn requests the in-flight default Loop to stop at the next safe boundary.
+func (s *Server) CancelTurn() {
+	s.turnCancel.Store(true)
+}
+
+// TurnCancelled reports whether CancelTurn was requested.
+func (s *Server) TurnCancelled() bool {
+	return s.turnCancel.Load()
+}
+
+// NewSessionID creates a Session (auto id when empty) and returns the id.
+func (s *Server) NewSessionID(id string) (string, error) {
+	if id == "" {
+		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
+	}
+	if err := s.CreateSession(id, "", "web", 0); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // runTurn executes one Turn on sessionID (empty = default).
@@ -1143,6 +1172,14 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	var assistant string
 
 	for step := 0; step < MaxSteps; step++ {
+		if s.turnCancel.Load() {
+			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
+				"type": "step_end",
+				"role": "host",
+				"meta": map[string]any{"turn": 1, "step": max(step, 1), "reason": "cancelled"},
+			}})
+			return nil, fmt.Errorf("turn cancelled")
+		}
 		stepN := step + 1
 		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type": "step_start",
@@ -1191,6 +1228,9 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			Method:  LLMCompleteMethod,
 			Payload: MarshalPayload(reqBody),
 		}, func(ev *protocol.Frame) {
+			if s.turnCancel.Load() {
+				return
+			}
 			if delta, ok := extractStreamDelta(ev); ok {
 				if s.OnStreamDelta != nil {
 					s.OnStreamDelta(delta)
