@@ -31,8 +31,8 @@ func TestShellAndSDKServed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(body), "slot-sidebar") {
-		t.Fatalf("want shell slots, got %d bytes", len(body))
+	if !strings.Contains(string(body), "id=\"split\"") || !strings.Contains(string(body), "id=\"chat-col\"") {
+		t.Fatalf("want center split shell, got %d bytes", len(body))
 	}
 	if !strings.Contains(string(body), "/events?replay=1") {
 		t.Fatal("shell must open SSE replay")
