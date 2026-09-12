@@ -18,8 +18,10 @@ type webCommandPlane struct {
 	cp *commandPlane
 }
 
-func (w webCommandPlane) Handle(line string) (bool, error) { return w.cp.handle(line) }
-func (w webCommandPlane) Complete(prefix string) []string  { return w.cp.completeSlash(prefix) }
+func (w webCommandPlane) HandleOut(line string) (string, bool, error) {
+	return w.cp.handleOut(line)
+}
+func (w webCommandPlane) Complete(prefix string) []string { return w.cp.completeSlash(prefix) }
 
 // runWebAndOptionalREPL mounts Plugins, starts the Web Medium, and optionally the CLI REPL.
 func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr string, withREPL bool, dump *bool) error {

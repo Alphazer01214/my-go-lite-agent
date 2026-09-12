@@ -132,6 +132,76 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     chat.appendChild(el);
     chat.scrollTop = chat.scrollHeight;
   }
+  function appendPre(text, cls){
+    var el = document.createElement('pre');
+    el.className = cls || 'message';
+    el.style.whiteSpace = 'pre-wrap';
+    el.style.fontFamily = 'var(--mono)';
+    el.style.fontSize = '12px';
+    el.textContent = text;
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function loadHistory(){
+    fetch('/api/history').then(function(r){return r.json();}).then(function(b){
+      (b.messages||[]).forEach(function(m){
+        if(m.role === 'user') appendUser(m.content);
+        else if(m.role === 'assistant') appendAssistant(md(m.content));
+      });
+    }).catch(function(){});
+  }
+
+  function loadTrace(){
+    fetch('/api/trace').then(function(r){return r.json();}).then(function(b){
+      var host = document.getElementById('panel-host-trace');
+      if(!host){
+        host = document.createElement('div');
+        host.id = 'panel-host-trace';
+        host.className = 'panel-root';
+        var slot = document.getElementById('slot-sidebar');
+        if(slot) slot.appendChild(host);
+      }
+      var facts = b.facts || [];
+      var lines = facts.map(function(f){
+        var t = f.type || '';
+        if(t === 'turn_start') return '▶ turn';
+        if(t === 'step_start') return '  step ' + ((f.meta&&f.meta.step)||'?');
+        if(t === 'step_end') return '  step end (' + ((f.meta&&f.meta.reason)||'') + ')';
+        if(t === 'tool_call') {
+          var names = [];
+          var tcs = (f.meta && f.meta.tool_calls) || [];
+          tcs.forEach(function(tc){ names.push(tc.name); });
+          return '  ⏺ ' + (names.join(',')||'tool');
+        }
+        if(t === 'tool_result') return '    → ' + String(f.content||'').slice(0,80);
+        if(t === 'request_header') return '  llm request';
+        if(t === 'turn_end') return '■ turn end';
+        return null;
+      }).filter(Boolean);
+      host.innerHTML = '<div class="slot-label">session trace</div><pre style="font-size:11px;color:var(--dim);white-space:pre-wrap;margin:0">' +
+        esc(lines.join('\n') || '(empty)') + '</pre>';
+    }).catch(function(){});
+  }
+
+  function loadToolsHint(){
+    fetch('/api/plugins').then(function(r){return r.json();}).then(function(b){
+      window.__liteCommands = ['help','lp','refresh'].concat((b.plugins||[]).map(function(p){return p.name;}));
+      var plugins = b.plugins||[];
+      var hasTools = plugins.some(function(p){
+        return (p.provides||[]).indexOf('tools') >= 0;
+      });
+      var names = plugins.map(function(p){return p.name;}).join(', ');
+      if(names && !document.getElementById('plugin-list-note')){
+        var n = document.createElement('div');
+        n.id = 'plugin-list-note';
+        n.className = 'message';
+        n.textContent = 'plugins: ' + names + (hasTools ? '' : '  (no tools — use assembly agent.json)');
+        var side = document.getElementById('slot-sidebar');
+        if(side) side.insertBefore(n, side.firstChild);
+      }
+    }).catch(function(){});
+  }
   function clearProgress(){
     if(progressEl){ progressEl.remove(); progressEl = null; }
   }
@@ -217,7 +287,11 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     es.addEventListener('status', function(e){
       var d = JSON.parse(e.data).data;
       statusEl.textContent = d.status || '';
-      if(d.status === 'idle'){ streamBuf = ''; clearProgress(); }
+      if(d.status === 'idle'){
+        streamBuf = '';
+        clearProgress();
+        loadTrace();
+      }
     });
     es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
   }
@@ -229,20 +303,15 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     if(text.charAt(0) === '/'){
       appendUser(text);
       if(text === '/exit'){
-        var m = document.createElement('div');
-        m.className = 'message warn';
-        m.textContent = '/exit is CLI-only; close this tab or use the terminal.';
-        chat.appendChild(m);
+        appendPre('/exit is CLI-only; close this tab or use the terminal.', 'message warn');
         return;
       }
       fetch('/api/command', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({line:text})})
         .then(function(r){return r.json();})
         .then(function(body){
-          var m = document.createElement('div');
-          m.className = body.error ? 'message error' : 'message';
-          m.textContent = body.error || 'ok';
-          chat.appendChild(m);
-          chat.scrollTop = chat.scrollHeight;
+          if(body.error) appendPre(body.error, 'message error');
+          else if(body.output) appendPre(body.output, 'message');
+          else appendPre('ok', 'message');
         });
       return;
     }
@@ -256,10 +325,9 @@ h1.brand{font-size:14px;margin:0 0 12px;font-weight:600}
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendLine(); }
   });
 
-  fetch('/api/plugins').then(function(r){return r.json();}).then(function(b){
-    window.__liteCommands = ['help','lp','refresh'].concat((b.plugins||[]).map(function(p){return p.name;}));
-  }).catch(function(){});
-
+  loadHistory();
+  loadTrace();
+  loadToolsHint();
   openSSE();
 })();
 </script>

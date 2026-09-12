@@ -32,7 +32,7 @@ type Options struct {
 
 // CommandPlane is the slash-command surface the Shell uses (implemented by cmd/host).
 type CommandPlane interface {
-	Handle(line string) (quit bool, err error)
+	HandleOut(line string) (output string, quit bool, err error)
 	Complete(prefix string) []string
 }
 
@@ -96,6 +96,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/ui-action", s.handleUIAction)
 	mux.HandleFunc("/api/call", s.handleCall)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
+	mux.HandleFunc("/api/history", s.handleHistory)
+	mux.HandleFunc("/api/trace", s.handleTrace)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
 	s.http = &http.Server{Addr: opts.Addr, Handler: mux}
@@ -273,8 +275,50 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no command plane", http.StatusNotImplemented)
 		return
 	}
-	quit, err := s.opts.CommandPlane.Handle(in.Line)
-	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "error": errString(err)})
+	out, quit, err := s.opts.CommandPlane.HandleOut(in.Line)
+	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "output": out, "error": errString(err)})
+}
+
+// handleHistory rehydrates the chat from Session Log (survives browser refresh).
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Srv == nil {
+		writeJSON(w, map[string]any{"messages": []any{}})
+		return
+	}
+	msgs, err := s.opts.Srv.DeriveMessages("")
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error(), "messages": []any{}})
+		return
+	}
+	type item struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	list := make([]item, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "system" {
+			continue
+		}
+		if m.Content == "" {
+			continue
+		}
+		list = append(list, item{Role: m.Role, Content: m.Content})
+	}
+	writeJSON(w, map[string]any{"messages": list})
+}
+
+// handleTrace returns Session Log facts as a turn/step trajectory for the sidebar.
+func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Srv == nil {
+		writeJSON(w, map[string]any{"facts": []any{}})
+		return
+	}
+	facts, err := s.opts.Srv.QuerySessionFacts("", 0, 0)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error(), "facts": []any{}})
+		return
+	}
+	writeJSON(w, map[string]any{"facts": facts})
 }
 
 func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {
@@ -340,14 +384,15 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	type item struct {
-		Name    string               `json:"name"`
-		Slots   []string             `json:"slots,omitempty"`
-		HasUI   bool                 `json:"hasUI"`
-		Command []plugin.CommandSpec `json:"commands,omitempty"`
+		Name     string               `json:"name"`
+		Provides []string             `json:"provides,omitempty"`
+		Slots    []string             `json:"slots,omitempty"`
+		HasUI    bool                 `json:"hasUI"`
+		Command  []plugin.CommandSpec `json:"commands,omitempty"`
 	}
 	var list []item
 	for _, p := range s.opts.Plan.Mounted {
-		it := item{Name: p.Manifest.Name, Command: p.Manifest.Commands}
+		it := item{Name: p.Manifest.Name, Command: p.Manifest.Commands, Provides: p.Manifest.Provides}
 		if p.Manifest.UI != nil {
 			it.HasUI = true
 			it.Slots = p.Manifest.UI.Slots

@@ -17,10 +17,8 @@ import (
 type commandPlane struct {
 	srv        *serve.Server
 	pluginsDir string
-	// manifests is the in-memory Manifest cache (/refresh updates it; no hot-plug).
-	manifests map[string]plugin.Manifest
-	// mounted names in assembly order
-	mounted []string
+	manifests  map[string]plugin.Manifest
+	mounted    []string
 }
 
 func newCommandPlane(srv *serve.Server, pluginsDir string, plan assembly.Plan) *commandPlane {
@@ -49,15 +47,13 @@ func (cp *commandPlane) refresh() error {
 	for _, p := range res.Plugins {
 		m := p.Manifest
 		if m.ConflictsWithNativeCommand() {
-			fmt.Fprintf(os.Stderr, "refresh: skip %s (%s)\n", m.Name, "conflicts with native command")
+			fmt.Fprintf(os.Stderr, "refresh: skip %s (conflicts with native command)\n", m.Name)
 			continue
 		}
-		// Only update metadata for already-mounted plugins; new ones are not hot-plugged.
 		if _, mounted := cp.manifests[m.Name]; mounted {
 			next[m.Name] = m
 		}
 	}
-	// Keep mounted set; replace manifests for those still present.
 	for name := range cp.manifests {
 		if m, ok := next[name]; ok {
 			cp.manifests[name] = m
@@ -66,16 +62,27 @@ func (cp *commandPlane) refresh() error {
 	return nil
 }
 
-// handle processes one slash line. Returns quit=true when the user asked to exit.
+// handle runs a slash line for the CLI (prints to stdout).
 func (cp *commandPlane) handle(line string) (quit bool, err error) {
+	out, quit, err := cp.handleOut(line)
+	if out != "" {
+		fmt.Print(out)
+		if !strings.HasSuffix(out, "\n") {
+			fmt.Println()
+		}
+	}
+	return quit, err
+}
+
+// handleOut runs a slash line and returns printable output (Web Shell uses this).
+func (cp *commandPlane) handleOut(line string) (output string, quit bool, err error) {
 	line = strings.TrimSpace(line)
 	if line == "" || line[0] != '/' {
-		return false, fmt.Errorf("not a command: %q", line)
+		return "", false, fmt.Errorf("not a command: %q", line)
 	}
 	body := strings.TrimSpace(line[1:])
 	if body == "" {
-		cp.printHelp("")
-		return false, nil
+		return cp.helpText(""), false, nil
 	}
 	fields := strings.Fields(body)
 	name := strings.ToLower(fields[0])
@@ -83,41 +90,36 @@ func (cp *commandPlane) handle(line string) (quit bool, err error) {
 
 	switch name {
 	case "exit":
-		return true, nil
+		return "", true, nil
 	case "help":
-		cp.printHelp(rest)
-		return false, nil
+		return cp.helpText(rest), false, nil
 	case "lp":
-		cp.printPlugins()
-		return false, nil
+		return cp.pluginsText(), false, nil
 	case "refresh":
 		if err := cp.refresh(); err != nil {
-			return false, err
+			return "", false, err
 		}
-		fmt.Println("refresh ok — manifests updated (no hot-plug)")
-		return false, nil
+		return "refresh ok — manifests updated (no hot-plug)\n", false, nil
 	}
 
-	// Plugin command: /plugin [subcmd] [args...]
 	if _, ok := cp.manifests[name]; ok {
 		sub, args := splitCommandRest(rest)
 		if sub == "" {
-			cp.printHelp(name)
-			return false, nil
+			return cp.helpText(name), false, nil
 		}
 		payload, err := cp.srv.CallCommand(name, sub, args)
 		if err != nil {
-			return false, err
+			return "", false, err
 		}
-		cp.printCommandResult(payload)
-		return false, nil
+		return commandResultText(payload), false, nil
 	}
 
-	fmt.Printf("unknown command: %s\n", name)
+	var b strings.Builder
+	fmt.Fprintf(&b, "unknown command: %s\n", name)
 	if sug := suggestCommand(name, cp.nativeAndPluginNames()); len(sug) > 0 {
-		fmt.Printf("did you mean: %s\n", strings.Join(sug, ", "))
+		fmt.Fprintf(&b, "did you mean: %s\n", strings.Join(sug, ", "))
 	}
-	return false, nil
+	return b.String(), false, nil
 }
 
 func splitCommandRest(rest string) (sub, args string) {
@@ -139,83 +141,81 @@ func (cp *commandPlane) nativeAndPluginNames() []string {
 	return names
 }
 
-func (cp *commandPlane) printCommandResult(payload json.RawMessage) {
+func commandResultText(payload json.RawMessage) string {
 	if len(payload) == 0 {
-		return
+		return ""
 	}
 	var out struct {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(payload, &out); err == nil && out.Text != "" {
-		fmt.Println(out.Text)
-		return
+		return strings.TrimRight(out.Text, "\n") + "\n"
 	}
-	fmt.Println(string(payload))
+	return string(payload) + "\n"
 }
 
-func (cp *commandPlane) printHelp(pluginName string) {
+func (cp *commandPlane) helpText(pluginName string) string {
 	pluginName = strings.ToLower(strings.TrimSpace(pluginName))
+	var b strings.Builder
 	if pluginName != "" {
 		m, ok := cp.manifests[pluginName]
 		if !ok {
-			fmt.Printf("unknown plugin: %s\n", pluginName)
-			return
+			fmt.Fprintf(&b, "unknown plugin: %s\n", pluginName)
+			return b.String()
 		}
-		fmt.Printf("%s  v%s  %s\n", m.Name, m.Version, m.Description)
+		fmt.Fprintf(&b, "%s  v%s  %s\n", m.Name, m.Version, m.Description)
 		if len(m.Commands) == 0 {
-			fmt.Println("  (no commands)")
-			return
+			b.WriteString("  (no commands)\n")
+			return b.String()
 		}
 		for _, c := range m.Commands {
 			usage := c.Usage
 			if usage == "" {
 				usage = "/" + m.Name + " " + c.Name
 			}
-			fmt.Printf("  %s\n    %s\n", usage, c.Description)
+			fmt.Fprintf(&b, "  %s\n    %s\n", usage, c.Description)
 		}
-		return
+		return b.String()
 	}
 
-	fmt.Println("Native commands:")
-	fmt.Println("  /help [plugin]     Show this help, or a plugin's commands")
-	fmt.Println("  /lp                List mounted plugins")
-	fmt.Println("  /refresh           Rescan plugin directory (metadata only)")
-	fmt.Println("  /exit              Quit")
-	fmt.Println()
-	fmt.Println("Plugins:")
+	b.WriteString("Native commands:\n")
+	b.WriteString("  /help [plugin]     Show this help, or a plugin's commands\n")
+	b.WriteString("  /lp                List mounted plugins\n")
+	b.WriteString("  /refresh           Rescan plugin directory (metadata only)\n")
+	b.WriteString("  /exit              Quit (CLI only)\n")
+	b.WriteString("\nPlugins:\n")
 	if len(cp.mounted) == 0 {
-		fmt.Println("  (none)")
-		return
+		b.WriteString("  (none)\n")
+		return b.String()
 	}
 	for _, name := range cp.mounted {
 		m := cp.manifests[name]
-		fmt.Printf("  %s  v%s  %s\n", m.Name, m.Version, m.Description)
-		if len(m.Commands) == 0 {
-			continue
-		}
+		fmt.Fprintf(&b, "  %s  v%s  %s\n", m.Name, m.Version, m.Description)
 		for _, c := range m.Commands {
 			usage := c.Usage
 			if usage == "" {
 				usage = "/" + m.Name + " " + c.Name
 			}
-			fmt.Printf("    %s\n", usage)
+			fmt.Fprintf(&b, "    %s\n", usage)
 		}
 	}
+	return b.String()
 }
 
-func (cp *commandPlane) printPlugins() {
+func (cp *commandPlane) pluginsText() string {
+	var b strings.Builder
 	if len(cp.mounted) == 0 {
-		fmt.Println("(no plugins mounted)")
-		return
+		b.WriteString("(no plugins mounted)\n")
+		return b.String()
 	}
 	for _, name := range cp.mounted {
 		m := cp.manifests[name]
-		fmt.Printf("%s\tv%s\tprovides=[%s]\t%s\n",
+		fmt.Fprintf(&b, "%s\tv%s\tprovides=[%s]\t%s\n",
 			m.Name, m.Version, strings.Join(m.Provides, ","), m.Description)
 	}
+	return b.String()
 }
 
-// suggestCommand returns names within edit distance 2 of input.
 func suggestCommand(input string, candidates []string) []string {
 	var out []string
 	for _, c := range candidates {

@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -132,4 +133,110 @@ func TestWebServeShellAndMessage(t *testing.T) {
 		t.Fatal("sse timeout")
 	}
 	_ = fmt.Sprintf("%v", mres.StatusCode)
+}
+
+func TestWebCommandOutputAndHistory(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/host")
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+
+	base := "http://" + addr
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		res, err := http.Get(base + "/")
+		if err == nil {
+			_ = res.Body.Close()
+			if res.StatusCode == 200 {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// /help must return real output text (not just ok).
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/command", strings.NewReader(`{"line":"/help"}`))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var help struct {
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&help); err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if !strings.Contains(help.Output, "Native commands") {
+		t.Fatalf("want help output, got %+v", help)
+	}
+
+	// One turn then history should include user text.
+	req2, _ := http.NewRequest(http.MethodPost, base+"/api/message", strings.NewReader(`{"text":"hist-marker"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	mres, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = mres.Body.Close()
+	time.Sleep(2 * time.Second)
+	hres, err := http.Get(base + "/api/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hist struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(hres.Body).Decode(&hist); err != nil {
+		t.Fatal(err)
+	}
+	_ = hres.Body.Close()
+	found := false
+	for _, m := range hist.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "hist-marker") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("history missing user message: %+v", hist)
+	}
+
+	tres, err := http.Get(base + "/api/trace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tr struct {
+		Facts []map[string]any `json:"facts"`
+	}
+	if err := json.NewDecoder(tres.Body).Decode(&tr); err != nil {
+		t.Fatal(err)
+	}
+	_ = tres.Body.Close()
+	if len(tr.Facts) == 0 {
+		t.Fatal("want session trace facts")
+	}
 }

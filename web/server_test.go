@@ -17,8 +17,8 @@ import (
 
 type nopCommands struct{}
 
-func (nopCommands) Handle(string) (bool, error) { return false, nil }
-func (nopCommands) Complete(string) []string    { return nil }
+func (nopCommands) HandleOut(string) (string, bool, error) { return "", false, nil }
+func (nopCommands) Complete(string) []string               { return nil }
 
 func TestShellAndSDKServed(t *testing.T) {
 	s := New(Options{Addr: "127.0.0.1:0", CommandPlane: nopCommands{}})
