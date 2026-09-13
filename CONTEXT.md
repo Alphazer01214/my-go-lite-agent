@@ -37,12 +37,20 @@ Presentation 面的结构化渲染意图：从 args/result 纯函数投影（如
 _Avoid_: UI 组件、视图模型
 
 **Panel**:
-Web Render Medium 中一块可被插件填充的 UI 槽位（sidebar / main-overlay / toolbar-right 等）。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp；Host 只保留页面壳与聊天主流程。
+Web Render Medium 中一块可被插件填充的 UI 槽位，槽位集合由 layout 定义。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp。
 _Avoid_: 页面、视图区、slot（可作别名，规范名词是 Panel）
 
 **Panel Component**:
 插件作者以原生 Web Component 实现的 Panel 内容单元：自定义元素 + Shadow DOM，经 props 接收数据、经 UI Action 与 SDK 回传交互。元素名以插件名为前缀。
 _Avoid_: 组件树、widget、UI 插件
+
+**Session View**:
+Session Log 的主视图组件：重放历史事实、实时消费 Presentation 信号、提供输入入口以触发 Turn。由 session 插件经 Panel 提供；替代视图可经 Assembly 声明挂载同一槽位与之竞争。
+_Avoid_: 聊天窗口、chat 插件（"聊天"仅作口语别名）、聊天面
+
+**Trace**:
+Session Log 的调试投影：一次会话的全部事实按发生序呈现。不是独立的记录或审计流——数据与 Session View 同源（Session Log），只是投影粒度不同。
+_Avoid_: 日志、监控、审计日志
 
 **UI Entry**:
 Manifest `ui.entry` 指向的插件 ES Module：加载时注册该插件的全部 Panel Component，由 Shell 经 /plugin-ui/ 动态 import。
@@ -69,12 +77,12 @@ _Avoid_: 指令、slash command（可作别名，规范名词是 Command）
 _Avoid_: 清单、plugin config（config 是运行参数，不是 Manifest）
 
 **Render Medium**:
-消费 Presentation 信号并向用户展示的媒介。Host 内建 CLI 是默认实现；Web Medium 为第二实现（内嵌 HTTP + 浏览器壳）。契约按可多消费者订阅设计。
+消费 Presentation 信号并向用户展示的媒介。内建实现有二：CLI Medium（liteagent-cli）与 Web Medium（liteagent-server），共享同一内核与插件协议，分歧仅在前端。契约按可多消费者订阅设计。
 _Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
 
 **Shell**:
-Web Render Medium 的 Host 原生骨架：页面布局、Panel 槽位、默认聊天面（消费 markdown_text / message_text / summary_text / stream）、命令输入与事件桥。插件不得替换聊天主流程，只能向 Panel 注入。
-_Avoid_: 前端框架、主界面（规范名词是 Shell）
+Web Render Medium 中项目提供的最薄骨架：整体 layout（页面与 Panel 槽位）、整体样式表（Design Token）与必要全局脚本（SDK 与组件装载器）。内容面（聊天、trace 等）不属骨架，由插件作者实现为 Panel Component 注册进页面，项目自有实现也不例外。
+_Avoid_: 前端框架、主界面、聊天壳（规范名词是 Shell）
 
 **Waterfall**:
 环绕式拦截链：下游处理完才返回，监听方不放行则短路。Host 内建强制链 + 可选外部 Interceptor。
