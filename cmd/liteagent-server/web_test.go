@@ -203,51 +203,38 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	}
 	_ = mres.Body.Close()
 	time.Sleep(2 * time.Second)
-	hres, err := http.Get(base + "/api/history")
+
+	// History rehydrates through the session Capability via the star route
+	// (ADR-0011): /api/history and /api/trace are both retired.
+	callBody := strings.NewReader(`{"cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
+	hres, err := http.Post(base+"/api/call", "application/json", callBody)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var hist struct {
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		OK     bool `json:"ok"`
+		Result struct {
+			Facts []struct {
+				Type    string `json:"type"`
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"facts"`
+		} `json:"result"`
 	}
 	if err := json.NewDecoder(hres.Body).Decode(&hist); err != nil {
 		t.Fatal(err)
 	}
 	_ = hres.Body.Close()
+	if !hist.OK {
+		t.Fatal("session.query call failed")
+	}
 	found := false
-	for _, m := range hist.Messages {
-		if m.Role == "user" && strings.Contains(m.Content, "hist-marker") {
+	for _, f := range hist.Result.Facts {
+		if f.Type == "message" && f.Role == "user" && strings.Contains(f.Content, "hist-marker") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("history missing user message: %+v", hist)
-	}
-
-	// Facts flow through the session Capability via the star route (ADR-0011);
-	// the dedicated /api/trace endpoint is retired.
-	callBody := strings.NewReader(`{"cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
-	tres, err := http.Post(base+"/api/call", "application/json", callBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tr struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			Facts []map[string]any `json:"facts"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(tres.Body).Decode(&tr); err != nil {
-		t.Fatal(err)
-	}
-	_ = tres.Body.Close()
-	if !tr.OK {
-		t.Fatal("session.query call failed")
-	}
-	if len(tr.Result.Facts) == 0 {
-		t.Fatal("want session trace facts")
+		t.Fatalf("history missing user message: %+v", hist.Result)
 	}
 }

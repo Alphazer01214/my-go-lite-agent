@@ -115,7 +115,6 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/ui-action", s.handleUIAction)
 	mux.HandleFunc("/api/call", s.handleCall)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
-	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/session/new", s.handleSessionNew)
 	mux.HandleFunc("/api/session", s.handleSessionGet)
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
@@ -327,43 +326,6 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	out, quit, err := s.opts.CommandPlane.HandleOut(in.Line)
 	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "output": out, "error": errString(err)})
-}
-
-// handleHistory rehydrates the chat from Session Log facts (survives refresh).
-// Includes reasoning/tool process rows — not just derived user/assistant.
-func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Srv == nil {
-		writeJSON(w, map[string]any{"facts": []any{}, "messages": []any{}})
-		return
-	}
-	sid := r.URL.Query().Get("sessionId")
-	if sid == "" {
-		sid = s.currentSession()
-	}
-	facts, err := s.opts.Srv.QuerySessionFacts(sid, 0, 0)
-	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error(), "facts": []any{}, "messages": []any{}})
-		return
-	}
-	if facts == nil {
-		facts = []map[string]any{}
-	}
-	// Also keep derive-style messages for callers that only want the transcript.
-	msgs, derr := s.opts.Srv.DeriveMessages(sid)
-	type item struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	list := make([]item, 0)
-	if derr == nil {
-		for _, m := range msgs {
-			if m.Role == "system" || m.Content == "" {
-				continue
-			}
-			list = append(list, item{Role: m.Role, Content: m.Content})
-		}
-	}
-	writeJSON(w, map[string]any{"facts": facts, "messages": list, "sessionId": sid})
 }
 
 func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {

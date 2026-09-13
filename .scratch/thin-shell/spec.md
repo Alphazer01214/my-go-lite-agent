@@ -1,6 +1,6 @@
 # Shell 缩薄（thin-shell）
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 
