@@ -37,8 +37,24 @@ Presentation 面的结构化渲染意图：从 args/result 纯函数投影（如
 _Avoid_: UI 组件、视图模型
 
 **Panel**:
-Web Render Medium 中一块可被插件填充的 UI 槽位（sidebar / main-overlay / toolbar-right 等）。插件经声明式组件树或同文档注入向 Panel 提供内容；Host 只保留页面壳与聊天主流程。
+Web Render Medium 中一块可被插件填充的 UI 槽位（sidebar / main-overlay / toolbar-right 等）。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp；Host 只保留页面壳与聊天主流程。
 _Avoid_: 页面、视图区、slot（可作别名，规范名词是 Panel）
+
+**Panel Component**:
+插件作者以原生 Web Component 实现的 Panel 内容单元：自定义元素 + Shadow DOM，经 props 接收数据、经 UI Action 与 SDK 回传交互。元素名以插件名为前缀。
+_Avoid_: 组件树、widget、UI 插件
+
+**UI Entry**:
+Manifest `ui.entry` 指向的插件 ES Module：加载时注册该插件的全部 Panel Component，由 Shell 经 /plugin-ui/ 动态 import。
+_Avoid_: 入口页、index.html（旧 HTML 注入形态）
+
+**PanelOp**:
+对 Panel 的一次变更指令：`set`（按 id 重挂载组件并设 props）或 `clear`（按 id 移除）。插件经 Frame 发出，Host 校验后向 Render Medium 广播。
+_Avoid_: 注入指令、panel 事件
+
+**Design Token**:
+Shell 暴露给 Panel Component 的 `--la-*` CSS 自定义属性集合：组件样式与宿主主题联动的唯一契约。
+_Avoid_: 主题变量、CSS 变量（泛称可用，规范名词是 Design Token）
 
 **UI Action**:
 Panel 内控件触发的回传事件：Host 将其包成 `cap=ui, method=action` 的 req 发给目标插件。与 Command 同属交互入口，但绑定在组件树节点上而非 `/` 前缀。

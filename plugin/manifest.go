@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -17,10 +18,40 @@ type CommandSpec struct {
 	Usage       string `json:"usage"`
 }
 
-// UISpec declares optional Web Medium Panel assets (ADR-0009).
+// UISpec declares optional Web Medium Panel components (ADR-0010).
 type UISpec struct {
-	Entry string   `json:"entry"`
-	Slots []string `json:"slots,omitempty"`
+	// Entry is the plugin's UI Entry ES Module, relative to the plugin's ui/ dir.
+	Entry  string    `json:"entry"`
+	Mounts []UIMount `json:"mounts,omitempty"`
+}
+
+// UIMount statically mounts one Panel Component into a Panel slot at startup.
+type UIMount struct {
+	Slot      string          `json:"slot"`
+	Component string          `json:"component"`
+	Props     json.RawMessage `json:"props,omitempty"`
+}
+
+// UISlots are the fixed Panel slots the Shell provides (ADR-0009).
+var UISlots = []string{"sidebar", "main-overlay", "toolbar-right"}
+
+// ValidUISlot reports whether slot is a Shell Panel slot.
+func ValidUISlot(slot string) bool {
+	for _, s := range UISlots {
+		if s == slot {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizedEntry returns the slash entry path guaranteed to resolve under ui/.
+func (u UISpec) NormalizedEntry() string {
+	clean := path.Clean(strings.ReplaceAll(u.Entry, "\\", "/"))
+	if !strings.HasPrefix(clean, "ui/") {
+		clean = "ui/" + clean
+	}
+	return clean
 }
 
 // Manifest is plugin.json next to a Plugin executable.
@@ -106,6 +137,60 @@ func (m *Manifest) Validate() error {
 		if strings.ContainsAny(c.Name, " \t") {
 			return fmt.Errorf("commands[%d].name %q must not contain whitespace", i, c.Name)
 		}
+	}
+	if m.UI != nil {
+		if err := m.UI.validate(m.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var elementTagPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// validate enforces the Panel Component contract (ADR-0010): the UI Entry is
+// an ES Module under ui/, and every mounted component tag belongs to this
+// plugin's namespace and targets a real Shell slot.
+func (u *UISpec) validate(pluginName string) error {
+	if strings.TrimSpace(u.Entry) == "" {
+		return fmt.Errorf("ui.entry is required")
+	}
+	clean := path.Clean(strings.ReplaceAll(u.Entry, "\\", "/"))
+	if strings.HasPrefix(clean, "/") || strings.Contains(clean, "..") {
+		return fmt.Errorf("ui.entry %q must stay under ui/", u.Entry)
+	}
+	if !strings.HasSuffix(clean, ".js") {
+		return fmt.Errorf("ui.entry %q must be a .js ES Module", u.Entry)
+	}
+	for i, mount := range u.Mounts {
+		if !ValidUISlot(mount.Slot) {
+			return fmt.Errorf("ui.mounts[%d].slot %q must be one of %v", i, mount.Slot, UISlots)
+		}
+		if !elementTagPattern.MatchString(mount.Component) || !strings.Contains(mount.Component, "-") {
+			return fmt.Errorf("ui.mounts[%d].component %q must be a valid custom element tag", i, mount.Component)
+		}
+		if !strings.HasPrefix(mount.Component, pluginName+"-") {
+			return fmt.Errorf("ui.mounts[%d].component %q must be prefixed with %q", i, mount.Component, pluginName+"-")
+		}
+		if len(mount.Props) > 0 {
+			trimmed := strings.TrimSpace(string(mount.Props))
+			if !json.Valid(mount.Props) || !strings.HasPrefix(trimmed, "{") {
+				return fmt.Errorf("ui.mounts[%d].props must be a JSON object", i)
+			}
+		}
+	}
+	return nil
+}
+
+// UIEntryExists reports whether the UI Entry module is present under dir.
+func (m *Manifest) UIEntryExists(dir string) error {
+	full := filepath.Join(dir, filepath.FromSlash(m.UI.NormalizedEntry()))
+	st, err := os.Stat(full)
+	if err != nil {
+		return fmt.Errorf("ui.entry %q not found in %s: %w", m.UI.Entry, dir, err)
+	}
+	if st.IsDir() {
+		return fmt.Errorf("ui.entry %q is a directory in %s", m.UI.Entry, dir)
 	}
 	return nil
 }

@@ -92,8 +92,7 @@ func New(opts Options) *Server {
 		if p.Manifest.UI != nil && p.Manifest.UI.Entry != "" {
 			s.uiDirs[p.Manifest.Name] = filepath.Join(p.Dir, "ui")
 		}
-	}
-	// Fan-out from Host events.
+	} // Fan-out from Host events.
 	if opts.Srv != nil {
 		opts.Srv.Subscribe(&serve.Subscriber{
 			OnEvent: func(e serve.Event) {
@@ -124,42 +123,12 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
 	s.http = &http.Server{Addr: opts.Addr, Handler: mux}
-	s.injectManifestUIs()
 	return s
 }
 
 // Serve serves on an existing listener.
 func (s *Server) Serve(ln net.Listener) error {
 	return s.http.Serve(ln)
-}
-
-// injectManifestUIs loads ui.entry HTML and emits mount-time panel set ops into the replay buffer.
-func (s *Server) injectManifestUIs() {
-	for _, p := range s.opts.Plan.Mounted {
-		ui := p.Manifest.UI
-		if ui == nil || ui.Entry == "" {
-			continue
-		}
-		slot := "sidebar"
-		if len(ui.Slots) > 0 && ui.Slots[0] != "" {
-			slot = ui.Slots[0]
-		}
-		full := filepath.Join(p.Dir, ui.Entry)
-		if !strings.HasPrefix(filepath.ToSlash(ui.Entry), "ui/") {
-			full = filepath.Join(p.Dir, "ui", ui.Entry)
-		}
-		raw, err := os.ReadFile(full)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: plugin %s ui.entry unreadable: %v\n", p.Manifest.Name, err)
-			continue
-		}
-		s.broadcast(Event{Topic: "panel", Data: serve.PanelOp{
-			Op:   "set",
-			Slot: slot,
-			ID:   p.Manifest.Name,
-			HTML: string(raw),
-		}})
-	}
 }
 
 // ListenAndServe blocks.
@@ -423,10 +392,10 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		running = s.opts.Srv.RunningSessions()
 	}
 	writeJSON(w, map[string]any{
-		"sessionId":  sid,
-		"status":     status,
-		"running":    running,
-		"busy":       len(running) > 0,
+		"sessionId": sid,
+		"status":    status,
+		"running":   running,
+		"busy":      len(running) > 0,
 	})
 }
 
@@ -548,20 +517,40 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "result": json.RawMessage(orEmptyJSON(out))})
 }
 
+// handlePlugins reports mounted plugins plus, for UI plugins, the Panel
+// Component contract (ADR-0010): entry URL and static mounts. The Shell
+// imports each entry module and applies the mounts itself.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	type mountItem struct {
+		Slot      string          `json:"slot"`
+		Component string          `json:"component"`
+		Props     json.RawMessage `json:"props,omitempty"`
+	}
+	type uiItem struct {
+		Entry  string      `json:"entry"`
+		Mounts []mountItem `json:"mounts"`
+	}
 	type item struct {
 		Name     string               `json:"name"`
+		Version  string               `json:"version,omitempty"`
 		Provides []string             `json:"provides,omitempty"`
-		Slots    []string             `json:"slots,omitempty"`
-		HasUI    bool                 `json:"hasUI"`
-		Command  []plugin.CommandSpec `json:"commands,omitempty"`
+		Commands []plugin.CommandSpec `json:"commands,omitempty"`
+		UI       *uiItem              `json:"ui,omitempty"`
 	}
 	var list []item
 	for _, p := range s.opts.Plan.Mounted {
-		it := item{Name: p.Manifest.Name, Command: p.Manifest.Commands, Provides: p.Manifest.Provides}
-		if p.Manifest.UI != nil {
-			it.HasUI = true
-			it.Slots = p.Manifest.UI.Slots
+		it := item{Name: p.Manifest.Name, Version: p.Manifest.Version,
+			Provides: p.Manifest.Provides, Commands: p.Manifest.Commands}
+		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
+			entry := strings.TrimPrefix(p.Manifest.UI.NormalizedEntry(), "ui/")
+			u := uiItem{
+				Entry:  "/plugin-ui/" + p.Manifest.Name + "/" + entry,
+				Mounts: []mountItem{},
+			}
+			for _, m := range ui.Mounts {
+				u.Mounts = append(u.Mounts, mountItem{Slot: m.Slot, Component: m.Component, Props: m.Props})
+			}
+			it.UI = &u
 		}
 		list = append(list, it)
 	}
@@ -582,7 +571,7 @@ func (s *Server) handlePluginUI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	rel := "index.html"
+	rel := "main.js" // UI Entry default (ADR-0010)
 	if len(parts) == 2 {
 		rel = parts[1]
 	}

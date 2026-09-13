@@ -6,13 +6,15 @@
 <title>lite agent</title>
 <style>
 :root {
-  --bg:#0f1115; --panel:#161a22; --panel2:#12161f; --ink:#e8eaed; --dim:#9aa0a6;
-  --accent:#7aa2f7; --line:#2a2f3a; --err:#f7768e; --ok:#9ece6a; --stop:#f7768e;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Design tokens (ADR-0010): Panel Components consume these across the
+     Shadow DOM boundary. Core contract: bg/panel/ink/dim/line/accent. */
+  --la-bg:#0f1115; --la-panel:#161a22; --la-panel2:#12161f; --la-ink:#e8eaed; --la-dim:#9aa0a6;
+  --la-accent:#7aa2f7; --la-line:#2a2f3a; --la-err:#f7768e; --la-ok:#9ece6a; --la-stop:#f7768e;
+  --la-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --la-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var(--la-ink);font-family:var(--la-sans)}
 
 /* 3-column grid: history | (chat | trace) | plugins */
 #app{
@@ -22,27 +24,27 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   min-height:0;
 }
 #rail{
-  background:var(--panel2);
-  border-right:1px solid var(--line);
+  background:var(--la-panel2);
+  border-right:1px solid var(--la-line);
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
 }
-#rail-head{padding:12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+#rail-head{padding:12px;border-bottom:1px solid var(--la-line);display:flex;gap:8px;align-items:center}
 #rail-head .brand{font-size:13px;font-weight:600;flex:1}
-#btn-new{background:var(--accent);color:#0b1020;border:0;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer}
+#btn-new{background:var(--la-accent);color:#0b1020;border:0;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer}
 #session-list{flex:1;overflow-y:auto;padding:8px;min-height:0}
 .sess-item{
-  padding:8px 10px;border-radius:8px;font-size:12px;color:var(--dim);
+  padding:8px 10px;border-radius:8px;font-size:12px;color:var(--la-dim);
   cursor:pointer;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.sess-item:hover{background:#1a1f2a;color:var(--ink)}
-.sess-item.active{background:#1a1f2a;color:var(--ink);border:1px solid var(--line)}
+.sess-item:hover{background:#1a1f2a;color:var(--la-ink)}
+.sess-item.active{background:#1a1f2a;color:var(--la-ink);border:1px solid var(--la-line)}
 
 #right{
-  background:var(--panel2);
-  border-left:1px solid var(--line);
+  background:var(--la-panel2);
+  border-left:1px solid var(--la-line);
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
 }
-#right-head{padding:12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim)}
+#right-head{padding:12px;border-bottom:1px solid var(--la-line);font-size:12px;color:var(--la-dim)}
 #slot-toolbar-right{flex:1;overflow-y:auto;padding:8px;min-height:0}
 
 /* center workspace */
@@ -53,77 +55,77 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   min-height:0;min-width:0;
 }
 #chat-col,#trace-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
-#chat-col{border-right:1px solid var(--line)}
+#chat-col{border-right:1px solid var(--la-line)}
 #pane-head{
-  padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);
-  font-size:12px;color:var(--dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0
+  padding:10px 16px;border-bottom:1px solid var(--la-line);background:var(--la-panel);
+  font-size:12px;color:var(--la-dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0
 }
-#pane-head a{color:var(--accent);text-decoration:none}
+#pane-head a{color:var(--la-accent);text-decoration:none}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
 #trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
 
 #composer{
-  display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);
-  background:var(--panel);flex-shrink:0;align-items:flex-end
+  display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--la-line);
+  background:var(--la-panel);flex-shrink:0;align-items:flex-end
 }
 #input{
-  flex:1;background:var(--bg);border:1px solid var(--line);color:var(--ink);
+  flex:1;background:var(--la-bg);border:1px solid var(--la-line);color:var(--la-ink);
   border-radius:10px;padding:10px 12px;font:inherit;resize:none;min-height:44px;max-height:160px
 }
 #btn-send{
-  background:var(--accent);color:#0b1020;border:0;border-radius:10px;
+  background:var(--la-accent);color:#0b1020;border:0;border-radius:10px;
   padding:0 18px;height:44px;font-weight:700;cursor:pointer;font-size:13px;min-width:72px
 }
-#btn-send.running{background:var(--stop);color:#fff}
-#status{font-size:12px;color:var(--dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
+#btn-send.running{background:var(--la-stop);color:#fff}
+#status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
 .trace-row{padding:6px 12px;font-size:12px;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
 .trace-row:hover{background:#1a1f2a}
-.trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-family:var(--mono)}
-.trace-row .t-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
-.trace-row .t-seq{flex:0 0 auto;font-size:10px;color:var(--dim);font-family:var(--mono)}
+.trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--la-dim);font-family:var(--la-mono)}
+.trace-row .t-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--la-ink)}
+.trace-row .t-seq{flex:0 0 auto;font-size:10px;color:var(--la-dim);font-family:var(--la-mono)}
 .trace-row.user .t-kind{color:#7aa2f7}
-.trace-row.assistant .t-kind{color:var(--ok)}
+.trace-row.assistant .t-kind{color:var(--la-ok)}
 .trace-row.system .t-kind{color:#bb9af7}
 .trace-row.tool_call .t-kind{color:#e0af68}
 .trace-row.tool_result .t-kind{color:#f7768e}
 .trace-row.reasoning .t-kind{color:#bb9af7}
 .trace-row.open{background:#1a1f2a}
-.trace-detail{display:none;padding:4px 12px 10px 92px;font-size:11px;color:var(--dim);white-space:pre-wrap;font-family:var(--mono);border-bottom:1px solid var(--line)}
+.trace-detail{display:none;padding:4px 12px 10px 92px;font-size:11px;color:var(--la-dim);white-space:pre-wrap;font-family:var(--la-mono);border-bottom:1px solid var(--la-line)}
 .trace-detail.open{display:block}
 
 .msg{margin:0 0 14px;max-width:52rem}
-.msg.user{color:var(--ink);background:var(--panel2);border-radius:10px;padding:10px 12px}
-.msg.user:before{content:"you";display:block;color:var(--dim);font-size:11px;margin-bottom:4px}
+.msg.user{color:var(--la-ink);background:var(--la-panel2);border-radius:10px;padding:10px 12px}
+.msg.user:before{content:"you";display:block;color:var(--la-dim);font-size:11px;margin-bottom:4px}
 .msg.assistant{line-height:1.55}
-.msg.assistant pre{background:#0b0e14;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--mono);font-size:13px}
-.msg.assistant code{font-family:var(--mono);font-size:0.92em;background:#1a1f2a;padding:1px 4px;border-radius:4px}
+.msg.assistant pre{background:#0b0e14;border:1px solid var(--la-line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--la-mono);font-size:13px}
+.msg.assistant code{font-family:var(--la-mono);font-size:0.92em;background:#1a1f2a;padding:1px 4px;border-radius:4px}
 .msg.assistant pre code{background:none;padding:0}
 .msg.assistant h1,.msg.assistant h2,.msg.assistant h3{margin:0.6em 0 0.35em;line-height:1.25}
 .msg.assistant ul{margin:0.3em 0;padding-left:1.2em}
-.msg.assistant blockquote{border-left:3px solid var(--line);margin:0.4em 0;padding:0.1em 0 0.1em 0.8em;color:var(--dim)}
+.msg.assistant blockquote{border-left:3px solid var(--la-line);margin:0.4em 0;padding:0.1em 0 0.1em 0.8em;color:var(--la-dim)}
 
 /* dsh-style disclosure rows: everything except user + final assistant is folded */
-.disc{margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+.disc{margin:0 0 8px;border:1px solid var(--la-line);border-radius:8px;background:var(--la-panel2);overflow:hidden}
 .disc>summary{
-  list-style:none;cursor:pointer;padding:7px 10px;font-size:12px;color:var(--dim);
+  list-style:none;cursor:pointer;padding:7px 10px;font-size:12px;color:var(--la-dim);
   display:flex;gap:8px;align-items:center;user-select:none
 }
 .disc>summary::-webkit-details-marker{display:none}
-.disc>summary:before{content:"▸";font-size:10px;color:var(--dim)}
+.disc>summary:before{content:"▸";font-size:10px;color:var(--la-dim)}
 .disc[open]>summary:before{content:"▾"}
-.disc>summary .s-title{color:var(--ink);font-weight:600}
-.disc>summary .s-meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11px}
-.disc>.disc-body{padding:0 10px 10px 26px;font-size:12px;color:var(--dim);white-space:pre-wrap;font-family:var(--mono)}
+.disc>summary .s-title{color:var(--la-ink);font-weight:600}
+.disc>summary .s-meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--la-mono);font-size:11px}
+.disc>.disc-body{padding:0 10px 10px 26px;font-size:12px;color:var(--la-dim);white-space:pre-wrap;font-family:var(--la-mono)}
 .disc.think>summary:before{content:"▸"}
-.disc.tool>summary .s-title{color:var(--accent)}
+.disc.tool>summary .s-title{color:var(--la-accent)}
 .disc.live{border-color:#334}
-.disc.live>summary:before{content:"◉";color:var(--accent)}
+.disc.live>summary:before{content:"◉";color:var(--la-accent)}
 
-.message{font-size:12px;margin:0 0 8px;color:var(--dim)}
-.message.error{color:var(--err)}
+.message{font-size:12px;margin:0 0 8px;color:var(--la-dim)}
+.message.error{color:var(--la-err)}
 .message.warn{color:#e0af68}
-.progress{font-size:12px;color:var(--dim);font-family:var(--mono);margin-bottom:8px}
+.progress{font-size:12px;color:var(--la-dim);font-family:var(--la-mono);margin-bottom:8px}
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
@@ -141,12 +143,12 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   <section id="center">
     <div id="split">
       <section id="chat-col">
-        <div id="pane-head"><span>Chat</span><span id="session-label" style="font-family:var(--mono);font-size:11px"></span></div>
+        <div id="pane-head"><span>Chat</span><span id="session-label" style="font-family:var(--la-mono);font-size:11px"></span></div>
         <div id="chat"></div>
         <div id="status"></div>
       </section>
       <section id="trace-col">
-        <div id="pane-head"><span>Session trace</span><button id="btn-dump" title="Export session trace JSON" style="background:none;border:1px solid var(--line);color:var(--dim);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer">dump</button><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
+        <div id="pane-head"><span>Session trace</span><button id="btn-dump" title="Export session trace JSON" style="background:none;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer">dump</button><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
         <div id="trace-list"></div>
       </section>
     </div>
@@ -264,7 +266,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   function appendPre(text, cls){
     var el = document.createElement('pre');
     el.className = cls || 'message';
-    el.style.cssText = 'white-space:pre-wrap;font-family:var(--mono);font-size:12px';
+    el.style.cssText = 'white-space:pre-wrap;font-family:var(--la-mono);font-size:12px';
     el.textContent = text;
     chat.appendChild(el); scrollChat(true);
   }
@@ -380,7 +382,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
       // Non-final status: fold as dim one-liner disclosure (dsh-like).
       freezeLive();
       var row = makeDisc('', 'status', text || '', '', false);
-      if(level === 'error') row.style.borderColor = 'var(--err)';
+      if(level === 'error') row.style.borderColor = 'var(--la-err)';
       chat.appendChild(row); scrollChat();
       return;
     }
@@ -539,7 +541,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   function selectSession(id){
     fetch('/api/session/select', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({sessionId:id})})
       .then(function(r){return r.json();}).then(function(b){
-        currentSessionId = id || '';
+        setSessionId(id);
         sessionLabel.textContent = id || '(default)';
         historyReady = false;
         clearTurnUI();
@@ -553,8 +555,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 
   function refreshRunState(){
     fetch('/api/session').then(function(r){return r.json();}).then(function(b){
-      if(b.sessionId !== undefined) currentSessionId = b.sessionId || '';
-      if(b.sessionId) sessionLabel.textContent = b.sessionId;
+      if(b.sessionId !== undefined) setSessionId(b.sessionId);
+      if(currentSessionId) sessionLabel.textContent = currentSessionId;
       setRunning(b.status === 'running', currentSessionId);
       // Mid-run switch/refresh: resume live Thinking from rebuilt facts.
       if(b.status === 'running' && !thinkingEl && !liveEl){
@@ -612,30 +614,67 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
     }
   }
 
+  // ---- Panel Components (ADR-0010) ----
+  // set = remount by id (new element + property-assigned props); clear = remove by id.
+  // Ops may arrive before the entry module loads; the custom element upgrade
+  // then wires the already-inserted element without losing props.
+  function panelHost(slot){
+    if(slot === 'sidebar') return document.getElementById('rail');
+    if(slot === 'main-overlay') return document.getElementById('main-overlay');
+    return document.getElementById('slot-toolbar-right');
+  }
   function applyPanel(op){
-    var host;
-    if(op.slot === 'sidebar') host = document.getElementById('rail');
-    else if(op.slot === 'toolbar-right') host = document.getElementById('slot-toolbar-right');
-    else if(op.slot === 'main-overlay') host = document.getElementById('main-overlay');
-    else host = document.getElementById('slot-toolbar-right');
-    if(!host) return;
+    if(!op || !op.id) return;
     var node = document.getElementById('panel-'+op.id);
     if(op.op === 'clear'){ if(node) node.remove(); return; }
-    if(!node){
-      node = document.createElement('div');
-      node.id = 'panel-'+op.id;
-      node.className = 'panel-root';
-      host.appendChild(node);
+    if(!op.component) return;
+    if(node) node.remove();
+    node = document.createElement(op.component);
+    node.id = 'panel-'+op.id;
+    node.className = 'panel-root';
+    node.style.display = 'block';
+    if(op.props !== undefined && op.props !== null){
+      try { node.props = (typeof op.props === 'string') ? JSON.parse(op.props) : op.props; }
+      catch(e){ node.props = {}; }
     }
-    if(op.op === 'set') node.innerHTML = op.html || '';
-    if(op.op === 'append') node.insertAdjacentHTML('beforeend', op.html || '');
-    if(window.LiteAgent && window.LiteAgent.bind) window.LiteAgent.bind(node);
+    var host = panelHost(op.slot);
+    if(host) host.appendChild(node);
+  }
+
+  // Session channel for components (LiteAgent.onSessionChange rides on this).
+  function setSessionId(id){
+    id = id || '';
+    if(window.__liteSessionId === id && currentSessionId === id) return;
+    currentSessionId = id;
+    window.__liteSessionId = id;
+    if(window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit('__session', id);
+  }
+
+  // Import every mounted plugin's UI Entry and apply its static mounts.
+  // Query params: plugin name (components derive it from import.meta.url)
+  // and version (cache-busting across plugin upgrades).
+  function loadPluginUIs(){
+    fetch('/api/plugins').then(function(r){return r.json();}).then(function(b){
+      (b.plugins||[]).forEach(function(p){
+        if(!p.ui || !p.ui.entry) return;
+        var url = p.ui.entry + '?plugin=' + encodeURIComponent(p.name) + '&v=' + encodeURIComponent(p.version||'');
+        import(url).then(function(){
+          (p.ui.mounts||[]).forEach(function(m){
+            applyPanel({op:'set', slot:m.slot, id:m.component, component:m.component, props:m.props});
+          });
+        }).catch(function(e){
+          appendPre('plugin ui failed: ' + p.name + ' ' + e, 'message error');
+        });
+      });
+    }).catch(function(){});
   }
 
   function applySSE(env){
     if(!historyReady && env.topic !== 'panel') return;
     var topic = env.topic;
     var d = env.data !== undefined ? env.data : env;
+    // Fan live events out to Panel Components subscribed via LiteAgent.on.
+    if(window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit(topic, d);
     if(topic === 'presentation'){ onPresentation(d); return; }
     if(topic === 'panel'){ applyPanel(d); return; }
     if(topic === 'stream'){
@@ -689,13 +728,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
     es.onerror = function(){ statusEl.textContent = 'sse reconnecting…'; };
   }
 
-  function rehydrateShell(){
-    clearTurnUI();
-    return loadHistory().then(function(){
-      loadTrace(); loadSessions(); refreshRunState();
-    });
-  }
-
   function sendOrStop(){
     if(running){
       fetch('/api/turn/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({sessionId: currentSessionId})})
@@ -712,10 +744,12 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
         .then(function(body){
           if(body.error) appendPre(body.error, 'message error');
           else if(body.output) appendPre(body.output, 'message');
-          // /refresh only rescans manifests server-side; also rehydrate this Shell view.
+          // /refresh rescans manifests server-side; plugin code may have
+          // changed, and module identities can't be swapped in place — the
+          // Session Log is the truth, so reload rebuilds everything (ADR-0010).
           var cmd = text.replace(/^\//,'').split(/\s+/)[0];
           if(cmd === 'refresh'){
-            rehydrateShell();
+            location.reload();
           }
         });
       return;
@@ -744,7 +778,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   btnNew.onclick = function(){
     fetch('/api/session/new', {method:'POST'}).then(function(r){return r.json();}).then(function(b){
       if(!b.ok){ appendPre(b.error||'new session failed','message error'); return; }
-      currentSessionId = b.sessionId || '';
+      setSessionId(b.sessionId);
       sessionLabel.textContent = b.sessionId || '(default)';
       chat.innerHTML = '';
       streamBuf = '';
@@ -759,6 +793,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 
   // History first, then live SSE (avoids replay double-paint on refresh).
   loadSessions();
+  loadPluginUIs();
   loadHistory().then(function(){ loadTrace(); refreshRunState(); openSSE(); });
 })();
 </script>

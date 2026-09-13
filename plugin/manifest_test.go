@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,5 +71,98 @@ func TestManifestCommandsValidate(t *testing.T) {
 	}
 	if err := bad.Validate(); err == nil {
 		t.Fatal("want whitespace command name error")
+	}
+}
+
+func TestUISpecValidate(t *testing.T) {
+	ok := Manifest{
+		Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x",
+		UI: &UISpec{
+			Entry: "main.js",
+			Mounts: []UIMount{
+				{Slot: "sidebar", Component: "uidemo-mode-panel", Props: json.RawMessage(`{"mode":"chat"}`)},
+			},
+		},
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid ui spec rejected: %v", err)
+	}
+
+	// entry may live nested under ui/.
+	nested := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x",
+		UI: &UISpec{Entry: "ui/nested/main.js"}}
+	if err := nested.Validate(); err != nil {
+		t.Fatalf("nested entry rejected: %v", err)
+	}
+
+	// mounts are optional (dynamic PanelOp-only plugins).
+	dynamic := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x",
+		UI: &UISpec{Entry: "main.js"}}
+	if err := dynamic.Validate(); err != nil {
+		t.Fatalf("mount-less ui spec rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		ui   UISpec
+	}{
+		{"missing entry", UISpec{Mounts: nil}},
+		{"entry not js", UISpec{Entry: "index.html"}},
+		{"entry escapes ui", UISpec{Entry: "../evil/main.js"}},
+		{"entry absolute", UISpec{Entry: "/etc/main.js"}},
+		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "footer", Component: "uidemo-x"}}}},
+		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "other-panel"}}}},
+		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo"}}}},
+		{"component bad chars", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-X"}}}},
+		{"props not object", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-x", Props: json.RawMessage(`[1]`)}}}},
+		{"props malformed", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-x", Props: json.RawMessage(`{`)}}}},
+	}
+	for _, tc := range cases {
+		m := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x", UI: &tc.ui}
+		if err := m.Validate(); err == nil {
+			t.Errorf("%s: want error", tc.name)
+		}
+	}
+}
+
+func TestUISpecNormalizedEntry(t *testing.T) {
+	for in, want := range map[string]string{
+		"main.js":        "ui/main.js",
+		"ui/main.js":     "ui/main.js",
+		"ui/nested/a.js": "ui/nested/a.js",
+		`sub\win.js`:     "ui/sub/win.js",
+	} {
+		if got := (UISpec{Entry: in}).NormalizedEntry(); got != want {
+			t.Errorf("NormalizedEntry(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUIEntryExists(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "bin",
+		UI: &UISpec{Entry: "main.js"}}
+	if err := m.UIEntryExists(dir); err == nil {
+		t.Fatal("want missing ui.entry error")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ui", "main.js"), []byte("export{};"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UIEntryExists(dir); err != nil {
+		t.Fatalf("ui.entry should exist: %v", err)
+	}
+}
+
+func TestValidUISlot(t *testing.T) {
+	for _, s := range UISlots {
+		if !ValidUISlot(s) {
+			t.Errorf("declared slot %q must be valid", s)
+		}
+	}
+	if ValidUISlot("footer") {
+		t.Error("footer must not be a slot")
 	}
 }

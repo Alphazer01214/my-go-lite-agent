@@ -21,15 +21,17 @@ const (
 	UICallMethod          = "action"
 )
 
-// PanelOp is one Web Medium panel mutation (set|append|clear). See CONTEXT.md Panel.
+// PanelOp is one Web Medium panel mutation (set|clear). See CONTEXT.md PanelOp.
 type PanelOp struct {
-	Op   string `json:"op"`
-	Slot string `json:"slot"`
-	ID   string `json:"id"`
-	HTML string `json:"html,omitempty"`
+	Op        string          `json:"op"`                  // set | clear
+	Slot      string          `json:"slot"`                // sidebar | main-overlay | toolbar-right
+	ID        string          `json:"id"`                  // stable panel id; set replaces by id
+	Component string          `json:"component,omitempty"` // custom element tag "<plugin>-*", required for set
+	Props     json.RawMessage `json:"props,omitempty"`     // JSON object passed to the element
 }
 
-// EmitPanel sends a Panel injection op as a broadcast evt Frame.
+// EmitPanel sends a Panel Component mutation (set|clear) as a broadcast evt
+// Frame. Host validates component prefixing before fanning out (ADR-0010).
 func (s *Server) EmitPanel(op PanelOp) error {
 	payload, err := json.Marshal(op)
 	if err != nil {

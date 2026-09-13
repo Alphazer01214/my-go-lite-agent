@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,7 @@ func TestPluginUIAndTraversal(t *testing.T) {
 	if err := os.MkdirAll(uiDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(uiDir, "index.html"), []byte("<b>ok-index</b>"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(uiDir, "main.js"), []byte("export{};"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("nope"), 0o644); err != nil {
@@ -66,29 +67,45 @@ func TestPluginUIAndTraversal(t *testing.T) {
 		Dir: dir,
 		Manifest: plugin.Manifest{
 			Name: "demo", Version: "0.1.0", Protocol: plugin.CurrentProtocol, Entry: "x",
-			UI: &plugin.UISpec{Entry: "ui/index.html", Slots: []string{"sidebar"}},
+			UI: &plugin.UISpec{
+				Entry: "main.js",
+				Mounts: []plugin.UIMount{
+					{Slot: "sidebar", Component: "demo-panel", Props: json.RawMessage(`{"a":1}`)},
+				},
+			},
 		},
 	}}}
 	s := New(Options{Plan: plan, CommandPlane: nopCommands{}})
 	ts := httptest.NewServer(s.http.Handler)
 	defer ts.Close()
 
-	ok, err := http.Get(ts.URL + "/plugin-ui/demo/index.html")
+	// UI Entry module is served from the plugin's ui/ dir.
+	ok, err := http.Get(ts.URL + "/plugin-ui/demo/main.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(ok.Body)
 	_ = ok.Body.Close()
-	if ok.StatusCode != http.StatusOK || !strings.Contains(string(b), "ok-index") {
-		t.Fatalf("want index ok, status=%d body=%s", ok.StatusCode, b)
+	if ok.StatusCode != http.StatusOK || !strings.Contains(string(b), "export") {
+		t.Fatalf("want entry module ok, status=%d body=%s", ok.StatusCode, b)
 	}
 
-	// Mount-time inject should be in replay.
-	s.mu.Lock()
-	replayN := len(s.replay)
-	s.mu.Unlock()
-	if replayN < 1 {
-		t.Fatal("want mount-time panel in replay")
+	// /api/plugins exposes the Panel Component contract for the Shell loader.
+	res, err := http.Get(ts.URL + "/api/plugins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	for _, want := range []string{
+		`"entry":"/plugin-ui/demo/main.js"`,
+		`"component":"demo-panel"`,
+		`"slot":"sidebar"`,
+		`"name":"demo"`,
+	} {
+		if !strings.Contains(string(pb), want) {
+			t.Fatalf("api/plugins missing %s: %s", want, pb)
+		}
 	}
 
 	// Traversal must not serve secret.

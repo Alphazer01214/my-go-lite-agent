@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/discovery"
+	"github.com/tomori/my-go-lite-agent/plugin"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -85,12 +86,14 @@ type Server struct {
 	OnRender func(ri RenderIntent)
 }
 
-// PanelOp is one Web Medium panel mutation (ADR-0009).
+// PanelOp is one Web Medium panel mutation (ADR-0010): mount (set) or remove
+// (clear) a Panel Component by id. See CONTEXT.md PanelOp.
 type PanelOp struct {
-	Op   string `json:"op"`
-	Slot string `json:"slot"`
-	ID   string `json:"id"`
-	HTML string `json:"html,omitempty"`
+	Op        string          `json:"op"`                  // set | clear
+	Slot      string          `json:"slot"`                // sidebar | main-overlay | toolbar-right
+	ID        string          `json:"id"`                  // stable panel id; set replaces by id
+	Component string          `json:"component,omitempty"` // custom element tag, required for set
+	Props     json.RawMessage `json:"props,omitempty"`     // JSON object passed to the element
 }
 
 // PresentationPanelMethod is a Panel injection op (set|append|clear).
@@ -347,11 +350,11 @@ func (s *Server) handleFromPlugin(from string, f *protocol.Frame) {
 	case protocol.TypeRes:
 		s.complete(f)
 	case protocol.TypeEvt:
-		s.collectEvent(f)
+		s.collectEvent(from, f)
 	}
 }
 
-func (s *Server) collectEvent(f *protocol.Frame) {
+func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	// Presentation Cards are broadcast (may have no id); record before id filter.
 	if f.Cap == PresentationCap && f.Method == PresentationCardMethod {
 		s.recordCard(f)
@@ -360,7 +363,7 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 		s.dispatchRender(f)
 	}
 	if f.Cap == PresentationCap && f.Method == PresentationPanelMethod {
-		s.dispatchPanel(f)
+		s.dispatchPanel(from, f)
 	}
 	if f.ID == "" {
 		return
@@ -412,17 +415,74 @@ func (s *Server) dispatchRender(f *protocol.Frame) {
 	}
 }
 
-func (s *Server) dispatchPanel(f *protocol.Frame) {
+func (s *Server) dispatchPanel(from string, f *protocol.Frame) {
 	var op PanelOp
 	if len(f.Payload) > 0 {
 		if err := json.Unmarshal(f.Payload, &op); err != nil {
+			s.rejectPanel(from, "malformed payload")
 			return
 		}
 	}
-	if op.ID == "" {
+	if err := s.validatePanelOp(from, op); err != nil {
+		s.rejectPanel(from, err.Error())
 		return
 	}
 	s.publish(Event{Topic: "panel", Data: op})
+}
+
+// validatePanelOp enforces the Panel Component contract (ADR-0010): the
+// component tag must belong to the emitting plugin and target a real slot.
+func (s *Server) validatePanelOp(from string, op PanelOp) error {
+	if op.Op != "set" && op.Op != "clear" {
+		return fmt.Errorf("op %q must be set|clear", op.Op)
+	}
+	if op.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+	if !plugin.ValidUISlot(op.Slot) {
+		return fmt.Errorf("unknown slot %q", op.Slot)
+	}
+	if op.Op == "set" {
+		if op.Component == "" {
+			return fmt.Errorf("component is required for set")
+		}
+		if !ValidComponentTag(op.Component) {
+			return fmt.Errorf("component %q must be a valid custom element tag", op.Component)
+		}
+		if !strings.HasPrefix(op.Component, from+"-") {
+			return fmt.Errorf("component %q must be prefixed with %q", op.Component, from+"-")
+		}
+	}
+	if len(op.Props) > 0 && !json.Valid(op.Props) {
+		return fmt.Errorf("props must be valid JSON")
+	}
+	return nil
+}
+
+// ValidComponentTag reports whether tag is a legal custom element name
+// (lowercase, starts with a letter, contains a hyphen).
+func ValidComponentTag(tag string) bool {
+	if len(tag) < 3 || tag[0] < 'a' || tag[0] > 'z' || !strings.Contains(tag, "-") {
+		return false
+	}
+	for _, r := range tag {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// rejectPanel suppresses the op and surfaces the violation instead of
+// silently dropping it. Panel evt frames carry no id, so there is no
+// correlated error Frame; the warn status is the observable rejection.
+func (s *Server) rejectPanel(from, reason string) {
+	if s.OnStatus != nil {
+		s.OnStatus(fmt.Sprintf("warn: rejected panel op from %s: %s", from, reason))
+	}
+	s.publish(Event{Topic: "status", Data: map[string]string{
+		"status": fmt.Sprintf("warn: rejected panel op from %s: %s", from, reason),
+	}})
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {

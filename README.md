@@ -107,12 +107,18 @@ cd dist
 - Host **Shell** 提供布局、默认聊天面（markdown / 工具卡 / 流式正文 / Thinking）与命令输入；**仅聊天区滚动**
 - 侧栏链到 **`/trace`**：独立 Session 轨迹页（user / assistant / system / tool_call / tool_result / step…）
 - Session 持久化：session 插件把事实写入 JSONL（默认 `./sessions/`，可用 `SESSION_DATA_DIR` 覆盖）；Host 重启后 `/api/history` 仍可回放
-- 插件经 Manifest `"ui"` 或运行时 `EmitPanel` 向 Panel 槽注入（完全信任作者，零 Node）
-- 控件用 `data-la-plugin` 等属性或 `LiteAgent.emitUIAction` 回传 `cap=ui,method=action`
-- 作者 SDK：`GET /sdk/lite-agent.js`
 - 新标签页 SSE `?replay=1` 回放最近 presentation 事件
 
-示例面板插件：`plugins/uidemo`。
+**Panel Component（插件业务 UI，ADR-0010）**——插件自带 html/js/css，Host 零 Web 渲染编码：
+
+- Manifest 声明 UI Entry 与静态挂载：`"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "<插件名>-mode-panel", "props": {...}}]}`
+- `ui/main.js` 是普通 ES Module：`customElements.define('<插件名>-…', …)`，组件用 Shadow DOM + Shell 的 `--la-*` Design Token 保持主题联动；零构建链
+- 运行时变更走 `EmitPanel(PanelOp{op: set|clear, slot, id, component, props})`；Host 校验组件名必须以插件名为前缀
+- 组件内部经全局 `LiteAgent` 回传：`emitUIAction(plugin, panel, event, value)` → 插件的 `cap=ui, method=action`；`onSessionChange(fn)` 响应会话切换；`on(topic, fn)` 订阅 SSE；`call(cap, method, payload)` 直调 Capability
+- `/refresh` 后插件变更由 Shell 整页刷新承接（状态真源在 Session Log）
+- 作者 SDK：`GET /sdk/lite-agent.js`（与仓库 `sdk/lite-agent.js` 同源，可拷贝）
+
+参考实现：`plugins/uidemo`（静态挂载 + Shadow DOM + UI Action 回传 + 动态 PanelOp + 会话徽标五面俱全）。
 
 ### 单发一轮（脚本友好）
 

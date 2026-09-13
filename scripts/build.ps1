@@ -65,7 +65,9 @@ try {
     Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]' "[]" 0 "System prompt segment assembler"
     Install-Plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 "Echo capability plugin"
     Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]' "[]" 0 "Demo waterfall interceptor"
-    Install-Plugin "uidemo"         "./plugins/uidemo"         '[]' "[]" 0 "Web Panel demo (mode switch)"
+    Install-Plugin "uidemo"         "./plugins/uidemo"         '[]' "[]" 0 "Web Panel Component reference"
+    # uidemo ships its own manifest (ui.entry + ui.mounts) and its UI Entry module.
+    Copy-Item (Join-Path $root "plugins\uidemo\plugin.json") (Join-Path $dist "plugins\uidemo\") -Force
     Copy-Item (Join-Path $root "plugins\uidemo\ui") (Join-Path $dist "plugins\uidemo\") -Recurse -Force
 
     Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
