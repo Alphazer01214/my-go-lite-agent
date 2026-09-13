@@ -44,7 +44,8 @@
 
 ```text
 dist/
-  host.exe
+  liteagent-cli.exe     CLI Medium（REPL / -turn / session ops / 诊断）
+  liteagent-server.exe  Web Medium（-serve，可与 -repl 组合）
   plugins/
     session/           memory Session Log
     llm-openai/        OpenAI 兼容 LLM（DeepSeek 等）+ config.example.json
@@ -73,7 +74,7 @@ copy plugins\llm-openai\config.example.json plugins\llm-openai\config.json
 # 编辑 config.json 填入 apiKey / model
 
 cd dist
-.\host.exe -plugins plugins -assembly examples\chat.json -repl
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -repl
 ```
 
 输入多轮对话；`/help` 查看命令；`/` 后按 Tab 可补全命令/插件名；`/exit` 或 Ctrl+C 退出。
@@ -91,15 +92,15 @@ cd dist
 带文件工具：
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\agent.json -repl
+.\liteagent-cli.exe -plugins plugins -assembly examples\agent.json -repl
 ```
 
 ### Web Medium（浏览器）
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788
+.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788
 # 可与终端 REPL 并存：
-.\host.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788 -repl
+.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788 -repl
 ```
 
 打开 `http://127.0.0.1:7788`：
@@ -123,13 +124,13 @@ cd dist
 ### 单发一轮（脚本友好）
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\chat.json -turn "hello" -session-derive
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "hello" -session-derive
 ```
 
 ### 无真实 Key 时（fixture）
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\assembly.json `
+.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
   -turn "hello" -session-derive
 ```
 
@@ -137,33 +138,33 @@ cd dist
 
 ```powershell
 # 只扫描，不挂载
-.\host.exe -discover plugins
+.\liteagent-cli.exe -discover plugins
 
 # 挂载并 dump Assembly 树
-.\host.exe -plugins plugins -assembly examples\chat.json -dump
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -dump
 ```
 
 ### Session / 不变量 / 注入
 
 ```powershell
 # 追加事实并派生 Model Context
-.\host.exe -plugins plugins -assembly examples\assembly.json `
+.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
   -session-append '[{"role":"user","content":"hi"}]' -session-derive
 
 # 校验：claimed 必须能从 Session Log 重建，否则拒绝
-.\host.exe -plugins plugins -assembly examples\assembly.json `
+.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
   -session-append '[{"role":"user","content":"hi"}]' `
   -agent-request '[{"role":"user","content":"hi"}]'
 
 # 注入模型可见消息（不启动 Loop）
-.\host.exe -plugins plugins -assembly examples\assembly.json `
+.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
   -agent-inject '[{"role":"system","content":"note"}]' -session-derive
 ```
 
 ### Waterfall 审计
 
 ```powershell
-.\host.exe -plugins plugins -assembly examples\chat.json `
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json `
   -turn "audit me" -audit
 ```
 
@@ -261,7 +262,7 @@ go test ./...
 go vet ./...
 ```
 
-主缝测试在 `cmd/host`：真实 Host 可执行 + fixture 插件进程，断言外部可观察行为。
+主缝测试在 `cmd/liteagent-cli`（CLI 面）与 `cmd/liteagent-server`（Web 面）：真实 Host 可执行 + fixture 插件进程，断言外部可观察行为。
 
 规格与工单：`.scratch/plugin-host-runtime/`。
 

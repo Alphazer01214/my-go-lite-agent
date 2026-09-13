@@ -16,7 +16,7 @@ import (
 
 func TestWebServeShellAndMessage(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-server")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
@@ -31,6 +31,7 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	_ = ln.Close()
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr)
+	cmd.Env = hostEnv(t)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestWebServeShellAndMessage(t *testing.T) {
 
 func TestWebCommandOutputAndHistory(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-server")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
@@ -152,6 +153,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	_ = ln.Close()
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr)
+	cmd.Env = hostEnv(t)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

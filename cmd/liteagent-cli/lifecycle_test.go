@@ -10,7 +10,7 @@ import (
 
 func TestStartFailsWhenConsumesUnmet(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildConsumerPluginDir(t, root, pluginsDir, "consumer") // consumes echo, echo not mounted
@@ -19,6 +19,7 @@ func TestStartFailsWhenConsumesUnmet(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["consumer"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want fail-loud for unmet consumes: %s", out)
@@ -31,7 +32,7 @@ func TestStartFailsWhenConsumesUnmet(t *testing.T) {
 
 func TestCallTimeout(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSlowPluginDir(t, root, pluginsDir, "slow")
@@ -41,6 +42,7 @@ func TestCallTimeout(t *testing.T) {
 
 	start := time.Now()
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-call-plugin", "slow")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want timeout error: %s", out)
@@ -55,7 +57,7 @@ func TestCallTimeout(t *testing.T) {
 
 func TestCrashThenOnDemandRestart(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildCrashOncePluginDir(t, root, pluginsDir, "crashy")
@@ -68,7 +70,9 @@ func TestCrashThenOnDemandRestart(t *testing.T) {
 	// then succeed on the same host invocation if we call twice — use -call-plugin twice via script.
 	// Host CLI: -call-plugin name sends one call. We invoke host once; Start launches plugin,
 	// plugin crashes; on-demand restart on Call should bring it back and succeed.
-	out, err := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-call-plugin", "crashy").CombinedOutput()
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-call-plugin", "crashy")
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("want on-demand restart success: %v\n%s", err, out)
 	}
@@ -79,7 +83,7 @@ func TestCrashThenOnDemandRestart(t *testing.T) {
 
 func TestHostExitClosesPlugins(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")

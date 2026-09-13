@@ -33,7 +33,7 @@ func buildEmptyToolsPluginDir(t *testing.T, root, pluginsDir, name string) {
 // independent; parent tool_result contains the child final assistant text.
 func TestSubagentSyncToolResult(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -78,7 +78,7 @@ func TestSubagentSyncToolResult(t *testing.T) {
 // TestSubagentAsyncRejected: mode=async is not supported in v1 (error lands as tool_result).
 func TestSubagentAsyncRejected(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")

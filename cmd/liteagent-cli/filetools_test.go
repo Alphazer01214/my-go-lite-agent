@@ -13,7 +13,7 @@ import (
 // error → tool_result in Session Log → final assistant reply.
 func TestFileToolsIntegration(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -29,6 +29,7 @@ func TestFileToolsIntegration(t *testing.T) {
 		"-turn", "read something",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("filetools turn: %v\n%s", err, out)

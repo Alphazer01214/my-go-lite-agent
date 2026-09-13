@@ -11,7 +11,7 @@ import (
 // TestTurnStepBoundaryEvents: default Loop logs turn/step boundaries; derive ignores them.
 func TestTurnStepBoundaryEvents(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")

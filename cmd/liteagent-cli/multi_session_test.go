@@ -32,7 +32,7 @@ func buildSessionProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 // TestMultiSessionIsolation: two sessionIds keep separate logs and derive (in one Host process).
 func TestMultiSessionIsolation(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -46,6 +46,7 @@ func TestMultiSessionIsolation(t *testing.T) {
 		"-assembly", cfg,
 		"-invoke", "sessionprobe",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("multi session probe: %v\n%s", err, out)
@@ -82,7 +83,7 @@ func TestMultiSessionIsolation(t *testing.T) {
 // TestDefaultSessionBackwardCompatible: omitting sessionId uses the default session.
 func TestDefaultSessionBackwardCompatible(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -96,6 +97,7 @@ func TestDefaultSessionBackwardCompatible(t *testing.T) {
 		"-session-append", `[{"type":"message","role":"user","content":"default-marker"}]`,
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("default session: %v\n%s", err, out)

@@ -12,7 +12,7 @@ import (
 // derive must project it as ToolCall.id (OpenAI requires non-empty unique ids).
 func TestSessionDeriveKeepsToolCallID(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -28,6 +28,7 @@ func TestSessionDeriveKeepsToolCallID(t *testing.T) {
 		"-session-append", appendJSON,
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("append+derive: %v\n%s", err, out)
@@ -76,7 +77,7 @@ func TestSessionDeriveKeepsToolCallID(t *testing.T) {
 // TestChatAssemblyInjectsNoToolsNote: without a tools plugin, Loop must tell the model tools are unavailable.
 func TestChatAssemblyInjectsNoToolsNote(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -94,6 +95,7 @@ func TestChatAssemblyInjectsNoToolsNote(t *testing.T) {
 		"-turn", "What's the current workspace",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("chat turn: %v\n%s", err, out)

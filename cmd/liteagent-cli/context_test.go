@@ -9,7 +9,7 @@ import (
 
 func TestAdditionalContextsAfterToolResult(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -26,6 +26,7 @@ func TestAdditionalContextsAfterToolResult(t *testing.T) {
 		"-turn", "ctx",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn with additionalContexts: %v\n%s", err, out)
@@ -52,7 +53,7 @@ func TestAdditionalContextsAfterToolResult(t *testing.T) {
 
 func TestAgentInjectAppendsWithoutTurn(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -66,6 +67,7 @@ func TestAgentInjectAppendsWithoutTurn(t *testing.T) {
 		"-agent-inject", `[{"role":"system","content":"INJECTED_NOTE"}]`,
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("agent inject: %v\n%s", err, out)
@@ -85,7 +87,7 @@ func TestAgentInjectAppendsWithoutTurn(t *testing.T) {
 
 func TestPluginAgentInjectViaStar(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -102,6 +104,7 @@ func TestPluginAgentInjectViaStar(t *testing.T) {
 		"-call-cap", "inject",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("plugin agent.inject: %v\n%s", err, out)

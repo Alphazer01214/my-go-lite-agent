@@ -9,7 +9,7 @@ import (
 
 func TestSessionAppendDerive(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -23,6 +23,7 @@ func TestSessionAppendDerive(t *testing.T) {
 		"-session-append", `[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]`,
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("session append/derive: %v\n%s", err, out)
@@ -41,7 +42,7 @@ func TestSessionAppendDerive(t *testing.T) {
 
 func TestAgentRequestAcceptsRebuiltContext(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -55,6 +56,7 @@ func TestAgentRequestAcceptsRebuiltContext(t *testing.T) {
 		"-session-append", `[{"role":"user","content":"hello"}]`,
 		"-agent-request", `[{"role":"user","content":"hello"}]`,
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("agent request should accept logged context: %v\n%s", err, out)
@@ -70,7 +72,7 @@ func TestAgentRequestAcceptsRebuiltContext(t *testing.T) {
 
 func TestAgentRequestRejectsUnloggedMessages(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -85,6 +87,7 @@ func TestAgentRequestRejectsUnloggedMessages(t *testing.T) {
 		"-session-append", `[{"role":"user","content":"logged"}]`,
 		"-agent-request", `[{"role":"user","content":"not-in-log"}]`,
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want rejection for unlogged model context: %s", out)
@@ -97,7 +100,7 @@ func TestAgentRequestRejectsUnloggedMessages(t *testing.T) {
 
 func TestAgentRequestRejectsEmptyLogSmuggle(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -111,6 +114,7 @@ func TestAgentRequestRejectsEmptyLogSmuggle(t *testing.T) {
 		"-assembly", cfg,
 		"-agent-request", `[{"role":"user","content":"ghost"}]`,
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want rejection when session log is empty: %s", out)
@@ -123,7 +127,7 @@ func TestAgentRequestRejectsEmptyLogSmuggle(t *testing.T) {
 
 func TestAgentRequestEmptyClaimUsesDerived(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -137,6 +141,7 @@ func TestAgentRequestEmptyClaimUsesDerived(t *testing.T) {
 		"-assembly", cfg,
 		"-agent-request", `[]`,
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("empty claim should rebuild from log: %v\n%s", err, out)
@@ -151,7 +156,7 @@ func TestAgentRequestEmptyClaimUsesDerived(t *testing.T) {
 
 func TestSessionQueryReturnsFacts(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -165,6 +170,7 @@ func TestSessionQueryReturnsFacts(t *testing.T) {
 		"-session-append", `[{"role":"user","content":"q-me"}]`,
 		"-session-query",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("session query: %v\n%s", err, out)
@@ -183,7 +189,7 @@ func TestSessionQueryReturnsFacts(t *testing.T) {
 
 func TestPluginAgentRequestRejectsUnlogged(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -200,6 +206,7 @@ func TestPluginAgentRequestRejectsUnlogged(t *testing.T) {
 		"-invoke", "agentprobe",
 		"-call-cap", "smuggle",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want plugin agent/request rejection: %s", out)
@@ -212,7 +219,7 @@ func TestPluginAgentRequestRejectsUnlogged(t *testing.T) {
 
 func TestPluginAgentRequestAcceptsRebuilt(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -228,6 +235,7 @@ func TestPluginAgentRequestAcceptsRebuilt(t *testing.T) {
 		"-session-append", `[{"role":"user","content":"logged"}]`,
 		"-invoke", "agentprobe",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("plugin agent/request rebuild should succeed: %v\n%s", err, out)

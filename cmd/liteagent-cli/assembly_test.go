@@ -37,7 +37,7 @@ func copyFile(t *testing.T, src, dst string) {
 
 func TestAssemblyMountsOnlyNamedPlugins(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "alpha")
@@ -76,14 +76,16 @@ func TestAssemblyMountsOnlyNamedPlugins(t *testing.T) {
 
 func TestAssemblyMissingPluginFails(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "alpha")
 
 	cfg := filepath.Join(t.TempDir(), "bad.json")
 	writeFile(t, cfg, `{"plugins":["alpha","ghost"]}`)
-	out, err := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg).CombinedOutput()
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg)
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want fail-loud, got: %s", out)
 	}

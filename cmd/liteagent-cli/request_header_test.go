@@ -11,7 +11,7 @@ import (
 // TestRequestHeaderSnapshot: each model hop logs a request_header fact; derive ignores it.
 func TestRequestHeaderSnapshot(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -27,6 +27,7 @@ func TestRequestHeaderSnapshot(t *testing.T) {
 		"-session-query",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn with request header: %v\n%s", err, out)

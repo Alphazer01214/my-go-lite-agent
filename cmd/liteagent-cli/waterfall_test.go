@@ -9,7 +9,7 @@ import (
 
 func TestWaterfallNoInterceptorAllows(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -19,6 +19,7 @@ func TestWaterfallNoInterceptorAllows(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-audit")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("no interceptor should allow: %v\n%s", err, out)
@@ -37,7 +38,7 @@ func TestWaterfallNoInterceptorAllows(t *testing.T) {
 
 func TestWaterfallInterceptorAllow(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -48,6 +49,7 @@ func TestWaterfallInterceptorAllow(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer","ix"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-audit")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("allow interceptor: %v\n%s", err, out)
@@ -66,7 +68,7 @@ func TestWaterfallInterceptorAllow(t *testing.T) {
 
 func TestWaterfallInterceptorRewrite(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -77,6 +79,7 @@ func TestWaterfallInterceptorRewrite(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer","ix"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-audit")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("rewrite interceptor: %v\n%s", err, out)
@@ -98,7 +101,7 @@ func TestWaterfallInterceptorRewrite(t *testing.T) {
 
 func TestWaterfallInterceptorReject(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -109,6 +112,7 @@ func TestWaterfallInterceptorReject(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer","ix"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-audit")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want reject short-circuit: %s", out)
@@ -124,7 +128,7 @@ func TestWaterfallInterceptorReject(t *testing.T) {
 
 func TestWaterfallMandatoryChainSurvivesInterceptorCrash(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -136,6 +140,7 @@ func TestWaterfallMandatoryChainSurvivesInterceptorCrash(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer","ix"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-audit")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("crashed interceptor must not block star routing: %v\n%s", err, out)
@@ -154,7 +159,7 @@ func TestWaterfallMandatoryChainSurvivesInterceptorCrash(t *testing.T) {
 
 func TestWaterfallCoversAgentRequest(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -171,6 +176,7 @@ func TestWaterfallCoversAgentRequest(t *testing.T) {
 		"-invoke", "agentprobe",
 		"-audit",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("agent/request through waterfall: %v\n%s", err, out)

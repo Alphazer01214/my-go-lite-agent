@@ -8,7 +8,7 @@ import (
 
 func TestHostEchoRoundtrip(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	echoBin := buildPkg(t, root, "./plugins/echo")
 
 	cmd := exec.Command(hostBin, "-plugin", echoBin)
@@ -31,7 +31,7 @@ func TestHostEchoRoundtrip(t *testing.T) {
 
 func TestHostMissingFlags(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	cmd := exec.Command(hostBin)
 	out, err := cmd.CombinedOutput()

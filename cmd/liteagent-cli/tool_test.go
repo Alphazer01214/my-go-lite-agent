@@ -9,7 +9,7 @@ import (
 
 func TestToolCallPathOneTurn(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -25,6 +25,7 @@ func TestToolCallPathOneTurn(t *testing.T) {
 		"-turn", "please echo me",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("tool turn: %v\n%s", err, out)
@@ -74,7 +75,7 @@ func TestToolCallPathOneTurn(t *testing.T) {
 
 func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -90,6 +91,7 @@ func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 		"-turn", "hello tools",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn without tools: %v\n%s", err, out)
@@ -108,7 +110,7 @@ func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 
 func TestToolCallErrorStillCompletesTurn(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -125,6 +127,7 @@ func TestToolCallErrorStillCompletesTurn(t *testing.T) {
 		"-turn", "boom",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("tool error must not abort turn: %v\n%s", err, out)

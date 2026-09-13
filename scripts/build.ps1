@@ -10,7 +10,7 @@ if (Test-Path $dist) {
     try {
         Remove-Item -Recurse -Force $dist -ErrorAction Stop
     } catch {
-        Write-Warning "dist is locked (cwd or running process); overwriting in place. Close terminals using dist\ and stop host.exe for a clean wipe."
+        Write-Warning "dist is locked (cwd or running process); overwriting in place. Close terminals using dist\ and stop liteagent-server.exe for a clean wipe."
     }
 }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
@@ -55,7 +55,8 @@ function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]
 
 Push-Location $root
 try {
-    Build-Pkg "./cmd/host" (Join-Path $dist "host.exe")
+    Build-Pkg "./cmd/liteagent-cli" (Join-Path $dist "liteagent-cli.exe")
+    Build-Pkg "./cmd/liteagent-server" (Join-Path $dist "liteagent-server.exe")
 
     Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "File-backed session log plugin (JSONL)"
     Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]' "[]" 0 "Deterministic fake LLM for tests"

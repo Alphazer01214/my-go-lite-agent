@@ -109,7 +109,7 @@ func TestLLMOpenAIRealTurn(t *testing.T) {
 	defer srv.Close()
 
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -124,6 +124,7 @@ func TestLLMOpenAIRealTurn(t *testing.T) {
 		"-turn", "hi",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	// Ensure env does not override fixture config.
 	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=", "OPENAI_BASE_URL=", "OPENAI_MODEL=")
 	out, err := cmd.CombinedOutput()
@@ -145,7 +146,7 @@ func TestLLMOpenAIForwardsTools(t *testing.T) {
 	defer srv.Close()
 
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -172,7 +173,7 @@ func TestLLMOpenAIForwardsTools(t *testing.T) {
 
 func TestLLMOpenAIMissingKey(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -189,7 +190,7 @@ func TestLLMOpenAIMissingKey(t *testing.T) {
 		"-assembly", cfg,
 		"-turn", "hi",
 	)
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=")
+	cmd.Env = append(hostEnv(t), "OPENAI_API_KEY=")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want missing key failure: %s", out)

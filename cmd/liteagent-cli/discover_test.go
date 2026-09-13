@@ -9,7 +9,7 @@ import (
 
 func TestDiscoverListsPlugins(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "echo", "plugin.json"), `{
@@ -38,7 +38,7 @@ func TestDiscoverListsPlugins(t *testing.T) {
 
 func TestDiscoverInvalidManifestFails(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "bad", "plugin.json"), `{"version":"1","protocol": 2,"entry":"x"}`)

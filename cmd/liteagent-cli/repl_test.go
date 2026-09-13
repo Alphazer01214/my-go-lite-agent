@@ -13,7 +13,7 @@ import (
 // TestREPLTwoTurnsSameSession: two lines in one -repl process share Session context.
 func TestREPLTwoTurnsSameSession(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -27,6 +27,7 @@ func TestREPLTwoTurnsSameSession(t *testing.T) {
 		"-assembly", cfg,
 		"-repl",
 	)
+	cmd.Env = hostEnv(t)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

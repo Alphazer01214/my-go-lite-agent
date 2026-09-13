@@ -9,7 +9,7 @@ import (
 
 func TestDefaultLoopOneTurn(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -24,6 +24,7 @@ func TestDefaultLoopOneTurn(t *testing.T) {
 		"-turn", "hello loop",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("one turn: %v\n%s", err, out)
@@ -53,7 +54,7 @@ func TestDefaultLoopOneTurn(t *testing.T) {
 
 func TestDefaultLoopRequiresLLM(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -66,6 +67,7 @@ func TestDefaultLoopRequiresLLM(t *testing.T) {
 		"-assembly", cfg,
 		"-turn", "hello",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want failure when no llm provider: %s", out)

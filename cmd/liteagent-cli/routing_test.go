@@ -9,7 +9,7 @@ import (
 
 func TestCapabilityStarRouting(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -19,6 +19,7 @@ func TestCapabilityStarRouting(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("host invoke: %v\n%s", err, out)
@@ -37,7 +38,7 @@ func TestCapabilityStarRouting(t *testing.T) {
 
 func TestUnknownCapabilityStructuredError(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildEchoPluginDir(t, root, pluginsDir, "echo")
@@ -47,6 +48,7 @@ func TestUnknownCapabilityStructuredError(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["echo","consumer"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer", "-call-cap", "nope")
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("want error for unknown capability: %s", out)

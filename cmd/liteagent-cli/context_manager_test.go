@@ -38,7 +38,7 @@ func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, s
 // System Prompt as a Session Log fact; derive includes it in Model Context.
 func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -60,6 +60,7 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 		"-session-derive",
 		"-session-query",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn with context manager: %v\n%s", err, out)
@@ -108,7 +109,7 @@ func buildPromptRegPluginDir(t *testing.T, root, pluginsDir, name string) {
 // TestContextManagerRegisterSegmentViaStar: another Plugin registers a dynamic Prompt Segment.
 func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -127,6 +128,7 @@ func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
 		"-turn", "hello dynamic",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("register segment then turn: %v\n%s", err, out)
@@ -143,7 +145,7 @@ func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
 // TestTurnWorksWithoutContextManager: missing system-prompt provider must not fail the turn.
 func TestTurnWorksWithoutContextManager(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -158,6 +160,7 @@ func TestTurnWorksWithoutContextManager(t *testing.T) {
 		"-turn", "hello",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn without context manager: %v\n%s", err, out)

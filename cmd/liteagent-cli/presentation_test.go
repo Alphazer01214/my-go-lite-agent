@@ -9,7 +9,7 @@ import (
 
 func TestPresentationCardEmittedFromTool(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -25,6 +25,7 @@ func TestPresentationCardEmittedFromTool(t *testing.T) {
 		"-turn", "card-me",
 		"-cards",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn with cards: %v\n%s", err, out)
@@ -49,7 +50,7 @@ func TestPresentationCardEmittedFromTool(t *testing.T) {
 
 func TestPresentationCardReplayDeterministic(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	run := func() string {
 		t.Helper()
@@ -59,12 +60,14 @@ func TestPresentationCardReplayDeterministic(t *testing.T) {
 		buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 		cfg := filepath.Join(t.TempDir(), "assembly.json")
 		writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
-		out, err := exec.Command(hostBin,
+		cmd := exec.Command(hostBin,
 			"-plugins", pluginsDir,
 			"-assembly", cfg,
 			"-turn", "same-input",
 			"-cards",
-		).CombinedOutput()
+		)
+		cmd.Env = hostEnv(t)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("replay run: %v\n%s", err, out)
 		}
@@ -84,7 +87,7 @@ func TestPresentationCardReplayDeterministic(t *testing.T) {
 
 func TestFunctionWithoutPresentationStillWorks(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
@@ -100,6 +103,7 @@ func TestFunctionWithoutPresentationStillWorks(t *testing.T) {
 		"-turn", "no card needed",
 		"-cards",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn without presentation: %v\n%s", err, out)

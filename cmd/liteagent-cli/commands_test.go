@@ -13,6 +13,7 @@ import (
 func runREPLLines(t *testing.T, hostBin, pluginsDir, cfg string, lines []string) string {
 	t.Helper()
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-repl")
+	cmd.Env = hostEnv(t)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func runREPLLines(t *testing.T, hostBin, pluginsDir, cfg string, lines []string)
 
 func TestREPLHelpAndExit(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
@@ -82,7 +83,7 @@ func TestREPLHelpAndExit(t *testing.T) {
 
 func TestREPLUnknownCommandSuggests(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
@@ -100,7 +101,7 @@ func TestREPLUnknownCommandSuggests(t *testing.T) {
 
 func TestAssemblyRejectsNativeCommandConflict(t *testing.T) {
 	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/host")
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	// Fixture plugin named "lp" conflicts with native /lp.
 	dir := filepath.Join(pluginsDir, "lp")
@@ -127,6 +128,7 @@ func TestAssemblyRejectsNativeCommandConflict(t *testing.T) {
 	writeFile(t, cfg, `{"plugins":["lp","session","fakellm"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-repl")
+	cmd.Env = hostEnv(t)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
