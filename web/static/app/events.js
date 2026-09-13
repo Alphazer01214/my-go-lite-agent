@@ -1,25 +1,19 @@
 // SSE bridge: one EventSource for the Shell and every Panel Component.
-// Live-only — history/trace rehydrate durable state so refresh never
-// double-paints old presentation events.
+// Everything except the composer status line fans out through LiteAgent —
+// the faces (session-view etc.) consume their own topics and queue until
+// their history is ready.
 
-import { state, sameSession, setRunning } from './state.js';
-import { onPresentation, onStreamDelta, clearTurnUI } from './chat.js';
+import { setRunning } from './state.js';
 import { applyPanel } from './loader.js';
 
 function applySSE(env) {
-  if (!state.historyReady && env.topic !== 'panel') return;
   var topic = env.topic;
   var d = env.data !== undefined ? env.data : env;
   // Fan live events out to Panel Components subscribed via LiteAgent.on —
-  // including topic=session, which the session plugin's trace view consumes.
+  // presentation/stream/session go to the session-view; panel ops go to
+  // the page loader; status also drives the composer's Send/Stop state.
   if (window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit(topic, d);
-  if (topic === 'presentation') { onPresentation(d); return; }
   if (topic === 'panel') { applyPanel(d); return; }
-  if (topic === 'stream') {
-    if (!sameSession(d.sessionId)) return;
-    onStreamDelta(d.channel === 'reasoning' ? 'reasoning' : 'content', d.delta || '');
-    return;
-  }
   if (topic === 'status') {
     var st = d.status || '';
     var sid = d.sessionId !== undefined ? d.sessionId : '';
@@ -35,18 +29,16 @@ function applySSE(env) {
     }
     if (st === 'idle' || st.indexOf('error:') === 0 || st === 'cancelling') {
       statusEl.textContent = st;
-      if (sameSession(sid)) {
+      if (!sid || String(sid) === String(window.__liteSessionId || '')) {
         setRunning(false);
-        clearTurnUI();
       }
-      // Session list refresh is owned by the session rail component.
     }
   }
 }
 
 function openSSE() {
-  // No replay: history/trace rehydrate durable state; SSE is live-only so
-  // refresh does not double-paint old presentation events.
+  // No replay: durable state rehydrates from the Session Log via
+  // capabilities; SSE is live-only so refresh never double-paints.
   var es = new EventSource('/events');
   es.addEventListener('presentation', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('panel', function (e) { applySSE(JSON.parse(e.data)); });

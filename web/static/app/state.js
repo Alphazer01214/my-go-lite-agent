@@ -3,7 +3,6 @@
 
 export var state = {
   currentSessionId: '',
-  historyReady: false,
   running: false,
 };
 

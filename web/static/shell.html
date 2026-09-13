@@ -51,7 +51,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
   font-size:12px;color:var(--la-dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0
 }
 #pane-head a{color:var(--la-accent);text-decoration:none}
-#chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
+/* The chat surface is the session-view Panel Component (ADR-0011);
+   the layout owns sizing, the component owns scrolling and content. */
+#chat{flex:1;min-width:0;min-height:0}
 #slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
 
 #composer{
@@ -69,38 +71,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 #btn-send.running{background:var(--la-stop);color:#fff}
 #status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
-.msg{margin:0 0 14px;max-width:52rem}
-.msg.user{color:var(--la-ink);background:var(--la-panel2);border-radius:10px;padding:10px 12px}
-.msg.user:before{content:"you";display:block;color:var(--la-dim);font-size:11px;margin-bottom:4px}
-.msg.assistant{line-height:1.55}
-.msg.assistant pre{background:#0b0e14;border:1px solid var(--la-line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--la-mono);font-size:13px}
-.msg.assistant code{font-family:var(--la-mono);font-size:0.92em;background:#1a1f2a;padding:1px 4px;border-radius:4px}
-.msg.assistant pre code{background:none;padding:0}
-.msg.assistant h1,.msg.assistant h2,.msg.assistant h3{margin:0.6em 0 0.35em;line-height:1.25}
-.msg.assistant ul{margin:0.3em 0;padding-left:1.2em}
-.msg.assistant blockquote{border-left:3px solid var(--la-line);margin:0.4em 0;padding:0.1em 0 0.1em 0.8em;color:var(--la-dim)}
-
-/* dsh-style disclosure rows: everything except user + final assistant is folded */
-.disc{margin:0 0 8px;border:1px solid var(--la-line);border-radius:8px;background:var(--la-panel2);overflow:hidden}
-.disc>summary{
-  list-style:none;cursor:pointer;padding:7px 10px;font-size:12px;color:var(--la-dim);
-  display:flex;gap:8px;align-items:center;user-select:none
-}
-.disc>summary::-webkit-details-marker{display:none}
-.disc>summary:before{content:"▸";font-size:10px;color:var(--la-dim)}
-.disc[open]>summary:before{content:"▾"}
-.disc>summary .s-title{color:var(--la-ink);font-weight:600}
-.disc>summary .s-meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--la-mono);font-size:11px}
-.disc>.disc-body{padding:0 10px 10px 26px;font-size:12px;color:var(--la-dim);white-space:pre-wrap;font-family:var(--la-mono)}
-.disc.think>summary:before{content:"▸"}
-.disc.tool>summary .s-title{color:var(--la-accent)}
-.disc.live{border-color:#334}
-.disc.live>summary:before{content:"◉";color:var(--la-accent)}
-
-.message{font-size:12px;margin:0 0 8px;color:var(--la-dim)}
-.message.error{color:var(--la-err)}
-.message.warn{color:#e0af68}
-.progress{font-size:12px;color:var(--la-dim);font-family:var(--la-mono);margin-bottom:8px}
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
@@ -113,7 +83,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
     <div id="split">
       <section id="chat-col">
         <div id="pane-head"><span>Chat</span><span id="session-label" style="font-family:var(--la-mono);font-size:11px"></span></div>
-        <div id="chat"></div>
+        <div id="chat" class="panel-root"></div>
         <div id="status"></div>
       </section>
       <section id="trace-col">

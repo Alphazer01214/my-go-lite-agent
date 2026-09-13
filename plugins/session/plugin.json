@@ -10,6 +10,7 @@
     "entry": "main.js",
     "mounts": [
       { "page": "main", "slot": "sidebar", "component": "session-rail" },
+      { "page": "main", "slot": "chat", "component": "session-view" },
       { "page": "main", "slot": "trace", "component": "session-trace" },
       { "page": "trace", "slot": "main", "component": "session-trace" }
     ]

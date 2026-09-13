@@ -38,9 +38,9 @@ type UIMount struct {
 }
 
 // UISlots are the Panel slot names the layout may provide (ADR-0009/0011).
-// Names are page-scoped in practice: "trace" is the main page's center
-// column, "main" is the /trace debug page's single slot.
-var UISlots = []string{"sidebar", "main-overlay", "toolbar-right", "trace", "main"}
+// Names are page-scoped in practice: "chat" is the main page's conversation
+// surface, "trace" its center column, "main" the /trace debug page's slot.
+var UISlots = []string{"sidebar", "main-overlay", "toolbar-right", "trace", "main", "chat"}
 
 // ValidUISlot reports whether slot is a Shell Panel slot.
 func ValidUISlot(slot string) bool {
