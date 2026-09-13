@@ -8,8 +8,9 @@
  * tokens, and talk back through this global:
  *
  *   LiteAgent.call(cap, method, payload)          → Promise<any>   star-through Host call
- *   LiteAgent.emitUIAction(plugin, panel, event, value) → Promise<any>  ui.action → plugin handler
- *   LiteAgent.on(topic, fn)                       → unsubscribe    presentation|status|stream|panel|session
+ *   LiteAgent.emitUIAction(plugin, panel, event, value, props?) → Promise<any>
+ *                                                                  ui.action → plugin handler
+ *   LiteAgent.on(topic, fn)                       → unsubscribe    presentation|status|stream|panel
  *   LiteAgent.onSessionChange(fn)                 → unsubscribe    fires immediately with the current
  *                                                                  session id, then on every switch
  *   LiteAgent.complete(prefix)                    → string[]       slash-command completion

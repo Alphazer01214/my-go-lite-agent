@@ -92,7 +92,8 @@ func New(opts Options) *Server {
 		if p.Manifest.UI != nil && p.Manifest.UI.Entry != "" {
 			s.uiDirs[p.Manifest.Name] = filepath.Join(p.Dir, "ui")
 		}
-	} // Fan-out from Host events.
+	}
+	// Fan-out from Host events.
 	if opts.Srv != nil {
 		opts.Srv.Subscribe(&serve.Subscriber{
 			OnEvent: func(e serve.Event) {
@@ -521,14 +522,9 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 // Component contract (ADR-0010): entry URL and static mounts. The Shell
 // imports each entry module and applies the mounts itself.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
-	type mountItem struct {
-		Slot      string          `json:"slot"`
-		Component string          `json:"component"`
-		Props     json.RawMessage `json:"props,omitempty"`
-	}
 	type uiItem struct {
-		Entry  string      `json:"entry"`
-		Mounts []mountItem `json:"mounts"`
+		Entry  string           `json:"entry"`
+		Mounts []plugin.UIMount `json:"mounts"`
 	}
 	type item struct {
 		Name     string               `json:"name"`
@@ -543,14 +539,12 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			Provides: p.Manifest.Provides, Commands: p.Manifest.Commands}
 		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
 			entry := strings.TrimPrefix(p.Manifest.UI.NormalizedEntry(), "ui/")
-			u := uiItem{
+			mounts := make([]plugin.UIMount, len(ui.Mounts))
+			copy(mounts, ui.Mounts)
+			it.UI = &uiItem{
 				Entry:  "/plugin-ui/" + p.Manifest.Name + "/" + entry,
-				Mounts: []mountItem{},
+				Mounts: mounts,
 			}
-			for _, m := range ui.Mounts {
-				u.Mounts = append(u.Mounts, mountItem{Slot: m.Slot, Component: m.Component, Props: m.Props})
-			}
-			it.UI = &u
 		}
 		list = append(list, it)
 	}

@@ -114,7 +114,7 @@ cd dist
 - Manifest 声明 UI Entry 与静态挂载：`"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "<插件名>-mode-panel", "props": {...}}]}`
 - `ui/main.js` 是普通 ES Module：`customElements.define('<插件名>-…', …)`，组件用 Shadow DOM + Shell 的 `--la-*` Design Token 保持主题联动；零构建链
 - 运行时变更走 `EmitPanel(PanelOp{op: set|clear, slot, id, component, props})`；Host 校验组件名必须以插件名为前缀
-- 组件内部经全局 `LiteAgent` 回传：`emitUIAction(plugin, panel, event, value)` → 插件的 `cap=ui, method=action`；`onSessionChange(fn)` 响应会话切换；`on(topic, fn)` 订阅 SSE；`call(cap, method, payload)` 直调 Capability
+- 组件内部经全局 `LiteAgent` 回传：`emitUIAction(plugin, panel, event, value, props?)` → 插件的 `cap=ui, method=action`；`onSessionChange(fn)` 响应会话切换；`on(topic, fn)` 订阅 SSE；`call(cap, method, payload)` 直调 Capability
 - `/refresh` 后插件变更由 Shell 整页刷新承接（状态真源在 Session Log）
 - 作者 SDK：`GET /sdk/lite-agent.js`（与仓库 `sdk/lite-agent.js` 同源，可拷贝）
 

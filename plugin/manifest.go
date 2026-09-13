@@ -146,7 +146,17 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-var elementTagPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var elementTagPattern = regexp.MustCompile(`^[a-z0-9-]*$`)
+
+// ValidComponentTag reports whether tag is a legal custom element name: what
+// customElements.define enforces (lowercase, starts with a letter, contains a
+// hyphen). Shared by Manifest validation and serve's PanelOp validation.
+func ValidComponentTag(tag string) bool {
+	if len(tag) < 3 || tag[0] < 'a' || tag[0] > 'z' || !strings.Contains(tag, "-") {
+		return false
+	}
+	return elementTagPattern.MatchString(tag)
+}
 
 // validate enforces the Panel Component contract (ADR-0010): the UI Entry is
 // an ES Module under ui/, and every mounted component tag belongs to this
@@ -166,7 +176,7 @@ func (u *UISpec) validate(pluginName string) error {
 		if !ValidUISlot(mount.Slot) {
 			return fmt.Errorf("ui.mounts[%d].slot %q must be one of %v", i, mount.Slot, UISlots)
 		}
-		if !elementTagPattern.MatchString(mount.Component) || !strings.Contains(mount.Component, "-") {
+		if !ValidComponentTag(mount.Component) {
 			return fmt.Errorf("ui.mounts[%d].component %q must be a valid custom element tag", i, mount.Component)
 		}
 		if !strings.HasPrefix(mount.Component, pluginName+"-") {

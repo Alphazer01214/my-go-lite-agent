@@ -633,9 +633,21 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
     node.id = 'panel-'+op.id;
     node.className = 'panel-root';
     node.style.display = 'block';
+    var props = null;
     if(op.props !== undefined && op.props !== null){
-      try { node.props = (typeof op.props === 'string') ? JSON.parse(op.props) : op.props; }
-      catch(e){ node.props = {}; }
+      try { props = (typeof op.props === 'string') ? JSON.parse(op.props) : op.props; }
+      catch(e){ props = {}; }
+    }
+    if(props !== null){
+      node.props = props;
+      // If the entry module has not landed yet, the assignment above becomes
+      // an own data property that would shadow the class accessor after the
+      // custom element upgrades. Re-apply once defined so the setter runs.
+      if(!customElements.get(op.component)){
+        customElements.whenDefined(op.component).then(function(){
+          if(node.isConnected){ delete node.props; node.props = props; }
+        });
+      }
     }
     var host = panelHost(op.slot);
     if(host) host.appendChild(node);
@@ -666,7 +678,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
           appendPre('plugin ui failed: ' + p.name + ' ' + e, 'message error');
         });
       });
-    }).catch(function(){});
+    }).catch(function(e){
+      appendPre('plugin list failed: ' + e, 'message error');
+    });
   }
 
   function applySSE(env){

@@ -96,7 +96,7 @@ type PanelOp struct {
 	Props     json.RawMessage `json:"props,omitempty"`     // JSON object passed to the element
 }
 
-// PresentationPanelMethod is a Panel injection op (set|append|clear).
+// PresentationPanelMethod is a PanelOp op (set|clear). See CONTEXT.md PanelOp.
 const PresentationPanelMethod = "panel"
 
 // UICap is the Capability for UI Action routing from the Web Shell.
@@ -446,31 +446,20 @@ func (s *Server) validatePanelOp(from string, op PanelOp) error {
 		if op.Component == "" {
 			return fmt.Errorf("component is required for set")
 		}
-		if !ValidComponentTag(op.Component) {
+		if !plugin.ValidComponentTag(op.Component) {
 			return fmt.Errorf("component %q must be a valid custom element tag", op.Component)
 		}
 		if !strings.HasPrefix(op.Component, from+"-") {
 			return fmt.Errorf("component %q must be prefixed with %q", op.Component, from+"-")
 		}
 	}
-	if len(op.Props) > 0 && !json.Valid(op.Props) {
-		return fmt.Errorf("props must be valid JSON")
-	}
-	return nil
-}
-
-// ValidComponentTag reports whether tag is a legal custom element name
-// (lowercase, starts with a letter, contains a hyphen).
-func ValidComponentTag(tag string) bool {
-	if len(tag) < 3 || tag[0] < 'a' || tag[0] > 'z' || !strings.Contains(tag, "-") {
-		return false
-	}
-	for _, r := range tag {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-			return false
+	if len(op.Props) > 0 {
+		trimmed := strings.TrimSpace(string(op.Props))
+		if !json.Valid(op.Props) || !strings.HasPrefix(trimmed, "{") {
+			return fmt.Errorf("props must be a JSON object")
 		}
 	}
-	return true
+	return nil
 }
 
 // rejectPanel suppresses the op and surfaces the violation instead of

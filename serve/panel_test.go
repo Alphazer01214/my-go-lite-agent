@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/tomori/my-go-lite-agent/plugin"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -113,12 +114,12 @@ func TestDispatchPanelRejectsRawPayloads(t *testing.T) {
 
 func TestValidComponentTag(t *testing.T) {
 	for _, ok := range []string{"uidemo-mode-panel", "a-b", "trace-view2"} {
-		if !ValidComponentTag(ok) {
+		if !plugin.ValidComponentTag(ok) {
 			t.Errorf("%q must be valid", ok)
 		}
 	}
-	for _, bad := range []string{"", "ab", "-ab", "Ab-c", "a_b", "a--b!"} {
-		if ValidComponentTag(bad) {
+	for _, bad := range []string{"", "ab", "-ab", "Ab-c", "a_b", "a--b!", "a-"} {
+		if plugin.ValidComponentTag(bad) {
 			t.Errorf("%q must be invalid", bad)
 		}
 	}
