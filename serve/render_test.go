@@ -71,4 +71,11 @@ func TestRenderIntentJSONShape(t *testing.T) {
 	if m["text"] != "# hi" {
 		t.Fatalf("want lowercase text, got %v", m["text"])
 	}
+	// Default Session uses empty id — field must still be present for Web filtering.
+	if _, ok := m["sessionId"]; !ok {
+		t.Fatal("sessionId must be present even when empty (default Session)")
+	}
+	if m["sessionId"] != "" {
+		t.Fatalf("want empty sessionId, got %v", m["sessionId"])
+	}
 }

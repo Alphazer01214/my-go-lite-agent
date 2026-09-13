@@ -68,6 +68,7 @@ func TestREPLHelpAndExit(t *testing.T) {
 		"/help",
 		"/lp",
 		"/refresh",
+		"/dump-trace",
 		"/exit",
 		"Plugins:",
 		"session",

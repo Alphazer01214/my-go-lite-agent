@@ -29,6 +29,7 @@ func TestTurnStepBoundaryEvents(t *testing.T) {
 		"-session-query",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("turn with boundaries: %v\n%s", err, out)

@@ -30,13 +30,16 @@ const (
 )
 
 type wait struct {
-	kind    waitKind
-	caller  string
-	target  string
-	origID  string
-	ch      chan *CallResult
-	events  []*protocol.Frame
-	onEvent func(*protocol.Frame)
+	kind       waitKind
+	caller     string
+	target     string
+	origID     string
+	cap        string
+	method     string
+	reqPayload json.RawMessage
+	ch         chan *CallResult
+	events     []*protocol.Frame
+	onEvent    func(*protocol.Frame)
 }
 
 // CallResult carries one Call's final res plus any evt frames collected while waiting.
@@ -68,9 +71,10 @@ type Server struct {
 	cards    []PresentationCard
 	panels   []PanelOp
 	subs     []*Subscriber
-	turnMu   sync.Mutex
-	turnCancel atomic.Bool
-	job      *jobHolder
+	// turnStates serializes turns per Session id (parallel across sessions).
+	turnStatesMu sync.Mutex
+	turnStates   map[string]*sessionTurn
+	job          *jobHolder
 	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
 	OnStreamDelta func(delta string)
 	// OnStatus is the live Render Medium hook for agent idle/running.
@@ -375,23 +379,25 @@ func (s *Server) collectEvent(f *protocol.Frame) {
 
 func (s *Server) dispatchRender(f *protocol.Frame) {
 	var ri struct {
-		Kind   string        `json:"kind"`
-		Text   string        `json:"text"`
-		Level  string        `json:"level"`
-		Title  string        `json:"title"`
-		Pairs  []SummaryPair `json:"pairs"`
-		Detail string        `json:"detail"`
+		Kind      string        `json:"kind"`
+		Text      string        `json:"text"`
+		Level     string        `json:"level"`
+		Title     string        `json:"title"`
+		Pairs     []SummaryPair `json:"pairs"`
+		Detail    string        `json:"detail"`
+		SessionID string        `json:"sessionId"`
 	}
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &ri)
 	}
 	intent := RenderIntent{
-		Kind:   ri.Kind,
-		Text:   ri.Text,
-		Level:  ri.Level,
-		Title:  ri.Title,
-		Pairs:  ri.Pairs,
-		Detail: ri.Detail,
+		Kind:      ri.Kind,
+		Text:      ri.Text,
+		Level:     ri.Level,
+		Title:     ri.Title,
+		Pairs:     ri.Pairs,
+		Detail:    ri.Detail,
+		SessionID: ri.SessionID,
 	}
 	switch ri.Kind {
 	case KindMarkdownText, KindMessageText, KindSummaryText:
@@ -464,7 +470,15 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	}
 	s.seq++
 	fwdID := fmt.Sprintf("fwd-%d", s.seq)
-	s.pending[fwdID] = &wait{kind: waitPlugin, caller: from, target: owner, origID: f.ID}
+	s.pending[fwdID] = &wait{
+		kind:       waitPlugin,
+		caller:     from,
+		target:     owner,
+		origID:     f.ID,
+		cap:        f.Cap,
+		method:     f.Method,
+		reqPayload: append(json.RawMessage(nil), f.Payload...),
+	}
 	s.mu.Unlock()
 
 	if err := s.ensureAlive(owner); err != nil {
@@ -532,9 +546,38 @@ func (s *Server) complete(f *protocol.Frame) {
 		}
 		return
 	}
+	// Fan-out plugin-originated session.append so Web trace stays live
+	// without Host interpreting fact types (reasoning, tools, …).
+	if f.Error == nil && w.cap == SessionCap && w.method == "append" {
+		s.publishPluginSessionAppend(w.reqPayload, f)
+	}
 	out := *f
 	out.ID = w.origID
 	_ = s.writeTo(w.caller, &out)
+}
+
+// publishPluginSessionAppend mirrors AppendSessionFacts' live topic=session event
+// for appends that came from a Plugin (star call), not from the Host Loop.
+func (s *Server) publishPluginSessionAppend(reqPayload json.RawMessage, res *protocol.Frame) {
+	if len(reqPayload) == 0 {
+		return
+	}
+	var body map[string]any
+	if err := json.Unmarshal(reqPayload, &body); err != nil {
+		return
+	}
+	var out struct {
+		Seq int `json:"seq"`
+	}
+	if len(res.Payload) > 0 {
+		_ = json.Unmarshal(res.Payload, &out)
+	}
+	factOut := make(map[string]any, len(body)+1)
+	for k, v := range body {
+		factOut[k] = v
+	}
+	factOut["seq"] = out.Seq
+	s.publish(Event{Topic: "session", Data: factOut})
 }
 
 func (s *Server) writeTo(plugin string, f *protocol.Frame) error {
@@ -945,9 +988,12 @@ func (s *Server) AppendSessionFacts(sessionID string, facts []map[string]any) (i
 		}
 		last = out.Seq
 		// Live Session Log for Web trace (topic=session).
-		factOut := make(map[string]any, len(body)+1)
+		factOut := make(map[string]any, len(body)+2)
 		for k, v := range body {
 			factOut[k] = v
+		}
+		if _, ok := factOut["sessionId"]; !ok {
+			factOut["sessionId"] = sessionID
 		}
 		factOut["seq"] = out.Seq
 		s.publish(Event{Topic: "session", Data: factOut})
@@ -1007,11 +1053,94 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 	return out.Text, nil
 }
 
-func (s *Server) emitStatus(status string) {
+// sessionTurn is one Session's in-flight default-Loop turn control.
+// mu serializes turns on the same Session; different Sessions run in parallel.
+type sessionTurn struct {
+	mu      sync.Mutex
+	cancel  atomic.Bool
+	running atomic.Bool
+}
+
+func (s *Server) turnFor(sid string) *sessionTurn {
+	s.turnStatesMu.Lock()
+	defer s.turnStatesMu.Unlock()
+	if s.turnStates == nil {
+		s.turnStates = make(map[string]*sessionTurn)
+	}
+	st := s.turnStates[sid]
+	if st == nil {
+		st = &sessionTurn{}
+		s.turnStates[sid] = st
+	}
+	return st
+}
+
+// acquireTurn TryLocks the Session turn. Returns nil if that Session is busy.
+func (s *Server) acquireTurn(sid string) *sessionTurn {
+	st := s.turnFor(sid)
+	if !st.mu.TryLock() {
+		return nil
+	}
+	st.cancel.Store(false)
+	return st
+}
+
+func (s *Server) beginRunning(sid string) {
+	s.turnFor(sid).running.Store(true)
+}
+
+func (s *Server) endRunning(sid string) {
+	s.turnFor(sid).running.Store(false)
+}
+
+// IsRunning reports whether any default-Loop turn is in flight.
+func (s *Server) IsRunning() bool {
+	return len(s.RunningSessions()) > 0
+}
+
+// IsRunningOn reports whether sid itself has an in-flight turn.
+func (s *Server) IsRunningOn(sid string) bool {
+	s.turnStatesMu.Lock()
+	defer s.turnStatesMu.Unlock()
+	st := s.turnStates[sid]
+	return st != nil && st.running.Load()
+}
+
+// RunningSessions lists Session ids with an in-flight turn.
+func (s *Server) RunningSessions() []string {
+	s.turnStatesMu.Lock()
+	defer s.turnStatesMu.Unlock()
+	var out []string
+	for sid, st := range s.turnStates {
+		if st.running.Load() {
+			out = append(out, sid)
+		}
+	}
+	return out
+}
+
+// RunningSession returns one in-flight Session id ("" if idle). Prefer IsRunningOn.
+func (s *Server) RunningSession() string {
+	list := s.RunningSessions()
+	if len(list) > 0 {
+		return list[0]
+	}
+	return ""
+}
+
+// StatusForSession reports "running" when sid owns an in-flight turn, else "idle".
+func (s *Server) StatusForSession(sid string) string {
+	if s.IsRunningOn(sid) {
+		return "running"
+	}
+	return "idle"
+}
+
+func (s *Server) emitStatus(sessionID, status string) {
 	if s.OnStatus != nil {
 		s.OnStatus(status)
 	}
-	s.publish(Event{Topic: "status", Data: map[string]string{"status": status}})
+	s.publish(Event{Topic: "status", Data: map[string]string{"status": status, "sessionId": sessionID}})
 }
 
 // emitRenderIntent notifies the CLI hook and all Subscribers (Web Medium).
@@ -1022,22 +1151,27 @@ func (s *Server) emitRenderIntent(ri RenderIntent) {
 	s.publish(Event{Topic: "presentation", Data: ri})
 }
 
-// extractStreamDelta returns text delta from llm.chunk or presentation.stream chunk frames.
-func extractStreamDelta(f *protocol.Frame) (string, bool) {
+// extractStreamDelta returns text delta and channel (content|reasoning) from
+// llm.chunk or presentation.stream chunk frames.
+func extractStreamDelta(f *protocol.Frame) (delta, channel string, ok bool) {
 	var c struct {
-		Op    string `json:"op"`
-		Delta string `json:"delta"`
+		Op      string `json:"op"`
+		Delta   string `json:"delta"`
+		Channel string `json:"channel"`
 	}
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &c)
 	}
+	if c.Channel == "" {
+		c.Channel = "content"
+	}
 	if f.Method == LLMChunkMethod {
-		return c.Delta, c.Delta != ""
+		return c.Delta, c.Channel, c.Delta != ""
 	}
 	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod && c.Op == "chunk" {
-		return c.Delta, c.Delta != ""
+		return c.Delta, c.Channel, c.Delta != ""
 	}
-	return "", false
+	return "", "", false
 }
 
 // RunTurn is the Host-compiled default Agent Loop for one chat turn.
@@ -1052,22 +1186,52 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 }
 
 // RunTurnOn is RunTurn bound to a Session id (empty = default).
+// Turns on different Sessions run in parallel; the same Session stays serial.
 func (s *Server) RunTurnOn(sessionID, userInput string) (*TurnResult, error) {
-	// One turn at a time across CLI and Web (spec §7 / ADR-0009).
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
-	s.turnCancel.Store(false)
 	return s.runTurn(sessionID, userInput, true, "")
 }
 
-// CancelTurn requests the in-flight default Loop to stop at the next safe boundary.
-func (s *Server) CancelTurn() {
-	s.turnCancel.Store(true)
+// CancelTurnOn requests the in-flight Loop on sessionID to stop at the next safe boundary.
+func (s *Server) CancelTurnOn(sessionID string) {
+	s.turnStatesMu.Lock()
+	st := s.turnStates[sessionID]
+	s.turnStatesMu.Unlock()
+	if st != nil {
+		st.cancel.Store(true)
+	}
 }
 
-// TurnCancelled reports whether CancelTurn was requested.
+// CancelTurn cancels every in-flight turn (CLI Ctrl+C / legacy).
+func (s *Server) CancelTurn() {
+	s.turnStatesMu.Lock()
+	states := make([]*sessionTurn, 0, len(s.turnStates))
+	for _, st := range s.turnStates {
+		states = append(states, st)
+	}
+	s.turnStatesMu.Unlock()
+	for _, st := range states {
+		st.cancel.Store(true)
+	}
+}
+
+// TurnCancelledOn reports whether CancelTurnOn was requested for sessionID.
+func (s *Server) TurnCancelledOn(sessionID string) bool {
+	s.turnStatesMu.Lock()
+	st := s.turnStates[sessionID]
+	s.turnStatesMu.Unlock()
+	return st != nil && st.cancel.Load()
+}
+
+// TurnCancelled reports whether any turn has a cancel request.
 func (s *Server) TurnCancelled() bool {
-	return s.turnCancel.Load()
+	s.turnStatesMu.Lock()
+	defer s.turnStatesMu.Unlock()
+	for _, st := range s.turnStates {
+		if st.cancel.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // ListSessions returns mounted Session Plugin session ids (for Web history rail).
@@ -1122,11 +1286,23 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		return nil, fmt.Errorf("agent loop: user input is required")
 	}
 
+	// Per-Session lock: same Session serial, different Sessions parallel.
+	st := s.acquireTurn(sessionID)
+	if st == nil {
+		return nil, fmt.Errorf("session already has a running turn")
+	}
+	defer st.mu.Unlock()
+
 	s.mu.Lock()
 	loopOwner, hasExternalLoop := s.provides[LoopCap]
 	s.mu.Unlock()
 	if hasExternalLoop {
-		return s.runExternalTurn(loopOwner, sessionID, userInput)
+		s.beginRunning(sessionID)
+		s.emitStatus(sessionID, "running")
+		res, err := s.runExternalTurn(loopOwner, sessionID, userInput)
+		s.endRunning(sessionID)
+		s.emitStatus(sessionID, "idle")
+		return res, err
 	}
 
 	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
@@ -1136,7 +1312,8 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	}}); err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
-	s.emitStatus("running")
+	s.beginRunning(sessionID)
+	s.emitStatus(sessionID, "running")
 	turnFailed := true
 	defer func() {
 		reason := "completed"
@@ -1148,7 +1325,8 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			"role": "host",
 			"meta": map[string]any{"turn": 1, "reason": reason},
 		}})
-		s.emitStatus("idle")
+		s.endRunning(sessionID)
+		s.emitStatus(sessionID, "idle")
 	}()
 
 	// System Prompt is assembled then logged before any model-visible user input (ADR-0005/0006).
@@ -1212,7 +1390,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	var assistant string
 
 	for step := 0; step < MaxSteps; step++ {
-		if s.turnCancel.Load() {
+		if st.cancel.Load() {
 			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
 				"role": "host",
@@ -1242,7 +1420,9 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			return nil, fmt.Errorf("agent loop: no plugin provides %q", LLMCap)
 		}
 
-		reqBody := map[string]any{"messages": ar.Messages}
+		// sessionId lets the LLM Plugin persist its own non-content streams
+		// (e.g. reasoning) via session.append without Host special-casing channels.
+		reqBody := map[string]any{"messages": ar.Messages, "sessionId": sessionID}
 		if len(schemas) > 0 {
 			reqBody["tools"] = schemas
 		}
@@ -1268,14 +1448,19 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			Method:  LLMCompleteMethod,
 			Payload: MarshalPayload(reqBody),
 		}, func(ev *protocol.Frame) {
-			if s.turnCancel.Load() {
+			if st.cancel.Load() {
 				return
 			}
-			if delta, ok := extractStreamDelta(ev); ok {
+			if delta, channel, ok := extractStreamDelta(ev); ok {
 				if s.OnStreamDelta != nil {
 					s.OnStreamDelta(delta)
 				}
-				s.publish(Event{Topic: "stream", Data: map[string]string{"delta": delta}})
+				// Fan-out only: Host does not interpret channel semantics.
+				s.publish(Event{Topic: "stream", Data: map[string]string{
+					"delta":     delta,
+					"channel":   channel,
+					"sessionId": sessionID,
+				}})
 			}
 		})
 		if err != nil {
@@ -1296,7 +1481,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 
 		for _, ev := range out.Events {
-			if delta, ok := extractStreamDelta(ev); ok {
+			if delta, _, ok := extractStreamDelta(ev); ok {
 				allChunks = append(allChunks, delta)
 			}
 		}
@@ -1313,7 +1498,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			}
 			// Settle: durable assistant body as markdown_text for every Render Medium.
 			if llmOut.Content != "" {
-				s.emitRenderIntent(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content})
+				s.emitRenderIntent(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content, SessionID: sessionID})
 			}
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
@@ -1368,7 +1553,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 
 		for _, tc := range llmOut.ToolCalls {
-			toolOut, callErr := s.CallTool(tc)
+			toolOut, callErr := s.CallTool(sessionID, tc)
 			resultContent := ""
 			var additionalContexts []Message
 			if callErr != nil {
@@ -1387,10 +1572,11 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				detail += overflow
 			}
 			s.emitRenderIntent(RenderIntent{
-				Kind:   KindSummaryText,
-				Title:  tc.Name,
-				Pairs:  pairs,
-				Detail: TruncateRunes(detail, MaxSummaryDetail),
+				Kind:      KindSummaryText,
+				Title:     tc.Name,
+				Pairs:     pairs,
+				Detail:    TruncateRunes(detail, MaxSummaryDetail),
+				SessionID: sessionID,
 			})
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type":    "tool_result",
@@ -1536,11 +1722,12 @@ func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []stri
 
 // CallTool executes one ToolCall through the mounted Tools Plugin,
 // or Host-run Subagent when the tool is run_subagent.
-func (s *Server) CallTool(tc ToolCall) (*CallToolResult, error) {
+// sessionID scopes the "running tool" status line for parallel Web sessions.
+func (s *Server) CallTool(sessionID string, tc ToolCall) (*CallToolResult, error) {
 	if s.OnToolCall != nil {
 		s.OnToolCall(tc.Name, tc.Arguments)
 	}
-	s.emitRenderIntent(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name)})
+	s.emitRenderIntent(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name), SessionID: sessionID})
 	if tc.Name == SubagentToolName {
 		var in struct {
 			Input        string   `json:"input"`

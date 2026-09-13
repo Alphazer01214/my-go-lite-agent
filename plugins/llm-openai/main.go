@@ -103,8 +103,9 @@ type chatResponse struct {
 type streamDelta struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -191,7 +192,7 @@ func toWireTools(in []struct {
 	return out
 }
 
-func complete(cfg config, reqID string, s *pluginsdk.Server, messages []chatMessage, tools []chatTool) (json.RawMessage, error) {
+func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, messages []chatMessage, tools []chatTool) (json.RawMessage, error) {
 	if cfg.APIKey == "" {
 		return nil, &protocol.FrameError{
 			Code:    "missing_api_key",
@@ -246,7 +247,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, messages []chatMess
 		}
 		msg := cr.Choices[0].Message
 		if msg.Content != "" {
-			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": msg.Content})
+			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": msg.Content, "channel": "content"})
 			_ = s.EmitTo(reqID, "presentation", "stream", payload)
 		}
 		return marshalOut(msg)
@@ -258,6 +259,11 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, messages []chatMess
 	}
 	var calls []accCall
 	callIdx := map[int]int{}
+
+	// Plugin-owned Session Log: one reasoning fact per model hop.
+	// Live Thinking is presentation stream only; durable log is a single append
+	// after the hop (Host does not interpret channel).
+	var reasonAcc strings.Builder
 
 	_ = s.EmitTo(reqID, "presentation", "stream", json.RawMessage(`{"op":"start"}`))
 	sc := bufio.NewScanner(resp.Body)
@@ -279,9 +285,19 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, messages []chatMess
 			continue
 		}
 		delta := d.Choices[0].Delta
+		// DeepSeek (and OpenAI-compatible reasoning models) stream thinking in reasoning_content.
+		if delta.ReasoningContent != "" {
+			payload, _ := json.Marshal(map[string]string{
+				"op":      "chunk",
+				"delta":   delta.ReasoningContent,
+				"channel": "reasoning",
+			})
+			_ = s.EmitTo(reqID, "presentation", "stream", payload)
+			reasonAcc.WriteString(delta.ReasoningContent)
+		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
-			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": delta.Content})
+			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": delta.Content, "channel": "content"})
 			_ = s.EmitTo(reqID, "presentation", "stream", payload)
 		}
 		for _, tc := range delta.ToolCalls {
@@ -299,6 +315,10 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, messages []chatMess
 			}
 			calls[i].args += tc.Function.Arguments
 		}
+	}
+	// Persist the whole hop's thinking as one Session Log fact.
+	if reasonAcc.Len() > 0 {
+		appendReasoningFact(s, sessionID, reasonAcc.String())
 	}
 	if err := sc.Err(); err != nil {
 		return nil, &protocol.FrameError{Code: "llm_stream_error", Message: err.Error()}
@@ -342,6 +362,26 @@ func marshalOut(msg chatMessage) (json.RawMessage, error) {
 		out["tool_calls"] = list
 	}
 	return json.Marshal(out)
+}
+
+// appendReasoningFact persists thinking into Session Log via session.append.
+// Best-effort: missing session plugin or routing errors do not fail the LLM call.
+func appendReasoningFact(s *pluginsdk.Server, sessionID, content string) {
+	if content == "" {
+		return
+	}
+	fact := map[string]any{
+		"type":    "reasoning",
+		"role":    "assistant",
+		"content": content,
+		// Always tag the Session (empty = default) so Web can filter foreign turns.
+		"sessionId": sessionID,
+	}
+	payload, err := json.Marshal(fact)
+	if err != nil {
+		return
+	}
+	_, _ = s.Call("session", "append", payload)
 }
 
 func configPath() string {
@@ -420,7 +460,8 @@ func main() {
 	cfg := loadConfig()
 	s.Handle("llm", "complete", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
-			Messages []struct {
+			SessionID string `json:"sessionId"`
+			Messages  []struct {
 				Role      string `json:"role"`
 				Content   string `json:"content"`
 				ToolCalls []struct {
@@ -441,7 +482,7 @@ func main() {
 				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 			}
 		}
-		return complete(cfg, req.ID, s, toWireMessages(in.Messages), toWireTools(in.Tools))
+		return complete(cfg, req.ID, s, in.SessionID, toWireMessages(in.Messages), toWireTools(in.Tools))
 	})
 	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {

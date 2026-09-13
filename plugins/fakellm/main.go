@@ -82,8 +82,16 @@ func main() {
 				parts = append(parts, lastUser)
 			}
 		}
+		// Reasoning channel (DeepSeek-style) so the Shell can show live Thinking.
+		if !hasToolMsg {
+			rp, _ := json.Marshal(map[string]string{
+				"delta":   "thinking: " + lastUser,
+				"channel": "reasoning",
+			})
+			_ = s.EmitTo(req.ID, "llm", "chunk", rp)
+		}
 		for _, p := range parts {
-			payload, _ := json.Marshal(map[string]string{"delta": p})
+			payload, _ := json.Marshal(map[string]string{"delta": p, "channel": "content"})
 			_ = s.EmitTo(req.ID, "llm", "chunk", payload)
 		}
 		return json.Marshal(map[string]any{"content": reply})

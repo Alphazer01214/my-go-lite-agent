@@ -42,3 +42,9 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// hostEnv isolates the Session Plugin data dir per test (avoids shared ./sessions pollution).
+func hostEnv(t *testing.T) []string {
+	t.Helper()
+	return append(os.Environ(), "SESSION_DATA_DIR="+t.TempDir())
+}

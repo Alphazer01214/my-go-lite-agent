@@ -30,13 +30,16 @@ type SummaryPair struct {
 
 // RenderIntent is one classified main-window block for the Render Medium.
 // JSON field names match pluginsdk so Web SSE and Frame payloads share one wire shape.
+// SessionID scopes host-loop intents so multi-session Web shells ignore foreign turns.
+// Empty SessionID is the default Session — do not omitempty it away.
 type RenderIntent struct {
-	Kind   string        `json:"kind"`
-	Text   string        `json:"text,omitempty"`
-	Level  string        `json:"level,omitempty"`
-	Title  string        `json:"title,omitempty"`
-	Pairs  []SummaryPair `json:"pairs,omitempty"`
-	Detail string        `json:"detail,omitempty"`
+	Kind      string        `json:"kind"`
+	Text      string        `json:"text,omitempty"`
+	Level     string        `json:"level,omitempty"`
+	Title     string        `json:"title,omitempty"`
+	Pairs     []SummaryPair `json:"pairs,omitempty"`
+	Detail    string        `json:"detail,omitempty"`
+	SessionID string        `json:"sessionId"`
 }
 
 // TruncateRunes shortens s to max runes, appending … when cut.

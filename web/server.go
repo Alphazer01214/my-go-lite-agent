@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/plugin"
@@ -185,7 +186,17 @@ func (s *Server) broadcast(e Event) {
 		select {
 		case ch <- e:
 		default:
-			// Slow consumer: drop rather than block the Agent Loop.
+			// Slow consumer: sacrifice stream bursts; non-stream gets one async retry.
+			if e.Topic == "stream" {
+				continue
+			}
+			c, ev := ch, e
+			go func() {
+				select {
+				case c <- ev:
+				case <-time.After(2 * time.Second):
+				}
+			}()
 		}
 	}
 	s.mu.Unlock()
@@ -221,7 +232,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	fl.Flush()
 
-	ch := make(chan Event, 64)
+	ch := make(chan Event, 256)
 	s.mu.Lock()
 	s.hub[ch] = struct{}{}
 	var backlog []Event
@@ -247,10 +258,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		write(e)
 	}
 	notify := r.Context().Done()
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
 	for {
 		select {
 		case <-notify:
 			return
+		case <-keepalive.C:
+			_, _ = fmt.Fprintf(w, ": keepalive\n\n")
+			fl.Flush()
 		case e, ok := <-ch:
 			if !ok {
 				return
@@ -281,11 +297,24 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = s.currentSession()
 	}
+	// Parallel turns across Sessions; reject only when THIS Session is busy.
+	if s.opts.Srv.IsRunningOn(sid) {
+		writeJSON(w, map[string]any{
+			"ok":               false,
+			"error":            "this session already has a running turn",
+			"runningSessionId": sid,
+			"sessionId":        sid,
+		})
+		return
+	}
 	// Run turn asynchronously so the request returns; events stream on /events.
 	go func() {
 		_, err := s.opts.Srv.RunTurnOn(sid, in.Text)
 		if err != nil {
-			s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "error:" + err.Error()}})
+			s.broadcast(Event{Topic: "status", Data: map[string]string{
+				"status":    "error:" + err.Error(),
+				"sessionId": sid,
+			}})
 		}
 	}()
 	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
@@ -311,36 +340,41 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "output": out, "error": errString(err)})
 }
 
-// handleHistory rehydrates the chat from Session Log (survives browser refresh).
+// handleHistory rehydrates the chat from Session Log facts (survives refresh).
+// Includes reasoning/tool process rows — not just derived user/assistant.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Srv == nil {
-		writeJSON(w, map[string]any{"messages": []any{}})
+		writeJSON(w, map[string]any{"facts": []any{}, "messages": []any{}})
 		return
 	}
 	sid := r.URL.Query().Get("sessionId")
 	if sid == "" {
 		sid = s.currentSession()
 	}
-	msgs, err := s.opts.Srv.DeriveMessages(sid)
+	facts, err := s.opts.Srv.QuerySessionFacts(sid, 0, 0)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error(), "messages": []any{}})
+		writeJSON(w, map[string]any{"error": err.Error(), "facts": []any{}, "messages": []any{}})
 		return
 	}
+	if facts == nil {
+		facts = []map[string]any{}
+	}
+	// Also keep derive-style messages for callers that only want the transcript.
+	msgs, derr := s.opts.Srv.DeriveMessages(sid)
 	type item struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
-	list := make([]item, 0, len(msgs))
-	for _, m := range msgs {
-		if m.Role == "system" {
-			continue
+	list := make([]item, 0)
+	if derr == nil {
+		for _, m := range msgs {
+			if m.Role == "system" || m.Content == "" {
+				continue
+			}
+			list = append(list, item{Role: m.Role, Content: m.Content})
 		}
-		if m.Content == "" {
-			continue
-		}
-		list = append(list, item{Role: m.Role, Content: m.Content})
 	}
-	writeJSON(w, map[string]any{"messages": list, "sessionId": sid})
+	writeJSON(w, map[string]any{"facts": facts, "messages": list, "sessionId": sid})
 }
 
 // handleTrace returns Session Log facts as a turn/step trajectory for the sidebar.
@@ -376,13 +410,24 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setCurrentSession(id)
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + id}})
-	writeJSON(w, map[string]any{"ok": true, "sessionId": id})
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + id, "sessionId": id}})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": id, "status": "idle"})
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	sid := s.currentSession()
-	writeJSON(w, map[string]any{"sessionId": sid})
+	status := "idle"
+	var running []string
+	if s.opts.Srv != nil {
+		status = s.opts.Srv.StatusForSession(sid)
+		running = s.opts.Srv.RunningSessions()
+	}
+	writeJSON(w, map[string]any{
+		"sessionId":  sid,
+		"status":     status,
+		"running":    running,
+		"busy":       len(running) > 0,
+	})
 }
 
 func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
@@ -411,8 +456,12 @@ func (s *Server) handleSessionSelect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setCurrentSession(in.SessionID)
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + in.SessionID}})
-	writeJSON(w, map[string]any{"ok": true, "sessionId": in.SessionID})
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + in.SessionID, "sessionId": in.SessionID}})
+	status := "idle"
+	if s.opts.Srv != nil {
+		status = s.opts.Srv.StatusForSession(in.SessionID)
+	}
+	writeJSON(w, map[string]any{"ok": true, "sessionId": in.SessionID, "status": status})
 }
 
 func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {
@@ -424,9 +473,18 @@ func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no agent server", http.StatusServiceUnavailable)
 		return
 	}
-	s.opts.Srv.CancelTurn()
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "cancelling"}})
-	writeJSON(w, map[string]any{"ok": true})
+	sid := s.currentSession()
+	var in struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if in.SessionID != "" {
+		sid = in.SessionID
+	}
+	// Cancel only the target Session so parallel turns keep running.
+	s.opts.Srv.CancelTurnOn(sid)
+	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "cancelling", "sessionId": sid}})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
 }
 
 func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {

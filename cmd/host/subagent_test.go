@@ -52,6 +52,7 @@ func TestSubagentSyncToolResult(t *testing.T) {
 		"-session-derive",
 		"-session-query",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("subagent turn: %v\n%s", err, out)
@@ -109,6 +110,7 @@ func TestSubagentAsyncRejected(t *testing.T) {
 		"-turn", "try async",
 		"-session-derive",
 	)
+	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
 	// Tool errors are logged as tool_result and the turn still completes.
 	if err != nil {

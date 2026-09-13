@@ -34,8 +34,8 @@ func TestShellAndSDKServed(t *testing.T) {
 	if !strings.Contains(string(body), "id=\"split\"") || !strings.Contains(string(body), "id=\"chat-col\"") {
 		t.Fatalf("want center split shell, got %d bytes", len(body))
 	}
-	if !strings.Contains(string(body), "/events?replay=1") {
-		t.Fatal("shell must open SSE replay")
+	if !strings.Contains(string(body), "new EventSource('/events')") {
+		t.Fatal("shell must open live SSE")
 	}
 
 	res2, err := http.Get(ts.URL + "/sdk/lite-agent.js")
