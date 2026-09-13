@@ -105,9 +105,9 @@ cd dist
 
 打开 `http://127.0.0.1:7788`：
 
-- Host **Shell** 提供布局、默认聊天面（markdown / 工具卡 / 流式正文 / Thinking）与命令输入；**仅聊天区滚动**
-- 侧栏链到 **`/trace`**：独立 Session 轨迹页（user / assistant / system / tool_call / tool_result / step…）
-- Session 持久化：session 插件把事实写入 JSONL（默认 `./sessions/`，可用 `SESSION_DATA_DIR` 覆盖）；Host 重启后 `/api/history` 仍可回放
+- **Shell** 只提供整体 layout（页面 + Panel 槽位）、`--la-*` Design Token 与全局脚本（SDK + 装载器）；聊天面、会话栏、trace 全部由 session 插件的 Panel Component 渲染（ADR-0011），输入框在会话视图内，**仅聊天区滚动**
+- 侧栏链到 **`/trace`**：独立 Session 轨迹页（user / assistant / system / tool_call / tool_result / step…），同为插件组件渲染
+- Session 持久化：session 插件把事实写入 JSONL（默认 `./sessions/`，可用 `SESSION_DATA_DIR` 覆盖）；Host 重启后聊天面经 capability 重放
 - 新标签页 SSE `?replay=1` 回放最近 presentation 事件
 
 **Panel Component（插件业务 UI，ADR-0010）**——插件自带 html/js/css，Host 零 Web 渲染编码：

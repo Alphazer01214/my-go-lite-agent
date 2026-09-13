@@ -55,20 +55,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
    the layout owns sizing, the component owns scrolling and content. */
 #chat{flex:1;min-width:0;min-height:0}
 #slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
-
-#composer{
-  display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--la-line);
-  background:var(--la-panel);flex-shrink:0;align-items:flex-end
-}
-#input{
-  flex:1;background:var(--la-bg);border:1px solid var(--la-line);color:var(--la-ink);
-  border-radius:10px;padding:10px 12px;font:inherit;resize:none;min-height:44px;max-height:160px
-}
-#btn-send{
-  background:var(--la-accent);color:#0b1020;border:0;border-radius:10px;
-  padding:0 18px;height:44px;font-weight:700;cursor:pointer;font-size:13px;min-width:72px
-}
-#btn-send.running{background:var(--la-stop);color:#fff}
 #status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
@@ -90,10 +76,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
         <div id="pane-head"><span>Session trace</span><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
         <div id="slot-trace" class="panel-root"></div>
       </section>
-    </div>
-    <div id="composer">
-      <textarea id="input" rows="2" placeholder="Message…  / for commands"></textarea>
-      <button id="btn-send" title="Send">Send</button>
     </div>
   </section>
   <aside id="right">

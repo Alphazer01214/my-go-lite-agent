@@ -13,6 +13,8 @@
  *   LiteAgent.on(topic, fn)                       → unsubscribe    presentation|status|stream|panel
  *   LiteAgent.onSessionChange(fn)                 → unsubscribe    fires immediately with the current
  *                                                                  session id, then on every switch
+ *   LiteAgent.sendMessage(text, sessionId?)       → Promise<any>   start a turn (POST /api/message)
+ *   LiteAgent.runCommand(line)                    → Promise<any>   run a /command (POST /api/command)
  *   LiteAgent.complete(prefix)                    → string[]       slash-command completion
  */
 (function(global){

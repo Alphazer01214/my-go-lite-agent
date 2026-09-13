@@ -300,6 +300,13 @@ const VIEW_CSS = `
   .message.error { color:var(--la-err,#f7768e); }
   .message.warn { color:#e0af68; }
   .progress { font-size:12px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); margin-bottom:8px; }
+  .composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--la-line,#2a2f3a);
+    background:var(--la-panel,#161a22); flex-shrink:0; align-items:flex-end; }
+  .input { flex:1; background:var(--la-bg,#0f1115); border:1px solid var(--la-line,#2a2f3a); color:var(--la-ink,#e8eaed);
+    border-radius:10px; padding:10px 12px; font:inherit; resize:none; min-height:44px; max-height:160px; }
+  .btn-send { background:var(--la-accent,#7aa2f7); color:#0b1020; border:0; border-radius:10px;
+    padding:0 18px; height:44px; font-weight:700; cursor:pointer; font-size:13px; min-width:72px; }
+  .btn-send.running { background:var(--la-stop,#f7768e); color:#fff; }
 `;
 
 class SessionView extends HTMLElement {
@@ -307,6 +314,7 @@ class SessionView extends HTMLElement {
     super();
     this._root = null;
     this._sid = '';
+    this._running = false;
     this._streamBuf = '';
     this._reasoningBuf = '';
     this._progressEl = null;
@@ -327,10 +335,28 @@ class SessionView extends HTMLElement {
     const flow = document.createElement('div');
     flow.className = 'flow';
     root.appendChild(flow);
+    // Composer (ADR-0011 ticket 08): the input belongs to the view, not the layout.
+    const composer = document.createElement('div');
+    composer.className = 'composer';
+    const input = document.createElement('textarea');
+    input.className = 'input';
+    input.rows = 2;
+    input.placeholder = 'Message…  / for commands';
+    const btnSend = document.createElement('button');
+    btnSend.className = 'btn-send';
+    btnSend.title = 'Send';
+    btnSend.textContent = 'Send';
+    composer.appendChild(input); composer.appendChild(btnSend);
+    root.appendChild(composer);
+    this._input = input;
+    this._btnSend = btnSend;
+    btnSend.onclick = () => this.sendOrStop();
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendOrStop(); }
+    });
     this._offs.push(LiteAgent.on('presentation', d => this.onPresentation(d)));
     this._offs.push(LiteAgent.on('stream', d => this.onStreamEvent(d)));
     this._offs.push(LiteAgent.on('status', d => this.onStatusEvent(d)));
-    this._offs.push(LiteAgent.on('__turn-start', d => this.onTurnStart(d)));
     this._offs.push(LiteAgent.on('__notice', d => this.onNotice(d)));
     this._offs.push(LiteAgent.onSessionChange(sid => this.onSessionChange(sid)));
     this.reload();
@@ -339,6 +365,8 @@ class SessionView extends HTMLElement {
     this._offs.forEach(off => off());
     this._offs = [];
     this._root = null;
+    this._input = null;
+    this._btnSend = null;
   }
   isCurrent(sid) {
     // Missing sessionId means the default Session (""), not "any session".
@@ -409,12 +437,52 @@ class SessionView extends HTMLElement {
     }).catch(() => { });
   }
   onTurnStart(d) {
-    // Composer fires this when a message goes out: instant user echo + fresh
-    // live artifacts, exactly as the builtin face did inline.
+    // Private composer→view channel kept for external composers; the view's
+    // own composer uses sendOrStop directly.
     this.queueOr(() => {
       this.appendUser(d && d.text || '');
       this.beginTurn();
     });
+  }
+  sendOrStop() {
+    if (!this._input) return;
+    if (this._running) {
+      fetch('/api/turn/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: this._sid }) })
+        .then(() => { this._running = false; this.setSendState(false); });
+      return;
+    }
+    const text = this._input.value.trim();
+    if (!text) return;
+    this._input.value = '';
+    if (text.charAt(0) === '/') {
+      this.appendUser(text);
+      LiteAgent.runCommand(text).then(body => {
+        if (body.error) this.appendPre(body.error, 'message error');
+        else if (body.output) this.appendPre(body.output, 'message');
+        // /refresh rescans manifests server-side; module identities can't be
+        // swapped in place — the Session Log is the truth, so reload (ADR-0010).
+        const cmd = text.replace(/^\//, '').split(/\s+/)[0];
+        if (cmd === 'refresh') location.reload();
+      });
+      return;
+    }
+    this.appendUser(text);
+    this.beginTurn();
+    this._running = true;
+    this.setSendState(true);
+    LiteAgent.sendMessage(text, this._sid).then(b => {
+      if (b && b.ok === false) {
+        this._running = false;
+        this.setSendState(false);
+        this.appendPre(b.error || 'send failed', 'message error');
+      }
+    }).catch(() => { this._running = false; this.setSendState(false); });
+  }
+  setSendState(running) {
+    if (!this._btnSend) return;
+    this._btnSend.classList.toggle('running', running);
+    this._btnSend.textContent = running ? 'Stop' : 'Send';
+    this._btnSend.title = running ? 'Stop generation' : 'Send';
   }
   onNotice(d) {
     this.queueOr(() => this.appendPre((d && d.text) || '', (d && d.cls) || 'message'));
@@ -423,6 +491,8 @@ class SessionView extends HTMLElement {
     sid = sid || '';
     if (String(this._sid) === String(sid)) return;
     this._sid = sid;
+    this._running = false;
+    this.setSendState(false);
     this.reload();
   }
   onStreamEvent(d) {
@@ -441,9 +511,16 @@ class SessionView extends HTMLElement {
     const st = d.status || '';
     const sid = d.sessionId !== undefined ? d.sessionId : '';
     this.queueOr(() => {
-      if (st === 'running') return;
+      if (st === 'running') {
+        if (this.isCurrent(sid)) { this._running = true; this.setSendState(true); }
+        return;
+      }
       if (st === 'idle' || String(st).indexOf('error:') === 0 || st === 'cancelling') {
-        if (this.isCurrent(sid)) this.clearTurnUI();
+        if (this.isCurrent(sid)) {
+          this._running = false;
+          this.setSendState(false);
+          this.clearTurnUI();
+        }
       }
     });
   }

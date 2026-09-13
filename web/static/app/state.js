@@ -1,24 +1,15 @@
 // Shared Shell state (module form of the former inline-IIFE globals).
-// DOM lookups are lazy so importing modules never races page parse.
+// The session-view owns Send/Stop state; the shell only tracks which
+// Session is current so it can label the pane and route events.
 
 export var state = {
   currentSessionId: '',
-  running: false,
 };
 
 export function sameSession(sid) {
   // Missing sessionId means the default Session (""), not "any session".
   if (sid === undefined || sid === null) return !state.currentSessionId;
   return String(sid) === String(state.currentSessionId || '');
-}
-
-export function setRunning(on, sid) {
-  var show = !!on && sameSession(sid);
-  state.running = show;
-  var btnSend = document.getElementById('btn-send');
-  btnSend.classList.toggle('running', show);
-  btnSend.textContent = show ? 'Stop' : 'Send';
-  btnSend.title = show ? 'Stop generation' : 'Send';
 }
 
 // Session channel for Panel Components (LiteAgent.onSessionChange rides on this).
