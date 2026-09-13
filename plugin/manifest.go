@@ -29,14 +29,18 @@ type UISpec struct {
 }
 
 // UIMount statically mounts one Panel Component into a Panel slot at startup.
+// Page selects the layout page (ADR-0011); empty means "main".
 type UIMount struct {
+	Page      string          `json:"page,omitempty"`
 	Slot      string          `json:"slot"`
 	Component string          `json:"component"`
 	Props     json.RawMessage `json:"props,omitempty"`
 }
 
-// UISlots are the fixed Panel slots the Shell provides (ADR-0009).
-var UISlots = []string{"sidebar", "main-overlay", "toolbar-right"}
+// UISlots are the Panel slot names the layout may provide (ADR-0009/0011).
+// Names are page-scoped in practice: "trace" is the main page's center
+// column, "main" is the /trace debug page's single slot.
+var UISlots = []string{"sidebar", "main-overlay", "toolbar-right", "trace", "main"}
 
 // ValidUISlot reports whether slot is a Shell Panel slot.
 func ValidUISlot(slot string) bool {
@@ -153,6 +157,10 @@ func (m *Manifest) Validate() error {
 
 var elementTagPattern = regexp.MustCompile(`^[a-z0-9-]*$`)
 
+// pagePattern constrains ui.mounts page slugs (syntax only — the page
+// vocabulary itself lives in the layout, ADR-0011).
+var pagePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
 // ValidComponentTag reports whether tag is a legal custom element name: what
 // customElements.define enforces (lowercase, starts with a letter, contains a
 // hyphen). Shared by Manifest validation and serve's PanelOp validation.
@@ -187,6 +195,9 @@ func (u *UISpec) validate(pluginName string) error {
 		}
 	}
 	for i, mount := range u.Mounts {
+		if mount.Page != "" && !pagePattern.MatchString(mount.Page) {
+			return fmt.Errorf("ui.mounts[%d].page %q must match %v", i, mount.Page, pagePattern.String())
+		}
 		if !ValidUISlot(mount.Slot) {
 			return fmt.Errorf("ui.mounts[%d].slot %q must be one of %v", i, mount.Slot, UISlots)
 		}

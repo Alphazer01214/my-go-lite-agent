@@ -58,7 +58,10 @@ try {
     Build-Pkg "./cmd/liteagent-cli" (Join-Path $dist "liteagent-cli.exe")
     Build-Pkg "./cmd/liteagent-server" (Join-Path $dist "liteagent-server.exe")
 
-    Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "File-backed session log plugin (JSONL)"
+    Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "File-backed session log plugin (JSONL) with the session trace Web view"
+    # session ships its own manifest (ui mounts: session-trace) and its UI Entry.
+    Copy-Item (Join-Path $root "plugins\session\plugin.json") (Join-Path $dist "plugins\session\") -Force
+    Copy-Item (Join-Path $root "plugins\session\ui") (Join-Path $dist "plugins\session\") -Recurse -Force
     Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]' "[]" 0 "Deterministic fake LLM for tests"
     Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000 "OpenAI-compatible LLM provider" '[{"name":"config","description":"Show or set API key / model / baseURL","usage":"/llm-openai config [get|set key=value]"}]'
     Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 "Echo tool with presentation card"

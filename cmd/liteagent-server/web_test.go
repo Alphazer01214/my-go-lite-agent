@@ -227,18 +227,27 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 		t.Fatalf("history missing user message: %+v", hist)
 	}
 
-	tres, err := http.Get(base + "/api/trace")
+	// Facts flow through the session Capability via the star route (ADR-0011);
+	// the dedicated /api/trace endpoint is retired.
+	callBody := strings.NewReader(`{"cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
+	tres, err := http.Post(base+"/api/call", "application/json", callBody)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var tr struct {
-		Facts []map[string]any `json:"facts"`
+		OK     bool `json:"ok"`
+		Result struct {
+			Facts []map[string]any `json:"facts"`
+		} `json:"result"`
 	}
 	if err := json.NewDecoder(tres.Body).Decode(&tr); err != nil {
 		t.Fatal(err)
 	}
 	_ = tres.Body.Close()
-	if len(tr.Facts) == 0 {
+	if !tr.OK {
+		t.Fatal("session.query call failed")
+	}
+	if len(tr.Result.Facts) == 0 {
 		t.Fatal("want session trace facts")
 	}
 }

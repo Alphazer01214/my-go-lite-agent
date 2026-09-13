@@ -4,26 +4,21 @@
 
 import { state, sameSession, setRunning } from './state.js';
 import { onPresentation, onStreamDelta, clearTurnUI } from './chat.js';
-import { applyPanel } from './panels.js';
-import { appendTraceFact } from './trace.js';
+import { applyPanel } from './loader.js';
 import { loadSessions } from './rail.js';
 
 function applySSE(env) {
   if (!state.historyReady && env.topic !== 'panel') return;
   var topic = env.topic;
   var d = env.data !== undefined ? env.data : env;
-  // Fan live events out to Panel Components subscribed via LiteAgent.on.
+  // Fan live events out to Panel Components subscribed via LiteAgent.on —
+  // including topic=session, which the session plugin's trace view consumes.
   if (window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit(topic, d);
   if (topic === 'presentation') { onPresentation(d); return; }
   if (topic === 'panel') { applyPanel(d); return; }
   if (topic === 'stream') {
     if (!sameSession(d.sessionId)) return;
     onStreamDelta(d.channel === 'reasoning' ? 'reasoning' : 'content', d.delta || '');
-    return;
-  }
-  if (topic === 'session') {
-    if (!sameSession(d.sessionId)) return;
-    appendTraceFact(d);
     return;
   }
   if (topic === 'status') {

@@ -1,0 +1,16 @@
+{
+  "name": "session",
+  "version": "0.2.0",
+  "protocol": 2,
+  "provides": ["session"],
+  "consumes": [],
+  "entry": "session.exe",
+  "description": "File-backed session log plugin (JSONL) with the session trace Web view",
+  "ui": {
+    "entry": "main.js",
+    "mounts": [
+      { "page": "main", "slot": "trace", "component": "session-trace" },
+      { "page": "trace", "slot": "main", "component": "session-trace" }
+    ]
+  }
+}

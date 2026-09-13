@@ -62,7 +62,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 }
 #pane-head a{color:var(--la-accent);text-decoration:none}
 #chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0}
-#trace-list{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
+#slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
 
 #composer{
   display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--la-line);
@@ -78,21 +78,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 }
 #btn-send.running{background:var(--la-stop);color:#fff}
 #status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
-
-.trace-row{padding:6px 12px;font-size:12px;cursor:pointer;display:flex;gap:8px;align-items:baseline;line-height:1.3}
-.trace-row:hover{background:#1a1f2a}
-.trace-row .t-kind{flex:0 0 72px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--la-dim);font-family:var(--la-mono)}
-.trace-row .t-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--la-ink)}
-.trace-row .t-seq{flex:0 0 auto;font-size:10px;color:var(--la-dim);font-family:var(--la-mono)}
-.trace-row.user .t-kind{color:#7aa2f7}
-.trace-row.assistant .t-kind{color:var(--la-ok)}
-.trace-row.system .t-kind{color:#bb9af7}
-.trace-row.tool_call .t-kind{color:#e0af68}
-.trace-row.tool_result .t-kind{color:#f7768e}
-.trace-row.reasoning .t-kind{color:#bb9af7}
-.trace-row.open{background:#1a1f2a}
-.trace-detail{display:none;padding:4px 12px 10px 92px;font-size:11px;color:var(--la-dim);white-space:pre-wrap;font-family:var(--la-mono);border-bottom:1px solid var(--la-line)}
-.trace-detail.open{display:block}
 
 .msg{margin:0 0 14px;max-width:52rem}
 .msg.user{color:var(--la-ink);background:var(--la-panel2);border-radius:10px;padding:10px 12px}
@@ -148,8 +133,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
         <div id="status"></div>
       </section>
       <section id="trace-col">
-        <div id="pane-head"><span>Session trace</span><button id="btn-dump" title="Export session trace JSON" style="background:none;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer">dump</button><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
-        <div id="trace-list"></div>
+        <div id="pane-head"><span>Session trace</span><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
+        <div id="slot-trace" class="panel-root"></div>
       </section>
     </div>
     <div id="composer">

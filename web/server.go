@@ -116,7 +116,6 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/call", s.handleCall)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/history", s.handleHistory)
-	mux.HandleFunc("/api/trace", s.handleTrace)
 	mux.HandleFunc("/api/session/new", s.handleSessionNew)
 	mux.HandleFunc("/api/session", s.handleSessionGet)
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
@@ -365,24 +364,6 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"facts": facts, "messages": list, "sessionId": sid})
-}
-
-// handleTrace returns Session Log facts as a turn/step trajectory for the sidebar.
-func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Srv == nil {
-		writeJSON(w, map[string]any{"facts": []any{}})
-		return
-	}
-	sid := r.URL.Query().Get("sessionId")
-	if sid == "" {
-		sid = s.currentSession()
-	}
-	facts, err := s.opts.Srv.QuerySessionFacts(sid, 0, 0)
-	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error(), "facts": []any{}})
-		return
-	}
-	writeJSON(w, map[string]any{"facts": facts, "sessionId": sid})
 }
 
 func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {

@@ -116,6 +116,13 @@ func TestUISpecValidate(t *testing.T) {
 		t.Fatalf("asset-declaring ui spec rejected: %v", err)
 	}
 
+	// page dimension (ADR-0011): syntax-validated here, vocabulary lives in the layout.
+	paged := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x",
+		UI: &UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "trace", Slot: "main", Component: "uidemo-x"}}}}
+	if err := paged.Validate(); err != nil {
+		t.Fatalf("page-qualified mount rejected: %v", err)
+	}
+
 	cases := []struct {
 		name string
 		ui   UISpec
@@ -128,6 +135,8 @@ func TestUISpecValidate(t *testing.T) {
 		{"asset absolute", UISpec{Entry: "main.js", Assets: []string{"/etc/panels.css"}}},
 		{"asset empty", UISpec{Entry: "main.js", Assets: []string{"  "}}},
 		{"asset duplicates entry", UISpec{Entry: "main.js", Assets: []string{"main.js"}}},
+		{"page uppercase", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "Main", Slot: "main", Component: "uidemo-x"}}}},
+		{"page with space", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "main page", Slot: "main", Component: "uidemo-x"}}}},
 		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "footer", Component: "uidemo-x"}}}},
 		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "other-panel"}}}},
 		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo"}}}},

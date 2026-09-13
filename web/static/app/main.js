@@ -4,8 +4,7 @@
 
 import { state, setRunning, setSessionId } from './state.js';
 import { appendUser, appendPre, clearTurnUI, beginTurn, resetChatUI, loadHistory, maybeResumeLiveThinking } from './chat.js';
-import { dumpTrace, loadTrace } from './trace.js';
-import { loadPluginUIs } from './panels.js';
+import { setPageLoader, createLoader } from './loader.js';
 import { loadSessions, onSelectSession } from './rail.js';
 import { openSSE } from './events.js';
 
@@ -13,6 +12,16 @@ var input = document.getElementById('input');
 var btnSend = document.getElementById('btn-send');
 var btnNew = document.getElementById('btn-new');
 var sessionLabel = document.getElementById('session-label');
+
+// This page's Panel mounts (ADR-0011): sidebar/toolbar/overlay plus the
+// trace column slot, filled by plugin components.
+const pageLoader = createLoader('main', function panelHost(slot) {
+  if (slot === 'sidebar') return document.getElementById('rail');
+  if (slot === 'main-overlay') return document.getElementById('main-overlay');
+  if (slot === 'trace') return document.getElementById('slot-trace');
+  return document.getElementById('slot-toolbar-right');
+}, function (msg) { appendPre(msg, 'message error'); });
+setPageLoader(pageLoader);
 
 function selectSession(id) {
   fetch('/api/session/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id }) })
@@ -25,7 +34,7 @@ function selectSession(id) {
       return loadHistory();
     }).then(function () {
       state.historyReady = true;
-      loadTrace(); loadSessions(); refreshRunState();
+      loadSessions(); refreshRunState();
     });
 }
 
@@ -79,8 +88,6 @@ function sendOrStop() {
 }
 
 btnSend.onclick = sendOrStop;
-var btnDump = document.getElementById('btn-dump');
-if (btnDump) btnDump.onclick = dumpTrace;
 input.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendOrStop(); }
 });
@@ -92,7 +99,7 @@ btnNew.onclick = function () {
     resetChatUI();
     setRunning(false);
     state.historyReady = true;
-    loadTrace(); loadSessions(); refreshRunState();
+    loadSessions(); refreshRunState();
     appendPre('new session ' + (b.sessionId || ''), 'message');
   });
 };
@@ -101,5 +108,5 @@ onSelectSession(selectSession);
 
 // History first, then live SSE (avoids replay double-paint on refresh).
 loadSessions();
-loadPluginUIs();
-loadHistory().then(function () { loadTrace(); refreshRunState(); openSSE(); });
+pageLoader.loadPluginUIs();
+loadHistory().then(function () { refreshRunState(); openSSE(); });
