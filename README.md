@@ -175,7 +175,8 @@ cd dist
 ```text
 my-plugin/
   plugin.json     # 清单（必需）
-  my-plugin.exe   # 可执行（entry）
+  my-plugin.exe   # 可执行（entry；UI-only 插件可省，见 ui）
+  ui/             # 可选：Panel Component 资产（ui.entry 指向的 ES Module）
   static/         # 可选静态文件（默认仅本插件可见）
   config.json     # 可选（llm-openai 等）
   segments.json   # 可选（contextmanager）
@@ -202,7 +203,7 @@ my-plugin/
 | `protocol` | 必须为 `1` |
 | `provides` | 对外 Capability 列表 |
 | `consumes` | 启动前必须被满足的 Capability |
-| `entry` | 相对本目录的可执行文件名 |
+| `entry` | 相对本目录的可执行文件名；与 `ui` 至少其一（UI-only 插件无 exe、无进程、不占 Capability，仅提供 Web UI） |
 | `timeoutMs` | 可选，单次调用超时（默认 30000） |
 
 ## Assembly 配置

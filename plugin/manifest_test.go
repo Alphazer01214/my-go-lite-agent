@@ -13,6 +13,13 @@ func TestManifestValidate(t *testing.T) {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 
+	// UI-only Plugin: legal with no executable entry (ADR-0011).
+	uiOnly := Manifest{Name: "a", Version: "1.0.0", Protocol: CurrentProtocol,
+		UI: &UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "a-panel"}}}}
+	if err := uiOnly.Validate(); err != nil {
+		t.Fatalf("ui-only manifest rejected: %v", err)
+	}
+
 	cases := []struct {
 		name string
 		m    Manifest
@@ -20,7 +27,7 @@ func TestManifestValidate(t *testing.T) {
 		{"missing name", Manifest{Version: "1", Protocol: 2, Entry: "x"}},
 		{"missing version", Manifest{Name: "a", Protocol: 2, Entry: "x"}},
 		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 3, Entry: "x"}},
-		{"missing entry", Manifest{Name: "a", Version: "1", Protocol: 2}},
+		{"missing entry and ui", Manifest{Name: "a", Version: "1", Protocol: 2}},
 		{"empty provides item", Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "x", Provides: []string{""}}},
 		{"bad name chars", Manifest{Name: "Help", Version: "1", Protocol: 2, Entry: "x"}},
 	}

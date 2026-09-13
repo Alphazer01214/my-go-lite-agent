@@ -182,6 +182,10 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		}
 	}
 	for _, p := range mounted {
+		// UI-only Plugin: no executable, no process, no Frames (ADR-0011).
+		if p.Manifest.Entry == "" {
+			continue
+		}
 		if err := s.launch(p); err != nil {
 			_ = s.Close()
 			return nil, err

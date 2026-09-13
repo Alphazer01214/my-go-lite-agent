@@ -84,6 +84,18 @@ func TestPluginUIAndTraversal(t *testing.T) {
 				},
 			},
 		},
+	}, {
+		// UI-only Plugin: no executable entry, Web UI only (ADR-0011).
+		Dir: dir,
+		Manifest: plugin.Manifest{
+			Name: "webonly", Version: "0.1.0", Protocol: plugin.CurrentProtocol,
+			UI: &plugin.UISpec{
+				Entry: "main.js",
+				Mounts: []plugin.UIMount{
+					{Slot: "toolbar-right", Component: "webonly-panel"},
+				},
+			},
+		},
 	}}}
 	s := New(Options{Plan: plan, CommandPlane: nopCommands{}})
 	ts := httptest.NewServer(s.http.Handler)
@@ -112,10 +124,23 @@ func TestPluginUIAndTraversal(t *testing.T) {
 		`"component":"demo-panel"`,
 		`"slot":"sidebar"`,
 		`"name":"demo"`,
+		`"name":"webonly"`,
+		`"component":"webonly-panel"`,
 	} {
 		if !strings.Contains(string(pb), want) {
 			t.Fatalf("api/plugins missing %s: %s", want, pb)
 		}
+	}
+
+	// The UI-only plugin's UI Entry is served like any other.
+	wo, err := http.Get(ts.URL + "/plugin-ui/webonly/main.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wb, _ := io.ReadAll(wo.Body)
+	_ = wo.Body.Close()
+	if wo.StatusCode != http.StatusOK || !strings.Contains(string(wb), "export") {
+		t.Fatalf("want ui-only entry module ok, status=%d body=%s", wo.StatusCode, wb)
 	}
 
 	// Traversal must not serve secret.

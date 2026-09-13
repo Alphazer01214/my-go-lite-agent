@@ -114,8 +114,12 @@ func dumpAssembly(plan assembly.Plan, res discovery.Result) {
 }
 
 // probePlugin starts the Plugin, completes one echo Frame, then shuts it down.
+// UI-only Plugins have no executable to probe (ADR-0011).
 func probePlugin(p discovery.Found) error {
 	fmt.Printf("mount name=%s\n", p.Manifest.Name)
+	if p.Manifest.Entry == "" {
+		return nil
+	}
 	return roundtrip(p.Manifest.ResolveEntry(p.Dir), p.Manifest.Name)
 }
 

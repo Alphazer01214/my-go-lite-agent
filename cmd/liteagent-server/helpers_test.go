@@ -1,10 +1,12 @@
 package main_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -17,19 +19,23 @@ func moduleRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+var binCache sync.Map // pkg -> built exe path (per test-binary process)
+
+// buildPkg builds a package once per test-binary process and shares the exe
+// across tests (mirrors cmd/liteagent-cli's helper).
 func buildPkg(t *testing.T, root, pkg string) string {
 	t.Helper()
-	name := filepath.Base(pkg)
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		name = "bin"
+	if v, ok := binCache.Load(pkg); ok {
+		return v.(string)
 	}
-	out := filepath.Join(t.TempDir(), name+".exe")
+	out := filepath.Join(os.TempDir(), fmt.Sprintf("la-test-%d-%s", os.Getpid(), filepath.Base(pkg)+".exe"))
 	cmd := exec.Command("go", "build", "-o", out, pkg)
 	cmd.Dir = root
 	b, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build %s: %v\n%s", pkg, err, b)
 	}
+	binCache.Store(pkg, out)
 	return out
 }
 

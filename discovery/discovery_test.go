@@ -48,18 +48,37 @@ func TestScanValidAndInvalid(t *testing.T) {
 		"entry": "missing.exe"
 	}`)
 
+	// valid UI-only plugin: no executable, UI Entry instead (ADR-0011)
+	writeFile(t, filepath.Join(root, "uifix", "plugin.json"), `{
+		"name": "uifix",
+		"version": "0.1.0",
+		"protocol": 2,
+		"provides": [],
+		"consumes": [],
+		"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "uifix-panel"}]}
+	}`)
+	writeFile(t, filepath.Join(root, "uifix", "ui", "main.js"), "export{};")
+
+	// invalid: neither entry nor ui
+	writeFile(t, filepath.Join(root, "neither", "plugin.json"), `{
+		"name": "neither",
+		"version": "0.1.0",
+		"protocol": 2,
+		"provides": []
+	}`)
+
 	// not a plugin dir (no plugin.json) — ignored
 	writeFile(t, filepath.Join(root, "notes", "readme.txt"), "hi")
 
 	res := Scan(root)
-	if len(res.Plugins) != 1 {
-		t.Fatalf("want 1 plugin, got %d: %+v", len(res.Plugins), res.Plugins)
+	if len(res.Plugins) != 2 {
+		t.Fatalf("want 2 plugins, got %d: %+v", len(res.Plugins), res.Plugins)
 	}
-	if res.Plugins[0].Manifest.Name != "echo" {
-		t.Fatalf("want echo, got %s", res.Plugins[0].Manifest.Name)
+	if res.Plugins[1].Manifest.Name != "uifix" {
+		t.Fatalf("want uifix second, got %s", res.Plugins[1].Manifest.Name)
 	}
-	if len(res.Errors) != 2 {
-		t.Fatalf("want 2 errors, got %d: %v", len(res.Errors), res.Errors)
+	if len(res.Errors) != 3 {
+		t.Fatalf("want 3 errors, got %d: %v", len(res.Errors), res.Errors)
 	}
 }
 

@@ -61,9 +61,12 @@ func Scan(root string) Result {
 			res.Errors = append(res.Errors, ScanError{Dir: dir, Err: err})
 			continue
 		}
-		if err := m.EntryExists(dir); err != nil {
-			res.Errors = append(res.Errors, ScanError{Dir: dir, Err: err})
-			continue
+		// UI-only Plugins have no executable; the UI Entry check below still applies.
+		if m.Entry != "" {
+			if err := m.EntryExists(dir); err != nil {
+				res.Errors = append(res.Errors, ScanError{Dir: dir, Err: err})
+				continue
+			}
 		}
 		if m.UI != nil {
 			if err := m.UIEntryExists(dir); err != nil {

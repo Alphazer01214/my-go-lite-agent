@@ -117,8 +117,10 @@ func (m *Manifest) Validate() error {
 	if m.Protocol < 1 || m.Protocol > CurrentProtocol {
 		return fmt.Errorf("protocol must be 1..%d, got %d", CurrentProtocol, m.Protocol)
 	}
-	if strings.TrimSpace(m.Entry) == "" {
-		return fmt.Errorf("entry is required")
+	// UI-only Plugins are legal (ADR-0011): a Manifest must carry an executable
+	// entry or a Web UI, never neither.
+	if strings.TrimSpace(m.Entry) == "" && m.UI == nil {
+		return fmt.Errorf("entry or ui is required")
 	}
 	for i, c := range m.Provides {
 		if strings.TrimSpace(c) == "" {
