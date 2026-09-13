@@ -4,6 +4,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -123,6 +124,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
+	mux.Handle("/app/", http.StripPrefix("/app/", withNoCache(http.FileServer(http.FS(appStatic())))))
 	s.http = &http.Server{Addr: opts.Addr, Handler: mux}
 	return s
 }
@@ -187,8 +189,26 @@ func (s *Server) handleTracePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSDK(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	_, _ = w.Write([]byte(sdkJS))
+}
+
+// appStatic serves the Shell's ES module tree from the embedded FS.
+func appStatic() fs.FS {
+	sub, err := fs.Sub(appFS, "static/app")
+	if err != nil {
+		panic(err) // embed layout is static; unreachable
+	}
+	return sub
+}
+
+// withNoCache keeps module files always-fresh: the Shell is embedded in the
+// binary, so a cached stale module would survive host upgrades.
+func withNoCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

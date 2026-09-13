@@ -32,11 +32,21 @@ func TestShellAndSDKServed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(body), "id=\"split\"") || !strings.Contains(string(body), "id=\"chat-col\"") {
+	if !strings.Contains(string(body), `id="split"`) || !strings.Contains(string(body), `id="chat-col"`) {
 		t.Fatalf("want center split shell, got %d bytes", len(body))
 	}
-	if !strings.Contains(string(body), "new EventSource('/events')") {
-		t.Fatal("shell must open live SSE")
+	// Shell face lives in ES modules under /app/ (ADR-0011 ticket 02).
+	if !strings.Contains(string(body), `/app/main.js`) {
+		t.Fatal("shell must load the module entry")
+	}
+	appRes, err := http.Get(ts.URL + "/app/events.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appBody, _ := io.ReadAll(appRes.Body)
+	_ = appRes.Body.Close()
+	if appRes.StatusCode != http.StatusOK || !strings.Contains(string(appBody), "new EventSource('/events')") {
+		t.Fatalf("shell must open live SSE via /app/events.js, status=%d", appRes.StatusCode)
 	}
 
 	res2, err := http.Get(ts.URL + "/sdk/lite-agent.js")
