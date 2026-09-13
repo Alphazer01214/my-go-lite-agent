@@ -180,7 +180,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
 	if *opts.dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

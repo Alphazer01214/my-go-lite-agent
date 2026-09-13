@@ -14,14 +14,12 @@
  * Facts come from the session Capability through the star route
  * (LiteAgent.call('session','query')), never from dedicated endpoints.
  * Shell coordination rides private topics: __session (switches),
- * __turn-start / __notice (composer → view).
+ * __notice (loader diagnostics → view).
  */
 import { esc, md, renderMath } from '/app/md.js';
 import { mergeReasoningFacts } from '/app/facts.js';
 
 const POLL_MS = 2000;
-
-let currentSid;
 
 function summary(f) {
   const t = f.type || '';
@@ -45,6 +43,7 @@ class SessionTrace extends HTMLElement {
   constructor() {
     super();
     this._root = null;
+    this._viewSid = '';
     this._offSession = null;
     this._offFacts = null;
     this._timer = null;
@@ -74,7 +73,7 @@ class SessionTrace extends HTMLElement {
     // Live append only when the fact belongs to the session being viewed.
     if (!this._root) return;
     const sid = f && f.sessionId !== undefined ? String(f.sessionId) : '';
-    if (String(currentSid || '') !== sid) return;
+    if (String(this._viewSid || '') !== sid) return;
     this.appendFact(f);
   }
   async refresh() {
@@ -83,8 +82,8 @@ class SessionTrace extends HTMLElement {
       // Current session is medium state (GET /api/session), then facts come
       // from the session Capability via the star route.
       const st = await fetch('/api/session').then(r => r.json());
-      currentSid = st.sessionId !== undefined && st.sessionId !== null ? st.sessionId : (window.__liteSessionId || '');
-      const res = await LiteAgent.call('session', 'query', { sessionId: currentSid, afterSeq: 0, limit: 0 });
+      this._viewSid = st.sessionId !== undefined && st.sessionId !== null ? st.sessionId : (window.__liteSessionId || '');
+      const res = await LiteAgent.call('session', 'query', { sessionId: this._viewSid, afterSeq: 0, limit: 0 });
       if (!res || res.ok === false) throw new Error(res && res.error || 'session.query failed');
       const facts = mergeReasoningFacts((res.result && res.result.facts) || []);
       this.render(facts);
@@ -435,14 +434,6 @@ class SessionView extends HTMLElement {
       const thinks = this._root.querySelectorAll('details.think:not(.live) .disc-body');
       if (thinks.length) this._reasoningBuf = thinks[thinks.length - 1].textContent || '';
     }).catch(() => { });
-  }
-  onTurnStart(d) {
-    // Private composer→view channel kept for external composers; the view's
-    // own composer uses sendOrStop directly.
-    this.queueOr(() => {
-      this.appendUser(d && d.text || '');
-      this.beginTurn();
-    });
   }
   sendOrStop() {
     if (!this._input) return;

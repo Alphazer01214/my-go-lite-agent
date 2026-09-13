@@ -40,7 +40,7 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr string, withREPL bool,
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
 	if dump != nil && *dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

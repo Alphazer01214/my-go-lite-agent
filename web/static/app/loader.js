@@ -56,6 +56,10 @@ export function createLoader(page, panelHost, onError) {
         var url = p.ui.entry + '?plugin=' + encodeURIComponent(p.name) + '&v=' + encodeURIComponent(p.version || '');
         import(url).then(function () {
           (p.ui.mounts || []).forEach(function (m) {
+            if (PAGES.indexOf(pageOf(m)) < 0) {
+              report('plugin ' + p.name + ' mounts unknown page "' + pageOf(m) + '" (known: ' + PAGES.join(', ') + ')');
+              return;
+            }
             if (pageOf(m) !== page) return; // other layout page's mount
             applyPanel({ op: 'set', slot: m.slot, id: m.component, component: m.component, props: m.props });
           });

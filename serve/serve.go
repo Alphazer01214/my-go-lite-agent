@@ -173,6 +173,10 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		s.job = job
 	}
 	for _, p := range mounted {
+		// UI-only Plugin: no process, so no capabilities and no launch (ADR-0011).
+		if p.Manifest.Entry == "" {
+			continue
+		}
 		for _, capName := range p.Manifest.Provides {
 			if owner, ok := s.provides[capName]; ok {
 				_ = s.Close()

@@ -94,12 +94,12 @@ func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
 	}
 
 	if dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 	return nil
 }
 
-func dumpAssembly(plan assembly.Plan, res discovery.Result) {
+func dumpAssembly(plan assembly.Plan) {
 	fmt.Println("assembly:")
 	for _, p := range plan.Mounted {
 		m := p.Manifest
@@ -110,7 +110,6 @@ func dumpAssembly(plan assembly.Plan, res discovery.Result) {
 		m := p.Manifest
 		fmt.Printf("  available name=%s mounted=false\n", m.Name)
 	}
-	_ = res
 }
 
 // probePlugin starts the Plugin, completes one echo Frame, then shuts it down.
@@ -188,7 +187,7 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audi
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
 	if dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 
 	srv, err := serve.Start(plan.Mounted)
@@ -241,7 +240,7 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
 	if dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

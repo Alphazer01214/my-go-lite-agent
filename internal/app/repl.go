@@ -29,7 +29,7 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
 	}
 	if dump != nil && *dump {
-		dumpAssembly(plan, res)
+		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

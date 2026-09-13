@@ -16,10 +16,6 @@ function applySSE(env) {
   if (topic === 'status') {
     var st = d.status || '';
     var statusEl = document.getElementById('status');
-    if (st.indexOf('session:') === 0) {
-      statusEl.textContent = st;
-      return;
-    }
     statusEl.textContent = st;
   }
 }

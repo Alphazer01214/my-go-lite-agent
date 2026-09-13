@@ -125,9 +125,13 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("protocol must be 1..%d, got %d", CurrentProtocol, m.Protocol)
 	}
 	// UI-only Plugins are legal (ADR-0011): a Manifest must carry an executable
-	// entry or a Web UI, never neither.
+	// entry or a Web UI, never neither. A UI-only plugin has no process, so it
+	// cannot serve capabilities.
 	if strings.TrimSpace(m.Entry) == "" && m.UI == nil {
 		return fmt.Errorf("entry or ui is required")
+	}
+	if strings.TrimSpace(m.Entry) == "" && len(m.Provides) > 0 {
+		return fmt.Errorf("ui-only plugin (no entry) cannot provide capabilities")
 	}
 	for i, c := range m.Provides {
 		if strings.TrimSpace(c) == "" {

@@ -6,12 +6,6 @@ export var state = {
   currentSessionId: '',
 };
 
-export function sameSession(sid) {
-  // Missing sessionId means the default Session (""), not "any session".
-  if (sid === undefined || sid === null) return !state.currentSessionId;
-  return String(sid) === String(state.currentSessionId || '');
-}
-
 // Session channel for Panel Components (LiteAgent.onSessionChange rides on this).
 export function setSessionId(id) {
   id = id || '';
