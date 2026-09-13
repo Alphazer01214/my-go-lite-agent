@@ -1,12 +1,14 @@
-/* session plugin UI Entry (ADR-0011): the Session Log's trace view.
+/* session plugin UI Entry (ADR-0011): the Session Log's Web faces.
  *
- * session-trace renders the current Session's facts — the same projection
- * the Shell's builtin trace column and /trace page used to render. Facts
- * come from the session Capability through the star route
- * (LiteAgent.call('session','query')), never from a dedicated endpoint;
- * live updates arrive over the session SSE topic.
- *
- * Mounted on the main page's trace column and the /trace debug page.
+ * session-trace — the Session Log's trace projection (main page trace column
+ *                 and the /trace debug page). Facts come from the session
+ *                 Capability through the star route
+ *                 (LiteAgent.call('session','query')), never from a
+ *                 dedicated endpoint; live updates arrive over the session
+ *                 SSE topic.
+ * session-rail  — the session list / switcher (sidebar). Switching is medium
+ *                 state (POST /api/session/select); the component announces
+ *                 the switch over __session and the shell reloads the chat.
  */
 const POLL_MS = 2000;
 
@@ -166,3 +168,117 @@ const CSS = `
 `;
 
 if (!customElements.get('session-trace')) customElements.define('session-trace', SessionTrace);
+
+/* ---- session-rail: the session list / switcher (sidebar) ---- */
+
+const RAIL_CSS = `
+  :host { display:flex; flex-direction:column; height:100%; min-height:0; font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed); }
+  .head { padding:12px; border-bottom:1px solid var(--la-line,#2a2f3a); display:flex; gap:8px; align-items:center; flex-shrink:0; }
+  .brand { font-size:13px; font-weight:600; flex:1; }
+  .btn-new { background:var(--la-accent,#7aa2f7); color:#0b1020; border:0; border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+  .list { flex:1; overflow-y:auto; padding:8px; min-height:0; }
+  .sess-item {
+    padding:8px 10px; border-radius:8px; font-size:12px; color:var(--la-dim,#9aa0a6);
+    cursor:pointer; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .sess-item:hover { background:#1a1f2a; color:var(--la-ink,#e8eaed); }
+  .sess-item.active { background:#1a1f2a; color:var(--la-ink,#e8eaed); border:1px solid var(--la-line,#2a2f3a); }
+`;
+
+class SessionRail extends HTMLElement {
+  constructor() {
+    super();
+    this._root = null;
+    this._current = '';
+    this._offs = [];
+  }
+  async connectedCallback() {
+    const root = this.attachShadow({ mode: 'open' });
+    this._root = root;
+    const style = document.createElement('style');
+    style.textContent = RAIL_CSS;
+    root.appendChild(style);
+    const head = document.createElement('div');
+    head.className = 'head';
+    const brand = document.createElement('span');
+    brand.className = 'brand';
+    brand.textContent = 'lite agent';
+    const btnNew = document.createElement('button');
+    btnNew.className = 'btn-new';
+    btnNew.title = 'New chat';
+    btnNew.textContent = '＋';
+    btnNew.onclick = () => this.newSession();
+    head.appendChild(brand); head.appendChild(btnNew);
+    root.appendChild(head);
+    const list = document.createElement('div');
+    list.className = 'list';
+    root.appendChild(list);
+    this._offs.push(LiteAgent.on('status', st => {
+      const s = (st && st.status) || '';
+      if (s === 'idle' || String(s).indexOf('error:') === 0) this.loadSessions();
+    }));
+    this._offs.push(LiteAgent.onSessionChange(id => this.markActive(id)));
+    await this.loadSessions();
+  }
+  disconnectedCallback() {
+    this._offs.forEach(off => off());
+    this._offs = [];
+    this._root = null;
+  }
+  async loadSessions() {
+    if (!this._root) return;
+    try {
+      const b = await fetch('/api/sessions').then(r => r.json());
+      this.render(b.current || '', b.sessions || []);
+    } catch (e) { /* rail is best-effort */ }
+  }
+  render(cur, list) {
+    if (!this._root) return;
+    this._current = cur || '';
+    const el = this._root.querySelector('.list');
+    el.innerHTML = '';
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sess-item';
+      empty.textContent = 'No sessions yet';
+      el.appendChild(empty);
+      return;
+    }
+    list.forEach(s => {
+      const id = s.id || '';
+      const title = s.title || id;
+      const item = document.createElement('div');
+      item.className = 'sess-item' + (id === this._current ? ' active' : '');
+      item.textContent = title;
+      item.title = id;
+      item.onclick = () => this.select(id);
+      el.appendChild(item);
+    });
+  }
+  markActive(id) {
+    this._current = id || '';
+    if (!this._root) return;
+    this._root.querySelectorAll('.sess-item').forEach(el => {
+      el.classList.toggle('active', el.title === this._current);
+    });
+  }
+  async select(id) {
+    const b = await fetch('/api/session/select', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id })
+    }).then(r => r.json());
+    if (b && b.ok === false) return;
+    // Announce the switch; the shell reloads the chat face for this session.
+    window.__liteSessionId = id;
+    LiteAgent.emit('__session', id);
+    this.loadSessions();
+  }
+  async newSession() {
+    const b = await fetch('/api/session/new', { method: 'POST' }).then(r => r.json());
+    if (!b || b.ok === false) return;
+    window.__liteSessionId = b.sessionId || '';
+    LiteAgent.emit('__session', b.sessionId || '');
+    this.loadSessions();
+  }
+}
+
+if (!customElements.get('session-rail')) customElements.define('session-rail', SessionRail);

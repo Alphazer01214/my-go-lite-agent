@@ -5,7 +5,6 @@
 import { state, sameSession, setRunning } from './state.js';
 import { onPresentation, onStreamDelta, clearTurnUI } from './chat.js';
 import { applyPanel } from './loader.js';
-import { loadSessions } from './rail.js';
 
 function applySSE(env) {
   if (!state.historyReady && env.topic !== 'panel') return;
@@ -40,7 +39,7 @@ function applySSE(env) {
         setRunning(false);
         clearTurnUI();
       }
-      if (st === 'idle' || st.indexOf('error:') === 0) loadSessions();
+      // Session list refresh is owned by the session rail component.
     }
   }
 }

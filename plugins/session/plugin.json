@@ -9,6 +9,7 @@
   "ui": {
     "entry": "main.js",
     "mounts": [
+      { "page": "main", "slot": "sidebar", "component": "session-rail" },
       { "page": "main", "slot": "trace", "component": "session-trace" },
       { "page": "trace", "slot": "main", "component": "session-trace" }
     ]

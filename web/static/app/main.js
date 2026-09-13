@@ -1,16 +1,16 @@
-// Shell entry: composer, session orchestration, and boot order. The face
-// modules (chat/trace/panels/rail/events) hold the rendering; this module
-// conducts them exactly as the former inline IIFE did.
+// Shell entry: composer and boot order. The face modules (chat/rail/events)
+// and plugin Panel Components hold the rendering; this module conducts the
+// chat flow. Session switches converge on the __session event: components
+// (e.g. the session rail) set the medium session and emit, the shell
+// reloads the chat face.
 
 import { state, setRunning, setSessionId } from './state.js';
-import { appendUser, appendPre, clearTurnUI, beginTurn, resetChatUI, loadHistory, maybeResumeLiveThinking } from './chat.js';
+import { appendUser, appendPre, clearTurnUI, beginTurn, loadHistory, maybeResumeLiveThinking } from './chat.js';
 import { setPageLoader, createLoader } from './loader.js';
-import { loadSessions, onSelectSession } from './rail.js';
 import { openSSE } from './events.js';
 
 var input = document.getElementById('input');
 var btnSend = document.getElementById('btn-send');
-var btnNew = document.getElementById('btn-new');
 var sessionLabel = document.getElementById('session-label');
 
 // This page's Panel mounts (ADR-0011): sidebar/toolbar/overlay plus the
@@ -23,21 +23,6 @@ const pageLoader = createLoader('main', function panelHost(slot) {
 }, function (msg) { appendPre(msg, 'message error'); });
 setPageLoader(pageLoader);
 
-function selectSession(id) {
-  fetch('/api/session/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id }) })
-    .then(function (r) { return r.json(); }).then(function (b) {
-      setSessionId(id);
-      sessionLabel.textContent = id || '(default)';
-      state.historyReady = false;
-      clearTurnUI();
-      setRunning(false);
-      return loadHistory();
-    }).then(function () {
-      state.historyReady = true;
-      loadSessions(); refreshRunState();
-    });
-}
-
 function refreshRunState() {
   fetch('/api/session').then(function (r) { return r.json(); }).then(function (b) {
     if (b.sessionId !== undefined) setSessionId(b.sessionId);
@@ -47,6 +32,20 @@ function refreshRunState() {
     maybeResumeLiveThinking(b.status === 'running');
   }).catch(function () { });
 }
+
+LiteAgent.on('__session', function (sid) {
+  sid = sid || '';
+  state.currentSessionId = sid;
+  window.__liteSessionId = sid;
+  sessionLabel.textContent = sid || '(default)';
+  state.historyReady = false;
+  clearTurnUI();
+  setRunning(false);
+  loadHistory().then(function () {
+    state.historyReady = true;
+    refreshRunState();
+  });
+});
 
 function sendOrStop() {
   if (state.running) {
@@ -91,22 +90,7 @@ btnSend.onclick = sendOrStop;
 input.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendOrStop(); }
 });
-btnNew.onclick = function () {
-  fetch('/api/session/new', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (b) {
-    if (!b.ok) { appendPre(b.error || 'new session failed', 'message error'); return; }
-    setSessionId(b.sessionId);
-    sessionLabel.textContent = b.sessionId || '(default)';
-    resetChatUI();
-    setRunning(false);
-    state.historyReady = true;
-    loadSessions(); refreshRunState();
-    appendPre('new session ' + (b.sessionId || ''), 'message');
-  });
-};
-
-onSelectSession(selectSession);
 
 // History first, then live SSE (avoids replay double-paint on refresh).
-loadSessions();
 pageLoader.loadPluginUIs();
 loadHistory().then(function () { refreshRunState(); openSSE(); });
