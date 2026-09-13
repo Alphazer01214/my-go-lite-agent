@@ -1,0 +1,12 @@
+/* uidemo shared panel styles — theme comes from the Shell's --la-* tokens. */
+:host { display:block; font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed); padding:4px 2px; }
+strong { font-size:12px; }
+.row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+button {
+  background:var(--la-panel2,#12161f); color:var(--la-dim,#9aa0a6);
+  border:1px solid var(--la-line,#2a2f3a); border-radius:8px;
+  padding:5px 10px; font:inherit; cursor:pointer;
+}
+button:hover { color:var(--la-ink,#e8eaed); }
+button.on { background:var(--la-accent,#7aa2f7); color:#0b1020; border-color:transparent; font-weight:600; }
+.meta { margin-top:8px; font-size:11px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }

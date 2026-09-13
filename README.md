@@ -114,6 +114,7 @@ cd dist
 
 - Manifest 声明 UI Entry 与静态挂载：`"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "<插件名>-mode-panel", "props": {...}}]}`
 - `ui/main.js` 是普通 ES Module：`customElements.define('<插件名>-…', …)`，组件用 Shadow DOM + Shell 的 `--la-*` Design Token 保持主题联动；零构建链
+- **多文件资产**：`ui.assets` 声明组件运行时 fetch 的 css / `<template>` html 文件（相对 `ui/`，Discovery 校验存在）——html 写结构、css 写样式、js 写行为；组件内 `fetch(new URL('panels.css', import.meta.url))` + `adoptedStyleSheets` + 模板克隆。参考 `plugins/uidemo/ui/`
 - 运行时变更走 `EmitPanel(PanelOp{op: set|clear, slot, id, component, props})`；Host 校验组件名必须以插件名为前缀
 - 组件内部经全局 `LiteAgent` 回传：`emitUIAction(plugin, panel, event, value, props?)` → 插件的 `cap=ui, method=action`；`onSessionChange(fn)` 响应会话切换；`on(topic, fn)` 订阅 SSE；`call(cap, method, payload)` 直调 Capability
 - `/refresh` 后插件变更由 Shell 整页刷新承接（状态真源在 Session Log）
@@ -205,6 +206,7 @@ my-plugin/
 | `consumes` | 启动前必须被满足的 Capability |
 | `entry` | 相对本目录的可执行文件名；与 `ui` 至少其一（UI-only 插件无 exe、无进程、不占 Capability，仅提供 Web UI） |
 | `timeoutMs` | 可选，单次调用超时（默认 30000） |
+| `ui` | 可选 Web UI 声明：`entry`（ES Module）、`assets`（css/html 资产，声明即校验存在）、`mounts`（静态挂载） |
 
 ## Assembly 配置
 

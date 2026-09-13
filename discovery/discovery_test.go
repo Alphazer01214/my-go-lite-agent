@@ -48,16 +48,29 @@ func TestScanValidAndInvalid(t *testing.T) {
 		"entry": "missing.exe"
 	}`)
 
-	// valid UI-only plugin: no executable, UI Entry instead (ADR-0011)
+	// valid UI-only plugin: no executable, UI Entry instead (ADR-0011),
+	// declaring multi-file assets that all exist.
 	writeFile(t, filepath.Join(root, "uifix", "plugin.json"), `{
 		"name": "uifix",
 		"version": "0.1.0",
 		"protocol": 2,
 		"provides": [],
 		"consumes": [],
-		"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "uifix-panel"}]}
+		"ui": {"entry": "main.js", "assets": ["deps.css"], "mounts": [{"slot": "sidebar", "component": "uifix-panel"}]}
 	}`)
 	writeFile(t, filepath.Join(root, "uifix", "ui", "main.js"), "export{};")
+	writeFile(t, filepath.Join(root, "uifix", "ui", "deps.css"), ":host{}")
+
+	// invalid: declared ui asset missing
+	writeFile(t, filepath.Join(root, "badasset", "plugin.json"), `{
+		"name": "badasset",
+		"version": "0.1.0",
+		"protocol": 2,
+		"provides": [],
+		"consumes": [],
+		"ui": {"entry": "main.js", "assets": ["missing.css"]}
+	}`)
+	writeFile(t, filepath.Join(root, "badasset", "ui", "main.js"), "export{};")
 
 	// invalid: neither entry nor ui
 	writeFile(t, filepath.Join(root, "neither", "plugin.json"), `{
@@ -77,8 +90,8 @@ func TestScanValidAndInvalid(t *testing.T) {
 	if res.Plugins[1].Manifest.Name != "uifix" {
 		t.Fatalf("want uifix second, got %s", res.Plugins[1].Manifest.Name)
 	}
-	if len(res.Errors) != 3 {
-		t.Fatalf("want 3 errors, got %d: %v", len(res.Errors), res.Errors)
+	if len(res.Errors) != 4 {
+		t.Fatalf("want 4 errors, got %d: %v", len(res.Errors), res.Errors)
 	}
 }
 

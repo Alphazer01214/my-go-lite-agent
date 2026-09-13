@@ -109,6 +109,13 @@ func TestUISpecValidate(t *testing.T) {
 		t.Fatalf("mount-less ui spec rejected: %v", err)
 	}
 
+	// declared assets are legal (ADR-0011 multi-file contract).
+	withAssets := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x",
+		UI: &UISpec{Entry: "main.js", Assets: []string{"panels.css", "mode-panel.html"}}}
+	if err := withAssets.Validate(); err != nil {
+		t.Fatalf("asset-declaring ui spec rejected: %v", err)
+	}
+
 	cases := []struct {
 		name string
 		ui   UISpec
@@ -117,6 +124,10 @@ func TestUISpecValidate(t *testing.T) {
 		{"entry not js", UISpec{Entry: "index.html"}},
 		{"entry escapes ui", UISpec{Entry: "../evil/main.js"}},
 		{"entry absolute", UISpec{Entry: "/etc/main.js"}},
+		{"asset escapes ui", UISpec{Entry: "main.js", Assets: []string{"../evil/panels.css"}}},
+		{"asset absolute", UISpec{Entry: "main.js", Assets: []string{"/etc/panels.css"}}},
+		{"asset empty", UISpec{Entry: "main.js", Assets: []string{"  "}}},
+		{"asset duplicates entry", UISpec{Entry: "main.js", Assets: []string{"main.js"}}},
 		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "footer", Component: "uidemo-x"}}}},
 		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "other-panel"}}}},
 		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo"}}}},
@@ -160,6 +171,32 @@ func TestUIEntryExists(t *testing.T) {
 	}
 	if err := m.UIEntryExists(dir); err != nil {
 		t.Fatalf("ui.entry should exist: %v", err)
+	}
+}
+
+func TestUIAssetsExist(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "bin",
+		UI: &UISpec{Entry: "main.js", Assets: []string{"panels.css", "tpl.html"}}}
+	if err := m.UIAssetsExist(dir); err == nil {
+		t.Fatal("want missing ui.asset error")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ui", "panels.css"), []byte(":host{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ui", "tpl.html"), []byte("<template></template>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UIAssetsExist(dir); err != nil {
+		t.Fatalf("assets should exist: %v", err)
+	}
+	// No assets declared → vacuously fine.
+	none := Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "bin", UI: &UISpec{Entry: "main.js"}}
+	if err := none.UIAssetsExist(dir); err != nil {
+		t.Fatalf("asset-less spec must pass: %v", err)
 	}
 }
 

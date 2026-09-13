@@ -21,7 +21,10 @@ type CommandSpec struct {
 // UISpec declares optional Web Medium Panel components (ADR-0010).
 type UISpec struct {
 	// Entry is the plugin's UI Entry ES Module, relative to the plugin's ui/ dir.
-	Entry  string    `json:"entry"`
+	Entry string `json:"entry"`
+	// Assets lists auxiliary files (css, html templates) the components
+	// fetch at runtime, relative to ui/. Declared files must exist (ADR-0011).
+	Assets []string `json:"assets,omitempty"`
 	Mounts []UIMount `json:"mounts,omitempty"`
 }
 
@@ -174,6 +177,15 @@ func (u *UISpec) validate(pluginName string) error {
 	if !strings.HasSuffix(clean, ".js") {
 		return fmt.Errorf("ui.entry %q must be a .js ES Module", u.Entry)
 	}
+	for i, a := range u.Assets {
+		cleanAsset := path.Clean(strings.ReplaceAll(a, "\\", "/"))
+		if strings.HasPrefix(cleanAsset, "/") || strings.Contains(cleanAsset, "..") || strings.TrimSpace(a) == "" {
+			return fmt.Errorf("ui.assets[%d] %q must stay under ui/", i, a)
+		}
+		if cleanAsset == clean {
+			return fmt.Errorf("ui.assets[%d] duplicates ui.entry %q", i, a)
+		}
+	}
 	for i, mount := range u.Mounts {
 		if !ValidUISlot(mount.Slot) {
 			return fmt.Errorf("ui.mounts[%d].slot %q must be one of %v", i, mount.Slot, UISlots)
@@ -203,6 +215,25 @@ func (m *Manifest) UIEntryExists(dir string) error {
 	}
 	if st.IsDir() {
 		return fmt.Errorf("ui.entry %q is a directory in %s", m.UI.Entry, dir)
+	}
+	return nil
+}
+
+// UIAssetsExist reports whether every declared ui asset file is present under dir.
+func (m *Manifest) UIAssetsExist(dir string) error {
+	for _, a := range m.UI.Assets {
+		clean := path.Clean(strings.ReplaceAll(a, "\\", "/"))
+		if !strings.HasPrefix(clean, "ui/") {
+			clean = "ui/" + clean
+		}
+		full := filepath.Join(dir, filepath.FromSlash(clean))
+		st, err := os.Stat(full)
+		if err != nil {
+			return fmt.Errorf("ui.asset %q not found in %s: %w", a, dir, err)
+		}
+		if st.IsDir() {
+			return fmt.Errorf("ui.asset %q is a directory in %s", a, dir)
+		}
 	}
 	return nil
 }
