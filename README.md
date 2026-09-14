@@ -1,6 +1,6 @@
 # my-go-lite-agent
 
-轻量 Go Agent 运行时：**Host 薄内核 + 进程外插件**。拿到二进制与插件目录即可运行、可换能力，不要求阅读源码，核心零第三方依赖。
+轻量 **Go Agent 运行时**：Host 薄内核 + 进程外插件。拿到二进制和插件目录就能跑，不要求读源码；核心零第三方依赖。
 
 ```text
 用户输入
@@ -9,343 +9,127 @@
 ┌──────────── Host（薄内核）────────────┐
 │  Discovery · Assembly · 生命周期       │
 │  Frame 路由（星型） · Session 不变量   │
-│  默认 Agent Loop · Context Prepare    │
+│  默认 Agent Loop                      │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
- session    llm        tools    echo
-（插件）  （插件）    （插件）   （插件）
+ session    llm     context-manager  tools
+（插件）  （插件）    （插件）      （插件）
 ```
+
+## 理念
+
+- **一切皆插件**：Session、LLM、工具、上下文观测都是可发现、可组装、可替换的进程。
+- **日志是真源**：会话事实只追加；模型能看到的内容必须能从 Session Log 重建。
+- **轻**：进程隔离换崩溃边界与独立分发；不绑重框架，不堆臃肿 harness。
 
 规范名词见 [CONTEXT.md](CONTEXT.md)；架构决策见 [docs/adr/](docs/adr/)。
 
 ## 特性
 
-- **进程外插件**：stdin/stdout 上的长度前缀 JSON Frame；崩溃隔离、可独立分发
-- **Discovery ≠ Assembly**：扫描看见插件，配置决定挂载；未点名不拉起
-- **星型路由**：插件之间不直连，策略平面唯一
-- **Session Log 不变量**：仅追加日志是历史唯一真源；模型可见内容必须可从日志重建
-- **Context Manager**：System Prompt / prepare / compact / usage；压缩以 Context Summary 落日志
-- **默认 Agent Loop 在 Host**：开箱跑通一轮对话；可用外置 `loop` 插件替换
-- **`llm-openai`**：OpenAI 兼容适配（DeepSeek 等），流式输出
-- **REPL**：`-repl` 多轮同 Session，实时流式打印
-- **Presentation**：`stream` / `status` / `card` 三类信号，CLI 为默认 Render Medium
-- **跨平台**：macOS (arm64) / Linux (amd64) / Windows (amd64) 全支持
+- 进程外插件（stdin/stdout JSON Frame），崩溃隔离
+- Discovery ≠ Assembly：看见 ≠ 挂载
+- 星型路由：插件不直连，策略平面唯一
+- Session Log 不变量 + 默认 Agent Loop（可外置 `loop` 替换）
+- Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
+- `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
+- CLI REPL / 一轮 `-turn`；Web Shell（聊天 + Session Trace）
+- 跨平台：Windows / macOS / Linux
 
 ## 快速开始
 
 ### 构建
 
-**Windows（PowerShell）**
-
 ```powershell
+# Windows
 .\scripts\build.ps1
 ```
 
-**macOS / Linux（Bash）**
-
 ```bash
+# macOS / Linux
 bash scripts/build.sh
 ```
 
-产物在 `dist/`（macOS/Linux 二进制无 `.exe` 后缀）：
+产物在 `dist/`：`liteagent-cli`、`liteagent-server`、`plugins/`、`examples/`。
 
-```text
-dist/
-  liteagent-cli[.exe]       CLI Medium（REPL / -turn / session ops / 诊断）
-  liteagent-server[.exe]    Web Medium（-serve，可与 -repl 组合）
-  plugins/
-    session/           memory Session Log + Web UI
-    llm-openai/        OpenAI 兼容 LLM（DeepSeek 等）+ config.example.json
-    context-manager/    system-prompt 组装 + segments.json
-    filetools/         读写/grep/glob
-    echotool/          演示工具 + Presentation Card
-    echo/              Echo 能力插件
-  examples/
-    chat.json          session + llm-openai + context-manager
-    agent.json         chat + filetools
-    assembly.json      session + llm-openai + context-manager（最小集）
-    assembly-with-tools.json
-```
-
-### 真实模型（DeepSeek / OpenAI 兼容）
-
-**方式一：环境变量（优先）**
+### 配置模型
 
 ```powershell
-# Windows
+# Windows（优先环境变量）
 $env:OPENAI_API_KEY = "sk-..."
-$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"   # 可省略，默认 DeepSeek
-$env:OPENAI_MODEL = "deepseek-chat"                   # 或你账户可用的模型名
+$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"   # 默认 DeepSeek
+$env:OPENAI_MODEL = "deepseek-chat"
 ```
 
 ```bash
 # macOS / Linux
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.deepseek.com/v1"   # 可省略，默认 DeepSeek
-export OPENAI_MODEL="deepseek-chat"                     # 或你账户可用的模型名
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://api.deepseek.com/v1
+export OPENAI_MODEL=deepseek-chat
 ```
 
-**方式二：复制配置到插件目录**
+也可编辑 `dist/plugins/llm-openai/config.json`。
+
+### 跑起来
 
 ```powershell
-# Windows
-copy plugins\llm-openai\config.example.json plugins\llm-openai\config.json
+# 一轮对话
+.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\chat.json -turn "你好"
+
+# 多轮 REPL
+.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\chat.json -repl
+
+# Web
+.\dist\liteagent-server.exe -plugins dist\plugins -assembly dist\examples\chat.json
+# 浏览器打开 http://127.0.0.1:8080
 ```
 
 ```bash
 # macOS / Linux
-cp plugins/llm-openai/config.example.json plugins/llm-openai/config.json
+./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/chat.json -turn "你好"
+./dist/liteagent-server -plugins dist/plugins -assembly dist/examples/chat.json
 ```
-
-编辑 `config.json` 填入 apiKey / model。
-
-**启动 REPL**
-
-```powershell
-# Windows
-cd dist
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -repl
-```
-
-```bash
-# macOS / Linux
-cd dist
-./liteagent-cli -plugins plugins -assembly examples/chat.json -repl
-```
-
-输入多轮对话；`/help` 查看命令；`/` 后按 Tab 可补全命令/插件名；`/exit` 或 Ctrl+C 退出。
-
-渲染默认全量展示（无需 `-verbose`）：
-
-- **Thinking…** — 尚无正文时的淡化占位（`message_text` dim）
-- **Generating… N chars** — 流式过程中的单行进度；正文在 settle 后以 Markdown→ANSI 完整渲染
-- **markdown_text** — 助手正文（标题/列表/代码块/表格/链接）
-- **summary_text** — 工具调用摘要卡（`⏺ 工具名` + 键值参数 + 截断详情）
-- **message_text** — 状态/错误行
-
-插件可通过 `pluginsdk.EmitMarkdownText` / `EmitMessageText` / `EmitSummaryText` 向 Render Medium 发分类意图。
 
 带文件工具：
 
 ```powershell
-# Windows
-.\liteagent-cli.exe -plugins plugins -assembly examples\agent.json -repl
+.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\agent.json -turn "读一下 README.md"
 ```
 
-```bash
-# macOS / Linux
-./liteagent-cli -plugins plugins -assembly examples/agent.json -repl
-```
+## 常用命令
 
-### Web Medium（浏览器）
+**REPL / Web 输入框**
 
-```powershell
-# Windows
-.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -layout layout.json -serve 127.0.0.1:7788
-# 可与终端 REPL 并存：
-.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -layout layout.json -serve 127.0.0.1:7788 -repl
-```
-
-```bash
-# macOS / Linux
-./liteagent-server -plugins plugins -assembly examples/chat.json -layout layout.json -serve 127.0.0.1:7788
-# 可与终端 REPL 并存：
-./liteagent-server -plugins plugins -assembly examples/chat.json -layout layout.json -serve 127.0.0.1:7788 -repl
-```
-
-打开 `http://127.0.0.1:7788`（需存在 `layout.json`，可用 `-layout` 指定；缺失则启动失败——ADR-0012）：
-
-- **Shell** 只提供 chrome（导航按合并 layout 渲染）、`--la-*` Design Token 与全局脚本（SDK + 装载器）；聊天面、会话栏、trace 全部由 session 插件的 Panel Component 渲染（ADR-0011/0012），输入框在会话视图内，**仅聊天区滚动**
-- 侧栏链到 **`/trace`**：独立 Session 轨迹页；插件可经 Manifest `ui.pages` 贡献新页面（加法，不可改内建槽语义）
-- Session 持久化：session 插件写 JSONL；当前会话经 session Capability（`current`/`select`/`list`/`create`）
-- 新标签页 SSE `?replay=1` 回放最近 presentation 事件
-- 运行时零 CDN；作者 SDK 单源：`sdk/lite-agent.js`（HTTP 出口 `/sdk/lite-agent.js`）
-
-**Panel Component（插件业务 UI，ADR-0010）**——插件自带 html/js/css，Host 零 Web 渲染编码：
-
-- Manifest 声明 UI Entry 与静态挂载：`"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "<插件名>-mode-panel", "props": {...}}]}`
-- `ui/main.js` 是普通 ES Module：`customElements.define('<插件名>-…', …)`，组件用 Shadow DOM + Shell 的 `--la-*` Design Token 保持主题联动；零构建链
-- **多文件资产**：`ui.assets` 声明组件运行时 fetch 的 css / `<template>` html 文件（相对 `ui/`，Discovery 校验存在）——html 写结构、css 写样式、js 写行为；组件内 `fetch(new URL('panels.css', import.meta.url))` + `adoptedStyleSheets` + 模板克隆。参考 `plugins/uidemo/ui/`
-- 运行时变更走 `EmitPanel(PanelOp{op: set|clear, slot, id, component, props})`；Host 校验组件名必须以插件名为前缀
-- 组件内部经全局 `LiteAgent` 回传：`emitUIAction(plugin, panel, event, value, props?)` → 插件的 `cap=ui, method=action`；`onSessionChange(fn)` 响应会话切换；`on(topic, fn)` 订阅 SSE；`call(cap, method, payload)` 直调 Capability
-- `/refresh` 后插件变更由 Shell 整页刷新承接（状态真源在 Session Log）
-- 作者 SDK：`GET /sdk/lite-agent.js`（与仓库 `sdk/lite-agent.js` 同源，可拷贝）
-
-参考实现：`plugins/uidemo`（静态挂载 + Shadow DOM + UI Action 回传 + 动态 PanelOp + 会话徽标五面俱全）。
-
-### 单发一轮（脚本友好）
-
-```powershell
-# Windows
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "hello" -session-derive
-```
-
-```bash
-# macOS / Linux
-./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "hello" -session-derive
-```
-
-### 发现与挂载
-
-```powershell
-# Windows
-.\liteagent-cli.exe -discover plugins
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -dump
-```
-
-```bash
-# macOS / Linux
-./liteagent-cli -discover plugins
-./liteagent-cli -plugins plugins -assembly examples/chat.json -dump
-```
-
-### Session / 不变量 / 注入
-
-```powershell
-# Windows — 追加事实并派生 Model Context
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json `
-  -session-append '[{"role":"user","content":"hi"}]' -session-derive
-```
-
-```bash
-# macOS / Linux — 追加事实并派生 Model Context
-./liteagent-cli -plugins plugins -assembly examples/chat.json \
-  -session-append '[{"role":"user","content":"hi"}]' -session-derive
-```
-
-### Context 用量
-
-```powershell
-# Windows — 一轮结束后打印 usage，并列出最近 5 条 prepare 消息
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "hello" -context-list 5
-```
-
-```bash
-# macOS / Linux
-./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "hello" -context-list 5
-```
-
-### Session / Context 命令（REPL 或 Web 输入）
-
-```
-/help session              # session 插件命令说明
-/session dump-trace        # 导出 Session Log JSON
-/session list
-/session derive
-/context-manager usage
-/context-manager list
-/context-manager skills
-```
-
-原生 slash 仅：`/help` `/lp` `/refresh` `/exit`。
-
-## 插件目录布局
-
-每个插件是一个目录：
-
-```text
-my-plugin/
-  plugin.json     # 清单（必需）
-  my-plugin.exe   # 可执行（entry；UI-only 插件可省，见 ui）
-  ui/             # 可选：Panel Component 资产（ui.entry 指向的 ES Module）
-  static/         # 可选静态文件（默认仅本插件可见）
-  config.json     # 可选（llm-openai 等）
-  segments.json   # 可选（context-manager）
-```
-
-`plugin.json` 最小示例：
-
-```json
-{
-  "name": "session",
-  "version": "0.1.0",
-  "protocol": 3,
-  "provides": ["session"],
-  "consumes": [],
-  "entry": "session.exe",
-  "timeoutMs": 30000
-}
-```
-
-| 字段 | 说明 |
+| 命令 | 说明 |
 |------|------|
-| `name` | 插件名，Assembly 点名用 |
-| `version` | 版本字符串 |
-| `protocol` | 必须为 `1..3` |
-| `provides` | 对外 Capability 列表 |
-| `consumes` | 启动前必须被满足的 Capability |
-| `entry` | 相对本目录的可执行文件名；与 `ui` 至少其一（UI-only 插件无 exe、无进程、不占 Capability，仅提供 Web UI） |
-| `timeoutMs` | 可选，单次调用超时（默认 30000） |
-| `ui` | 可选 Web UI 声明：`entry`（ES Module）、`assets`（css/html 资产，声明即校验存在）、`mounts`（静态挂载） |
+| `/help` | 帮助 |
+| `/lp` | 已挂载插件 |
+| `/session list` / `derive` / `dump-trace` | 会话列表 / Model Context / 导出日志 |
+| `/context-manager usage` / `list` | 上下文占用 / 进入模型的 messages |
+| `/llm-openai config` | 模型配置 |
 
-## Assembly 配置
+原生 slash 仅 `/help` `/lp` `/refresh` `/exit`；其余能力在对应插件名下。
+
+**CLI 一次成型**
+
+```powershell
+-turn TEXT           跑一轮
+-context-list N      打印最近 prepare 的 N 条消息
+-session-derive      打印 Model Context
+-session-query       打印 Session Log 事实
+```
+
+## 装配示例
+
+`dist/examples/chat.json`：
 
 ```json
 { "plugins": ["session", "llm-openai", "context-manager"] }
 ```
 
-只挂载点名的插件；引用不存在的名字会 fail-loud。
+按需换成/追加 `filetools`、`echotool` 等；未点名的插件不会启动。
 
-## 写一个插件
+## 文档
 
-使用仓库内 `pluginsdk`（与内置插件同一路径）：
-
-```go
-package main
-
-import (
-    "encoding/json"
-
-    "github.com/tomori/my-go-lite-agent/pluginsdk"
-)
-
-func main() {
-    s := pluginsdk.New()
-    s.Handle("demo", "ping", func(req *pluginsdk.Request) (json.RawMessage, error) {
-        return json.RawMessage(`{"pong":true}`), nil
-    })
-    // 经 Host 调用其他 Capability（星型，禁止直连）
-    // out, err := s.Call("session", "derive", json.RawMessage(`{}`))
-    // 发 Presentation Card（纯投影 + Emit 传输）
-    // _ = s.EmitCard(pluginsdk.Card{CardType: "demo", Data: ...})
-    _ = s.Serve()
-}
-```
-
-约定：
-
-- **Function** 一次调用返回 `result` / `additionalContexts`，不编排循环
-- **异步模型可见通知** 走 `agent.inject`，不要改写历史
-- **Presentation Card** 投影必须是 args/result 的纯函数（无 I/O、时钟、随机）
-
-## 内置 Capability（Host 侧）
-
-| Capability | 说明 |
-|------------|------|
-| `agent.request` | 校验 Model Context 可从 Session Log 重建 |
-| `agent.inject` | 追加模型可见消息，不启动 Loop |
-| 默认 Loop | `session` + `llm`（+ 可选 `tools`）驱动一轮对话 |
-
-插件提供的 Capability 示例：`session`、`llm`、`tools`、`echo`。
-
-## 开发
-
-```bash
-go test ./...
-go vet ./...
-```
-
-主缝测试在 `cmd/liteagent-cli`（CLI 面）与 `cmd/liteagent-server`（Web 面）：真实 Host 可执行 + fixture 插件进程，断言外部可观察行为。
-
-规格与工单：`.scratch/plugin-host-runtime/`。
-
-## 发布说明（v0.1）
-
-- 平台：macOS arm64 / Linux amd64 / Windows amd64
-- 依赖：无第三方运行时库（仅 Go 标准库）
-- LLM：接真实提供商请配置 `llm-openai` 插件（OpenAI / DeepSeek 兼容）
-- 范围：单机 stdio 插件；无 HMR、无远程插件、无图形 UI
-
-## 许可
-
-按仓库根目录许可文件（如有）执行。
+- 术语与边界：[CONTEXT.md](CONTEXT.md)
+- 架构决策：[docs/adr/](docs/adr/)
+- 内部票与规格：[.scratch/](.scratch/)（开发用）

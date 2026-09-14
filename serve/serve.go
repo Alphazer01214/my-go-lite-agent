@@ -875,10 +875,6 @@ const SystemPromptCap = "system-prompt"
 // ContextCap is the Capability Context Manager Plugins provide for prepare/compact/usage (ADR-0013).
 const ContextCap = "context"
 
-// ContextBudgetChars triggers auto-compact when prepare's character estimate
-// exceeds this budget (provider usage preferred when present).
-const ContextBudgetChars = 24000
-
 // LoopCap is the replaceable Agent Loop Capability (ADR-0003). Host uses the
 // in-process default unless a mounted Plugin provides this Capability.
 const LoopCap = "loop"
@@ -1112,11 +1108,10 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 
 // ContextPrepareResult is one context.prepare outcome (ADR-0013).
 type ContextPrepareResult struct {
-	Messages    []Message      `json:"messages"`
-	Tools       []ToolSchema   `json:"tools"`
-	SystemText  string         `json:"systemText"`
-	Usage       map[string]any `json:"usage,omitempty"`
-	CompactHint bool           `json:"compactHint"`
+	Messages   []Message      `json:"messages"`
+	Tools      []ToolSchema   `json:"tools"`
+	SystemText string         `json:"systemText"`
+	Usage      map[string]any `json:"usage,omitempty"`
 }
 
 // HasContextProvider reports whether a Context Manager provides `context`.
@@ -1153,11 +1148,10 @@ func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextP
 		return nil, fmt.Errorf("context.prepare: %w", res.Error)
 	}
 	var out struct {
-		Messages    []Message      `json:"messages"`
-		Tools       []ToolSchema   `json:"tools"`
-		SystemText  string         `json:"systemText"`
-		Usage       map[string]any `json:"usage"`
-		CompactHint bool           `json:"compactHint"`
+		Messages   []Message      `json:"messages"`
+		Tools      []ToolSchema   `json:"tools"`
+		SystemText string         `json:"systemText"`
+		Usage      map[string]any `json:"usage"`
 	}
 	if len(res.Payload) > 0 {
 		if err := json.Unmarshal(res.Payload, &out); err != nil {
@@ -1171,53 +1165,11 @@ func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextP
 		out.Tools = []ToolSchema{}
 	}
 	return &ContextPrepareResult{
-		Messages:    out.Messages,
-		Tools:       out.Tools,
-		SystemText:  out.SystemText,
-		Usage:       out.Usage,
-		CompactHint: out.CompactHint,
+		Messages:   out.Messages,
+		Tools:      out.Tools,
+		SystemText: out.SystemText,
+		Usage:      out.Usage,
 	}, nil
-}
-
-// CompactContext asks Context Manager for a Context Summary body.
-func (s *Server) CompactContext(sessionID string, messages []Message, coversThroughSeq int) (summary string, covers int, err error) {
-	s.mu.Lock()
-	owner, ok := s.provides[ContextCap]
-	s.mu.Unlock()
-	if !ok {
-		return "", 0, fmt.Errorf("no plugin provides %q", ContextCap)
-	}
-	payload := MarshalPayload(map[string]any{
-		"sessionId":        sessionID,
-		"messages":         messages,
-		"coversThroughSeq": coversThroughSeq,
-	})
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     ContextCap,
-		Method:  "compact",
-		Payload: payload,
-	})
-	if err != nil {
-		return "", 0, fmt.Errorf("context.compact: %w", err)
-	}
-	if res.Error != nil {
-		return "", 0, fmt.Errorf("context.compact: %w", res.Error)
-	}
-	var out struct {
-		Summary          string `json:"summary"`
-		CoversThroughSeq int    `json:"coversThroughSeq"`
-	}
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return "", 0, fmt.Errorf("context.compact: bad payload: %w", err)
-		}
-	}
-	if out.CoversThroughSeq == 0 {
-		out.CoversThroughSeq = coversThroughSeq
-	}
-	return out.Summary, out.CoversThroughSeq, nil
 }
 
 // lastSystemAfterSummary returns the latest role=system message content that
@@ -1262,23 +1214,6 @@ func (s *Server) lastSystemAfterSummary(sessionID string) (content string, hasSu
 		content, _ = f["content"].(string)
 	}
 	return content, hasSummary
-}
-
-func (s *Server) lastSessionSeq(sessionID string) int {
-	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
-	if err != nil {
-		return 0
-	}
-	last := 0
-	for _, f := range facts {
-		switch v := f["seq"].(type) {
-		case float64:
-			last = int(v)
-		case int:
-			last = v
-		}
-	}
-	return last
 }
 
 // ContextUsage returns the Context Manager's last prepare usage for a session.
@@ -1681,9 +1616,6 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		sysText += note
 	}
 
-	// Snapshot log end before this Turn's appends (compact covers prior history).
-	turnStartSeq := s.lastSessionSeq(sessionID)
-
 	if sysText != "" {
 		// Skip re-append when the same System Prompt is already the active one
 		// after any Context Summary (Q13 / ADR-0013).
@@ -1774,66 +1706,6 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 						Description: "Run a focused subagent on a new session and return its final reply.",
 						InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
 					})
-				}
-			}
-			// Auto-compact before the model hop when over budget (ADR-0013).
-			// Count only Model Context: content + tool_calls args (no Host meta JSON).
-			chars := 0
-			for _, m := range modelMessages {
-				chars += len(m.Content)
-				for _, tc := range m.ToolCalls {
-					chars += len(tc.Name) + len(tc.Arguments)
-				}
-			}
-			needCompact := chars > ContextBudgetChars || prep.CompactHint
-			if needCompact {
-				// Cover history before this Turn's appends; keep current turn intact.
-				oldMsgs := modelMessages
-				if len(oldMsgs) > 0 {
-					// Compact a prefix: everything except the trailing user message.
-					if len(oldMsgs) > 1 {
-						oldMsgs = oldMsgs[:len(oldMsgs)-1]
-					}
-				}
-				summary, covers, cerr := s.CompactContext(sessionID, oldMsgs, turnStartSeq)
-				if cerr != nil {
-					return nil, fmt.Errorf("agent loop: %w", cerr)
-				}
-				if summary != "" {
-					if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-						"type":    "context_summary",
-						"role":    "system",
-						"content": summary,
-						"meta": map[string]any{
-							"active":           true,
-							"coversThroughSeq": covers,
-						},
-					}}); err != nil {
-						return nil, fmt.Errorf("agent loop: %w", err)
-					}
-					// Re-append System Prompt after the summary so it stays model-visible.
-					if sysText != "" {
-						if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-							"type":    "message",
-							"role":    "system",
-							"content": sysText,
-						}}); err != nil {
-							return nil, fmt.Errorf("agent loop: %w", err)
-						}
-					}
-					ar2, err := s.AgentRequest(sessionID, nil)
-					if err != nil {
-						return nil, fmt.Errorf("agent loop: %w", err)
-					}
-					modelMessages = ar2.Messages
-					if prep2, perr := s.PrepareContext(sessionID, ar2.Messages); perr == nil {
-						if len(prep2.Messages) > 0 && !messagesEqual(prep2.Messages, ar2.Messages) {
-							return nil, &protocol.FrameError{
-								Code:    "session_invariant_violation",
-								Message: "context.prepare messages are not reconstructable from session log",
-							}
-						}
-					}
 				}
 			}
 		}

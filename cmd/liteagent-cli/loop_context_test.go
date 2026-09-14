@@ -61,49 +61,6 @@ func TestLoopSkipsDuplicateSystemAppend(t *testing.T) {
 	}
 }
 
-// TestLoopAutoCompactsWhenOverBudget: fat prior history + CM must compact and still complete.
-func TestLoopAutoCompactsWhenOverBudget(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
-		"segments": [{"name":"identity","order":-1000,"text":"CM_COMPACT_SYSTEM"}]
-	}`)
-
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
-
-	fat := strings.Repeat("x", 8000)
-	appendJSON := `[{"type":"message","role":"user","content":"` + fat + `"},{"type":"message","role":"assistant","content":"` + fat + `"},{"type":"message","role":"user","content":"` + fat + `"},{"type":"message","role":"assistant","content":"` + fat + `"}]`
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-session-append", appendJSON,
-		"-turn", "compact me",
-		"-session-derive",
-		"-session-query",
-	)
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("fat history turn: %v\n%s", err, out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "turn ok") {
-		t.Fatalf("want turn ok after compact: %s", s)
-	}
-	if !strings.Contains(s, "Conversation summary") && !strings.Contains(s, "context_summary") {
-		t.Fatalf("want context_summary in log: %s", s)
-	}
-	if !strings.Contains(s, "CM_COMPACT_SYSTEM") {
-		t.Fatalf("want system re-appended after compact: %s", s)
-	}
-}
-
 // TestCLIContextUsageAndList: turn prints context usage; -context-list lists prepare messages.
 func TestCLIContextUsageAndList(t *testing.T) {
 	root := moduleRoot(t)

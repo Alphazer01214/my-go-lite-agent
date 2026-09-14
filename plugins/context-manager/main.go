@@ -4,10 +4,10 @@
 //   - registerSegment / registerContext / assemble
 //
 // Capability: context
-//   - prepare:  {sessionId, messages} → {messages, tools, systemText, usage, compactHint}
-//   - compact:  {messages, coversThroughSeq} → {summary, coversThroughSeq}
+//   - prepare:  {sessionId, messages} → {messages, tools, systemText, usage}
+//   - compact:  {messages, coversThroughSeq} → {summary, coversThroughSeq} (manual; no auto-trigger)
 //   - usage:    last prepare usage for a session
-//   - listContext: last prepare messages preview
+//   - listContext: Model Context messages from last prepare
 //   - registerSkill: skill catalog segment (trigger injection is a later feature)
 //
 // Optional static base segments load from segments.json beside the executable.
@@ -348,16 +348,12 @@ func main() {
 			st.mu.Unlock()
 		}
 
-		// compactHint when the estimated hop is large (Host still owns the final budget check).
-		hint := u.EstimatedTokens > 4000 || chars > 16000
-
 		return json.Marshal(map[string]any{
-			"messages":    in.Messages,
-			"tools":       tools,
-			"systemText":  systemText,
-			"segments":    segments,
-			"usage":       u,
-			"compactHint": hint,
+			"messages":   in.Messages,
+			"tools":      tools,
+			"systemText": systemText,
+			"segments":   segments,
+			"usage":      u,
 		})
 	})
 
