@@ -337,10 +337,25 @@ const VIEW_CSS = `
     font-family:var(--la-mono,monospace); border-top:1px solid var(--la-line,#2a2f3a);
     background:var(--la-panel,#161a22); display:flex; gap:10px; align-items:center;
     min-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    cursor:pointer; user-select:none;
   }
+  .usage-bar:hover { color:var(--la-ink,#e8eaed); }
   .usage-bar .u-label { color:var(--la-dim,#9aa0a6); opacity:.75; }
   .usage-bar .u-val { color:var(--la-ink,#e8eaed); }
   .usage-bar .u-src { color:var(--la-accent,#7aa2f7); }
+  .usage-bar .u-hint { margin-left:auto; font-size:10px; opacity:.6; }
+  .ctx-panel {
+    flex-shrink:0; max-height:28vh; overflow-y:auto; border-top:1px solid var(--la-line,#2a2f3a);
+    background:var(--la-panel2,#12161f); padding:8px 12px; font-size:11px;
+    font-family:var(--la-mono,monospace); display:none;
+  }
+  .ctx-panel.open { display:block; }
+  .ctx-panel .ctx-head { color:var(--la-dim,#9aa0a6); margin-bottom:6px; }
+  .ctx-msg { margin:0 0 6px; padding:6px 8px; border-radius:6px; background:var(--la-bg,#0f1115);
+    border:1px solid var(--la-line,#2a2f3a); white-space:pre-wrap; word-break:break-word; }
+  .ctx-msg .role { color:var(--la-accent,#7aa2f7); font-weight:600; margin-right:6px; }
+  .ctx-msg.tool { border-color:#e0af6855; }
+  .ctx-msg.system .role { color:#bb9af7; }
 `;
 
 class SessionView extends HTMLElement {
@@ -372,10 +387,16 @@ class SessionView extends HTMLElement {
     // Per-session Context Usage strip (CONTEXT.md Context Usage).
     const usageBar = document.createElement('div');
     usageBar.className = 'usage-bar';
-    usageBar.innerHTML = '<span class="u-label">context</span><span class="u-val">—</span>';
+    usageBar.title = 'Show Model Context (messages sent to the LLM)';
+    usageBar.innerHTML = '<span class="u-label">context</span><span class="u-val">—</span><span class="u-hint">show ▾</span>';
     root.appendChild(usageBar);
     this._usageEl = usageBar.querySelector('.u-val');
     this._usageBar = usageBar;
+    const ctxPanel = document.createElement('div');
+    ctxPanel.className = 'ctx-panel';
+    root.appendChild(ctxPanel);
+    this._ctxPanel = ctxPanel;
+    usageBar.onclick = () => this.toggleModelContext();
     // Composer (ADR-0011 ticket 08): the input belongs to the view, not the layout.
     const composer = document.createElement('div');
     composer.className = 'composer';
@@ -411,6 +432,7 @@ class SessionView extends HTMLElement {
     this._btnSend = null;
     this._usageEl = null;
     this._usageBar = null;
+    this._ctxPanel = null;
   }
   isCurrent(sid) {
     // Missing sessionId means the default Session (""), not "any session".
@@ -495,7 +517,66 @@ class SessionView extends HTMLElement {
     if (!f || !f.type) return;
     if (!this.isCurrent(f.sessionId)) return;
     if (f.type === 'llm_usage') this.applyUsageFromFact(f);
-    if (f.type === 'turn_end') this.refreshUsage();
+    if (f.type === 'turn_end') {
+      this.refreshUsage();
+      if (this._ctxPanel && this._ctxPanel.classList.contains('open')) this.loadModelContext();
+    }
+  }
+  async toggleModelContext() {
+    if (!this._ctxPanel) return;
+    if (this._ctxPanel.classList.contains('open')) {
+      this._ctxPanel.classList.remove('open');
+      this._ctxPanel.innerHTML = '';
+      return;
+    }
+    this._ctxPanel.classList.add('open');
+    await this.loadModelContext();
+  }
+  async loadModelContext() {
+    if (!this._ctxPanel) return;
+    this._ctxPanel.innerHTML = '<div class="ctx-head">Model Context…</div>';
+    try {
+      // listContext n=0 → full prepare snapshot (messages that entered the LLM).
+      const res = await LiteAgent.call('context', 'listContext', { sessionId: this._sid || '', n: 0 });
+      if (!res || res.ok === false) throw new Error((res && res.error) || 'listContext failed');
+      const msgs = (res.result && res.result.messages) || [];
+      const total = (res.result && res.result.total) || msgs.length;
+      this._ctxPanel.innerHTML = '';
+      const head = document.createElement('div');
+      head.className = 'ctx-head';
+      head.textContent = 'Model Context · ' + total + ' messages · last prepare';
+      this._ctxPanel.appendChild(head);
+      if (!msgs.length) {
+        const empty = document.createElement('div');
+        empty.className = 'ctx-msg';
+        empty.textContent = 'No prepare snapshot yet — send a message first.';
+        this._ctxPanel.appendChild(empty);
+        return;
+      }
+      msgs.forEach(m => {
+        const row = document.createElement('div');
+        row.className = 'ctx-msg' + (m.role === 'system' ? ' system' : '') + (m.role === 'tool' ? ' tool' : '');
+        const role = document.createElement('span');
+        role.className = 'role';
+        role.textContent = m.role || '?';
+        const body = document.createElement('span');
+        let text = m.content || '';
+        if (!text && m.tool_calls && m.tool_calls.length) {
+          text = m.tool_calls.map(tc => '→ ' + (tc.name || '?')).join(', ');
+        }
+        if (!text) text = '(empty)';
+        body.textContent = text;
+        row.appendChild(role);
+        row.appendChild(body);
+        this._ctxPanel.appendChild(row);
+      });
+    } catch (e) {
+      this._ctxPanel.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'ctx-msg';
+      err.textContent = 'Model Context unavailable: ' + e;
+      this._ctxPanel.appendChild(err);
+    }
   }
   renderHistoryFact(f) {
     if (!f || !f.type) return;

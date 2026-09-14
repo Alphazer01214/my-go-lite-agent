@@ -186,7 +186,7 @@ func (cp *commandPlane) helpText(pluginName string) string {
 	b.WriteString("\nPlugin commands:\n")
 	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
 	b.WriteString("  Session Log ops live on the session plugin, e.g. /session dump-trace\n")
-	b.WriteString("  Context usage: /context-manager usage\n")
+	b.WriteString("  Context Manager: /context-manager usage | list (Model Context) | skills\n")
 	b.WriteString("\nCLI flags (one-shot, not slash):\n")
 	b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
 	b.WriteString("  -context-list N      Print last N prepare messages after the run\n")

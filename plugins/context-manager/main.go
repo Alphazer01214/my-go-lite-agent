@@ -448,21 +448,19 @@ func main() {
 		if sid == "" {
 			sid = "default"
 		}
+		// n<=0: full Model Context of the last prepare (what entered the LLM).
 		n := in.N
-		if n <= 0 {
-			n = 20
-		}
 		st.mu.Lock()
 		sess := st.session[sid]
 		st.mu.Unlock()
 		if sess == nil {
-			return json.Marshal(map[string]any{"messages": []message{}})
+			return json.Marshal(map[string]any{"messages": []message{}, "count": 0})
 		}
 		msgs := sess.messages
-		if len(msgs) > n {
+		if n > 0 && len(msgs) > n {
 			msgs = msgs[len(msgs)-n:]
 		}
-		return json.Marshal(map[string]any{"messages": msgs, "count": len(msgs)})
+		return json.Marshal(map[string]any{"messages": msgs, "count": len(msgs), "total": len(sess.messages)})
 	})
 
 	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
@@ -490,19 +488,27 @@ func main() {
 			raw, _ := json.MarshalIndent(sess.usage, "", "  ")
 			return json.Marshal(map[string]string{"text": string(raw)})
 		case "list":
-			n := 10
 			st.mu.Lock()
 			sess := st.session[sid]
 			st.mu.Unlock()
 			if sess == nil || len(sess.messages) == 0 {
-				return json.Marshal(map[string]string{"text": "(no prepare messages yet)"})
+				return json.Marshal(map[string]string{"text": "(no Model Context yet — run a turn first)"})
 			}
-			msgs := sess.messages
-			if len(msgs) > n {
-				msgs = msgs[len(msgs)-n:]
+			var b strings.Builder
+			fmt.Fprintf(&b, "Model Context (%d messages from last prepare):\n", len(sess.messages))
+			for i, m := range sess.messages {
+				body := m.Content
+				if body == "" && len(m.ToolCalls) > 0 {
+					body = "tool_call " + m.ToolCalls[0].Name
+				}
+				body = strings.ReplaceAll(body, "\n", " ")
+				r := []rune(body)
+				if len(r) > 80 {
+					body = string(r[:80]) + "…"
+				}
+				fmt.Fprintf(&b, "  [%d] %s: %s\n", i, m.Role, body)
 			}
-			raw, _ := json.MarshalIndent(msgs, "", "  ")
-			return json.Marshal(map[string]string{"text": string(raw)})
+			return json.Marshal(map[string]string{"text": b.String()})
 		case "skills":
 			st.mu.Lock()
 			var names []string

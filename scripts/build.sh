@@ -80,7 +80,7 @@ install_plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 \
 
 install_plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 \
     "Context Manager: system prompt + prepare/compact/usage" \
-    '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Last prepare messages preview","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
+    '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Model Context messages from last prepare","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
 
 install_plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 \
     "Echo capability plugin"

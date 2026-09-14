@@ -65,7 +65,7 @@ try {
     Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000 "OpenAI-compatible LLM provider" '[{"name":"config","description":"Show or set API key / model / baseURL","usage":"/llm-openai config [get|set key=value]"}]'
     Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 "Echo tool with presentation card"
     Install-Plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 "Read/write workspace files"
-    Install-Plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 "Context Manager: system prompt + prepare/compact/usage" '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Last prepare messages preview","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
+    Install-Plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 "Context Manager: system prompt + prepare/compact/usage" '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Model Context messages from last prepare","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
     Install-Plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 "Echo capability plugin"
     Install-Plugin "uidemo"         "./plugins/uidemo"         '[]' "[]" 0 "Web Panel Component reference"
     # uidemo ships its own manifest (ui.entry + ui.mounts) and its UI Entry module.

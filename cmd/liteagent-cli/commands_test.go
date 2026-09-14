@@ -129,6 +129,32 @@ func TestREPLSessionDumpTracePluginCommand(t *testing.T) {
 	}
 }
 
+// TestContextManagerListModelContext: after a turn, /context-manager list shows messages.
+func TestContextManagerListModelContext(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
+		"segments": [{"name":"identity","order":-1000,"text":"LIST_MC_SYS"}]
+	}`)
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
+
+	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
+		"hello list mc",
+		"/context-manager list",
+		"/exit",
+	})
+	if !strings.Contains(out, "Model Context") {
+		t.Fatalf("want Model Context header: %s", out)
+	}
+	if !strings.Contains(out, "system:") || !strings.Contains(out, "user:") {
+		t.Fatalf("want role-prefixed messages: %s", out)
+	}
+}
+
 func TestAssemblyRejectsNativeCommandConflict(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")

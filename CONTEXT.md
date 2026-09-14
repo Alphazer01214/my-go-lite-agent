@@ -149,7 +149,7 @@ _Avoid_: 请求头、调用配置（规范名词是 Request Header）
 _Avoid_: 子智能体、nested agent、child agent（规范名词是 Subagent）
 
 **Context Manager**:
-提供模型上下文内容管理的插件：持有 Prompt Segment 注册表并拼装 System Prompt，经 `context` Capability 提供 prepare/compact/usage 等；tools schema 与 skills 说明的注入策略也归此。历史真源仍是 Session Log，CM 不改写旧事实。
+观测与管理模型上下文状态的插件：拼装 System Prompt，经 `context` Capability 提供 prepare / compact / usage / listContext（查看进入模型的 messages）。tools/skills 说明注入亦归此。历史真源仍是 Session Log，CM 不改写旧事实。
 _Avoid_: 上下文管理器、prompt engine、prompt builder（规范名词是 Context Manager）
 
 **Prompt Segment**:

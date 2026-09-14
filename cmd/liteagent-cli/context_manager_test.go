@@ -22,7 +22,7 @@ func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, s
 		"entry": "`+name+`.exe",
 		"commands": [
 			{"name":"usage","description":"Last prepare Context Usage","usage":"/`+name+` usage [sessionId]"},
-			{"name":"list","description":"Last prepare messages preview","usage":"/`+name+` list [sessionId]"},
+			{"name":"list","description":"Model Context messages from last prepare","usage":"/`+name+` list [sessionId]"},
 			{"name":"skills","description":"List registered skills","usage":"/`+name+` skills"}
 		]
 	}`)
