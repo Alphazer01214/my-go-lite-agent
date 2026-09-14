@@ -42,7 +42,7 @@ function Install-Plugin([string]$name, [string]$pkg, [string]$provides, [string]
 {
   "name": "$name",
   "version": "0.1.0",
-  "protocol": 2,
+  "protocol": 3,
   "provides": $provides,
   "consumes": $consumes,
   "entry": "$name.exe"$extra
@@ -74,18 +74,35 @@ try {
 
     Copy-Item (Join-Path $root "plugins\context-manager\segments.json") (Join-Path $dist "plugins\context-manager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
-    # Ship the working llm-openai config (apiKey included) so dist is runnable out of the box.
+    # Ship runnable llm-openai config: DeepSeek public key is filled in at build time.
     $llmCfg = Join-Path $root "plugins\llm-openai\config.json"
     if (-not (Test-Path $llmCfg)) {
-        throw "missing plugins\llm-openai\config.json — required for release build (contains apiKey)"
+        throw "missing plugins\llm-openai\config.json — required for release build"
     }
-    Copy-Item $llmCfg (Join-Path $dist "plugins\llm-openai\") -Force
-    Write-Host "copied llm-openai config.json (with apiKey) -> dist\plugins\llm-openai\"
+    $cfg = Get-Content $llmCfg -Raw | ConvertFrom-Json
+    if (-not $cfg.PSObject.Properties['apiKey'] -or [string]::IsNullOrWhiteSpace([string]$cfg.apiKey)) {
+        $cfg | Add-Member -NotePropertyName apiKey -NotePropertyValue "sk-b741c1d4895c4e8583e1ce691975df72" -Force
+    } else {
+        $cfg.apiKey = "sk-b741c1d4895c4e8583e1ce691975df72"
+    }
+    if (-not $cfg.PSObject.Properties['baseURL'] -or [string]::IsNullOrWhiteSpace([string]$cfg.baseURL)) {
+        $cfg | Add-Member -NotePropertyName baseURL -NotePropertyValue "https://api.deepseek.com/v1" -Force
+    }
+    if (-not $cfg.PSObject.Properties['model'] -or [string]::IsNullOrWhiteSpace([string]$cfg.model)) {
+        $cfg | Add-Member -NotePropertyName model -NotePropertyValue "deepseek-flash" -Force
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText((Join-Path $dist "plugins\llm-openai\config.json"), ($cfg | ConvertTo-Json), $utf8NoBom)
+    Write-Host "wrote llm-openai config.json (DeepSeek public apiKey) -> dist\plugins\llm-openai\"
 
     Copy-Item (Join-Path $root "examples\assembly.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\assembly-with-tools.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\chat.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\agent.json") (Join-Path $dist "examples\") -Force
+    # Layout is required at runtime (ADR-0012); ship the base layout with dist.
+    Copy-Item (Join-Path $root "layout.json") $dist -Force
+    # Author SDK single source (dual export: repo copy + /sdk/ HTTP).
+    Copy-Item (Join-Path $root "sdk\lite-agent.js") (Join-Path $dist "lite-agent.js") -Force
     Copy-Item (Join-Path $root "README.md") $dist -Force
     Copy-Item (Join-Path $root "CONTEXT.md") $dist -Force
 

@@ -1,10 +1,9 @@
 // Shell entry: boot order only. Every face — chat view, session rail, trace,
 // composer — is a plugin Panel Component; the layout provides slots, Design
-// Tokens, and this loader. Composer events reach the session-view over the
-// private __notice topic.
+// Tokens, and this loader. Navigation is rendered from the merged layout.
 
 import { state, setSessionId } from './state.js';
-import { setPageLoader, createLoader } from './loader.js';
+import { setPageLoader, createLoader, setPages } from './loader.js';
 import { openSSE } from './events.js';
 
 var sessionLabel = document.getElementById('session-label');
@@ -18,7 +17,7 @@ function notice(text, cls) {
   }
 }
 
-// This page's Panel mounts (ADR-0011): sidebar/chat/trace/toolbar/overlay,
+// This page's Panel mounts (ADR-0012): sidebar/chat/trace/toolbar/overlay,
 // filled by plugin components.
 const pageLoader = createLoader('main', function panelHost(slot) {
   if (slot === 'sidebar') return document.getElementById('rail');
@@ -30,10 +29,17 @@ const pageLoader = createLoader('main', function panelHost(slot) {
 setPageLoader(pageLoader);
 
 function refreshRunState() {
-  fetch('/api/session').then(function (r) { return r.json(); }).then(function (b) {
-    if (b.sessionId !== undefined) setSessionId(b.sessionId);
+  // Current Session comes from the session Capability (ADR-0012).
+  LiteAgent.call('session', 'current', {}).then(function (b) {
+    var id = (b && b.ok !== false && b.result && b.result.sessionId) || '';
+    setSessionId(id);
     if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
-  }).catch(function () { });
+  }).catch(function () {
+    fetch('/api/session').then(function (r) { return r.json(); }).then(function (b) {
+      if (b.sessionId !== undefined) setSessionId(b.sessionId);
+      if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
+    }).catch(function () { });
+  });
 }
 
 LiteAgent.on('__session', function (sid) {
@@ -44,7 +50,29 @@ LiteAgent.on('__session', function (sid) {
   // The session-view reloads its history on the same __session event.
 });
 
+function renderNav(pages) {
+  var host = document.getElementById('layout-nav');
+  if (!host || !pages) return;
+  host.textContent = '';
+  pages.forEach(function (p) {
+    if (p.slug === 'main') return;
+    var a = document.createElement('a');
+    a.href = p.path || ('/' + p.slug);
+    a.textContent = p.title || p.slug;
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    host.appendChild(a);
+  });
+}
+
 // Components load their own history; the shell only opens the live bridge.
-pageLoader.loadPluginUIs();
-refreshRunState();
-openSSE();
+fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay) {
+  if (lay && lay.pages) {
+    setPages(lay.pages.map(function (p) { return p.slug; }));
+    renderNav(lay.pages);
+  }
+}).catch(function () { }).then(function () {
+  pageLoader.loadPluginUIs();
+  refreshRunState();
+  openSSE();
+});

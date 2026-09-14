@@ -13,6 +13,29 @@ import (
 // Config is the user-facing Assembly file (JSON).
 type Config struct {
 	Plugins []string `json:"plugins"`
+	// UI optionally adjudicates plugin UI mounts (ADR-0012).
+	UI *UIConfig `json:"ui,omitempty"`
+}
+
+// UIConfig is Assembly's control over Manifest-declared mounts.
+type UIConfig struct {
+	// Disable lists mount keys "plugin/component" or "plugin/page/slot/component" to drop.
+	Disable []string `json:"disable,omitempty"`
+	// Overrides rewrites props/slot/page or sets a winner on a slot.
+	Overrides []UIOverride `json:"overrides,omitempty"`
+}
+
+// UIOverride mutates one mount after Manifest defaults are read.
+type UIOverride struct {
+	Plugin    string          `json:"plugin"`
+	Component string          `json:"component"`
+	Page      string          `json:"page,omitempty"`
+	Slot      string          `json:"slot,omitempty"`
+	Props     json.RawMessage `json:"props,omitempty"`
+	// Winner marks this component as the exclusive mount for (page,slot).
+	Winner bool `json:"winner,omitempty"`
+	// Order sorts mounts within a slot (lower first); default keeps Manifest order.
+	Order *int `json:"order,omitempty"`
 }
 
 // Plan is the resolved mount set against a Discovery result.

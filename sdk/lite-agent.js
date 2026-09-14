@@ -62,6 +62,22 @@
     var names = global.__liteCommands || ['help','lp','refresh'];
     return names.map(function(n){return '/'+n;}).filter(function(c){return c.indexOf(prefix)===0;});
   }
+  async function sendMessage(text, sessionId){
+    var res = await fetch('/api/message', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text: text, sessionId: sessionId||''})
+    });
+    return res.json();
+  }
+  async function runCommand(line){
+    var res = await fetch('/api/command', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({line: line})
+    });
+    return res.json();
+  }
 
   // Session channel: the Shell keeps window.__liteSessionId current and
   // re-emits on every switch. Subscribing fires immediately so late-loaded
@@ -74,5 +90,6 @@
   }
 
   global.LiteAgent = { on:on, emit:emit, call:call, emitUIAction:emitUIAction,
-                       complete:complete, onSessionChange:onSessionChange };
+                       complete:complete, onSessionChange:onSessionChange,
+                       sendMessage:sendMessage, runCommand:runCommand };
 })(window);

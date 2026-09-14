@@ -30,6 +30,10 @@ type Options struct {
 	Srv          *serve.Server
 	CommandPlane CommandPlane
 	ReplaySize   int
+	// Layout is the merged layout (ADR-0012). Required for /api/layout.
+	Layout any
+	// UIMounts are Assembly-adjudicated mounts served on /api/plugins.
+	UIMounts []assembly.EffectiveMount
 }
 
 // CommandPlane is the slash-command surface the Shell uses (implemented by cmd/host).
@@ -56,7 +60,23 @@ type Server struct {
 	sessID string
 }
 
+// currentSession resolves the Current Session from the session Capability
+// (ADR-0012), falling back to the medium cache when the Capability is absent.
 func (s *Server) currentSession() string {
+	if s.opts.Srv != nil {
+		out, err := s.opts.Srv.CallByCap("session", "current", json.RawMessage(`{}`))
+		if err == nil && out != nil {
+			var res struct {
+				OK     bool `json:"ok"`
+				Result struct {
+					SessionID string `json:"sessionId"`
+				} `json:"result"`
+			}
+			if json.Unmarshal(out, &res) == nil && res.OK {
+				return res.Result.SessionID
+			}
+		}
+	}
 	s.sessMu.Lock()
 	defer s.sessMu.Unlock()
 	return s.sessID
@@ -66,6 +86,10 @@ func (s *Server) setCurrentSession(id string) {
 	s.sessMu.Lock()
 	s.sessID = id
 	s.sessMu.Unlock()
+	if s.opts.Srv != nil && id != "" {
+		payload, _ := json.Marshal(map[string]string{"sessionId": id})
+		_, _ = s.opts.Srv.CallByCap("session", "select", payload)
+	}
 }
 
 // Event is one SSE payload.
@@ -115,6 +139,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/ui-action", s.handleUIAction)
 	mux.HandleFunc("/api/call", s.handleCall)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
+	mux.HandleFunc("/api/layout", s.handleLayout)
 	mux.HandleFunc("/api/session/new", s.handleSessionNew)
 	mux.HandleFunc("/api/session", s.handleSessionGet)
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
@@ -481,13 +506,22 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "result": json.RawMessage(orEmptyJSON(out))})
 }
 
-// handlePlugins reports mounted plugins plus, for UI plugins, the Panel
-// Component contract (ADR-0010): entry URL and static mounts. The Shell
-// imports each entry module and applies the mounts itself.
+func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Layout == nil {
+		http.Error(w, "layout not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, s.opts.Layout)
+}
+
+// handlePlugins reports mounted plugins plus Assembly-adjudicated UI mounts
+// and the Panel Component contract (ADR-0010/0012).
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	type uiItem struct {
-		Entry  string           `json:"entry"`
-		Mounts []plugin.UIMount `json:"mounts"`
+		Entry  string              `json:"entry"`
+		Trust  string              `json:"trust,omitempty"`
+		Mounts []assembly.EffectiveMount `json:"mounts"`
+		Pages  []plugin.UIPage     `json:"pages,omitempty"`
 	}
 	type item struct {
 		Name     string               `json:"name"`
@@ -502,11 +536,31 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			Provides: p.Manifest.Provides, Commands: p.Manifest.Commands}
 		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
 			entry := strings.TrimPrefix(p.Manifest.UI.NormalizedEntry(), "ui/")
-			mounts := make([]plugin.UIMount, len(ui.Mounts))
-			copy(mounts, ui.Mounts)
+			var mounts []assembly.EffectiveMount
+			if s.opts.UIMounts != nil {
+				for _, m := range s.opts.UIMounts {
+					if m.Plugin == p.Manifest.Name {
+						mounts = append(mounts, m)
+					}
+				}
+			} else {
+				// Fallback when Assembly adjudication was not supplied (tests / simple hosts).
+				for _, m := range ui.Mounts {
+					page := m.Page
+					if page == "" {
+						page = "main"
+					}
+					mounts = append(mounts, assembly.EffectiveMount{
+						Plugin: p.Manifest.Name, Page: page, Slot: m.Slot,
+						Component: m.Component, Props: m.Props,
+					})
+				}
+			}
 			it.UI = &uiItem{
 				Entry:  "/plugin-ui/" + p.Manifest.Name + "/" + entry,
+				Trust:  ui.Trust,
 				Mounts: mounts,
+				Pages:  ui.Pages,
 			}
 		}
 		list = append(list, it)

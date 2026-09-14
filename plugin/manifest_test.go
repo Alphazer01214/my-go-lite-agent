@@ -26,7 +26,7 @@ func TestManifestValidate(t *testing.T) {
 	}{
 		{"missing name", Manifest{Version: "1", Protocol: 2, Entry: "x"}},
 		{"missing version", Manifest{Name: "a", Protocol: 2, Entry: "x"}},
-		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 3, Entry: "x"}},
+		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 4, Entry: "x"}},
 		{"missing entry and ui", Manifest{Name: "a", Version: "1", Protocol: 2}},
 		{"empty provides item", Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "x", Provides: []string{""}}},
 		{"bad name chars", Manifest{Name: "Help", Version: "1", Protocol: 2, Entry: "x"}},
@@ -137,7 +137,7 @@ func TestUISpecValidate(t *testing.T) {
 		{"asset duplicates entry", UISpec{Entry: "main.js", Assets: []string{"main.js"}}},
 		{"page uppercase", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "Main", Slot: "main", Component: "uidemo-x"}}}},
 		{"page with space", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "main page", Slot: "main", Component: "uidemo-x"}}}},
-		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "footer", Component: "uidemo-x"}}}},
+		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "Footer", Component: "uidemo-x"}}}},
 		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "other-panel"}}}},
 		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo"}}}},
 		{"component bad chars", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-X"}}}},

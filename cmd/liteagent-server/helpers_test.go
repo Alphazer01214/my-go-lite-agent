@@ -54,3 +54,24 @@ func hostEnv(t *testing.T) []string {
 	t.Helper()
 	return append(os.Environ(), "SESSION_DATA_DIR="+t.TempDir())
 }
+
+// writeTestLayout writes a minimal base layout for the Web Medium (ADR-0012).
+func writeTestLayout(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "layout.json")
+	writeFile(t, path, `{
+	  "pages": [
+	    {"slug":"main","title":"Chat","path":"/","slots":[
+	      {"id":"sidebar","role":"session-rail","preferred":"session-rail"},
+	      {"id":"chat","role":"session-view","preferred":"session-view"},
+	      {"id":"trace","role":"session-trace"},
+	      {"id":"toolbar-right","role":"panel"},
+	      {"id":"main-overlay","role":"overlay"}
+	    ]},
+	    {"slug":"trace","title":"Trace","path":"/trace","slots":[
+	      {"id":"main","role":"session-trace"}
+	    ]}
+	  ]
+	}`)
+	return path
+}

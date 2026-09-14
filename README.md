@@ -141,24 +141,25 @@ cd dist
 
 ```powershell
 # Windows
-.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788
+.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -layout layout.json -serve 127.0.0.1:7788
 # 可与终端 REPL 并存：
-.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788 -repl
+.\liteagent-server.exe -plugins plugins -assembly examples\chat.json -layout layout.json -serve 127.0.0.1:7788 -repl
 ```
 
 ```bash
 # macOS / Linux
-./liteagent-server -plugins plugins -assembly examples/chat.json -serve 127.0.0.1:7788
+./liteagent-server -plugins plugins -assembly examples/chat.json -layout layout.json -serve 127.0.0.1:7788
 # 可与终端 REPL 并存：
-./liteagent-server -plugins plugins -assembly examples/chat.json -serve 127.0.0.1:7788 -repl
+./liteagent-server -plugins plugins -assembly examples/chat.json -layout layout.json -serve 127.0.0.1:7788 -repl
 ```
 
-打开 `http://127.0.0.1:7788`：
+打开 `http://127.0.0.1:7788`（需存在 `layout.json`，可用 `-layout` 指定；缺失则启动失败——ADR-0012）：
 
-- **Shell** 只提供整体 layout（页面 + Panel 槽位）、`--la-*` Design Token 与全局脚本（SDK + 装载器）；聊天面、会话栏、trace 全部由 session 插件的 Panel Component 渲染（ADR-0011），输入框在会话视图内，**仅聊天区滚动**
-- 侧栏链到 **`/trace`**：独立 Session 轨迹页（user / assistant / system / tool_call / tool_result / step…），同为插件组件渲染
-- Session 持久化：session 插件把事实写入 JSONL（默认 `./sessions/`，可用 `SESSION_DATA_DIR` 覆盖）；Host 重启后聊天面经 capability 重放
+- **Shell** 只提供 chrome（导航按合并 layout 渲染）、`--la-*` Design Token 与全局脚本（SDK + 装载器）；聊天面、会话栏、trace 全部由 session 插件的 Panel Component 渲染（ADR-0011/0012），输入框在会话视图内，**仅聊天区滚动**
+- 侧栏链到 **`/trace`**：独立 Session 轨迹页；插件可经 Manifest `ui.pages` 贡献新页面（加法，不可改内建槽语义）
+- Session 持久化：session 插件写 JSONL；当前会话经 session Capability（`current`/`select`/`list`/`create`）
 - 新标签页 SSE `?replay=1` 回放最近 presentation 事件
+- 运行时零 CDN；作者 SDK 单源：`sdk/lite-agent.js`（HTTP 出口 `/sdk/lite-agent.js`）
 
 **Panel Component（插件业务 UI，ADR-0010）**——插件自带 html/js/css，Host 零 Web 渲染编码：
 
@@ -244,7 +245,7 @@ my-plugin/
 {
   "name": "session",
   "version": "0.1.0",
-  "protocol": 2,
+  "protocol": 3,
   "provides": ["session"],
   "consumes": [],
   "entry": "session.exe",
@@ -256,7 +257,7 @@ my-plugin/
 |------|------|
 | `name` | 插件名，Assembly 点名用 |
 | `version` | 版本字符串 |
-| `protocol` | 必须为 `1` |
+| `protocol` | 必须为 `1..3` |
 | `provides` | 对外 Capability 列表 |
 | `consumes` | 启动前必须被满足的 Capability |
 | `entry` | 相对本目录的可执行文件名；与 `ui` 至少其一（UI-only 插件无 exe、无进程、不占 Capability，仅提供 Web UI） |

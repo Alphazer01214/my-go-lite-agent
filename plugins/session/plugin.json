@@ -1,13 +1,14 @@
 {
   "name": "session",
-  "version": "0.2.0",
-  "protocol": 2,
+  "version": "0.3.0",
+  "protocol": 3,
   "provides": ["session"],
   "consumes": [],
   "entry": "session.exe",
-  "description": "File-backed session log plugin (JSONL) with the session trace Web view",
+  "description": "File-backed session log plugin (JSONL) with the session Web faces",
   "ui": {
     "entry": "main.js",
+    "trust": "full",
     "mounts": [
       { "page": "main", "slot": "sidebar", "component": "session-rail" },
       { "page": "main", "slot": "chat", "component": "session-view" },

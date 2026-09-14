@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "filetools",
   "version": "0.1.0",
-  "protocol": 2,
+  "protocol": 3,
   "provides": ["tools"],
   "consumes": [],
   "entry": "filetools.exe",

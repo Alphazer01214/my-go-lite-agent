@@ -15,6 +15,7 @@ func Server() {
 	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL alongside the Web Medium")
 	serveAddr := flag.String("serve", "", "start Web Medium on this address (e.g. 127.0.0.1:7788); combine with -repl")
+	layoutPath := flag.String("layout", "", "layout.json path (default: layout.json beside cwd); required (ADR-0012)")
 	flag.Parse()
 
 	if *assemblyPath == "" {
@@ -26,7 +27,7 @@ func Server() {
 	if *serveAddr == "" {
 		fatal(fmt.Errorf("-serve is required — liteagent-server is the Web Medium entry; the CLI Medium lives in liteagent-cli"))
 	}
-	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *repl, dump); err != nil {
+	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *layoutPath, *repl, dump); err != nil {
 		fatal(err)
 	}
 }

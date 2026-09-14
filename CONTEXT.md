@@ -36,8 +36,24 @@ _Avoid_: 视图、前端组件、渲染器（规范名词是 Presentation）
 Presentation 面的结构化渲染意图：从 args/result 纯函数投影（如问卷、diff 卡）。不做 I/O，回放可重现。与瞬态 stream/status 信号不同。
 _Avoid_: UI 组件、视图模型
 
+**Layout**:
+Web Medium 的页面与槽位声明真源：磁盘 layout.json（项目基座）与插件 ui.pages/ui.slots 加法贡献的合并结果。定义 page 列表、slot 几何与 role，不定义组件实现。
+_Avoid_: 网格配置、shell 布局、layout 插件
+
+**Slot Role**:
+Panel 槽位的语义标签（如 session-view）：说明该槽期望什么类内容。preferred component 可选；同 role 可竞争，由 Assembly 裁决。
+_Avoid_: 组件类型约束、slot kind
+
+**Platform Module**:
+Web Medium 暴露给 Panel Component 的作者 SDK 面（LiteAgent 全局与 /app/ 下 md/facts 等）。与 Design Token 同级的平台契约，插件可依赖也可自带实现。
+_Avoid_: 公共库、shared utils、Shell 内部模块
+
+**Current Session**:
+session Capability 上的媒介无关「当前会话」状态：get/select/list/create。Web Medium 不再自持专用真源。
+_Avoid_: 默认会话、活动会话 id（口语可用）
+
 **Panel**:
-Web Render Medium 中一块可被插件填充的 UI 槽位，槽位集合由 layout 定义。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp。
+Web Render Medium 中一块可被插件填充的 UI 槽位，槽位集合由 Layout 定义。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp。Assembly 可禁用/覆盖 mount。
 _Avoid_: 页面、视图区、slot（可作别名，规范名词是 Panel）
 
 **Panel Component**:
@@ -81,7 +97,7 @@ _Avoid_: 清单、plugin config（config 是运行参数，不是 Manifest）
 _Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
 
 **Shell**:
-Web Render Medium 中项目提供的最薄骨架：整体 layout（页面与 Panel 槽位）、整体样式表（Design Token）与必要全局脚本（SDK 与组件装载器）。内容面（聊天、trace 等）不属骨架，由插件作者实现为 Panel Component 注册进页面，项目自有实现也不例外。
+Web Render Medium 中项目提供的最薄骨架：按合并 Layout 渲染 chrome 与导航、提供 Design Token 与必要全局脚本（SDK 与组件装载器）。内容面（聊天、trace 等）不属骨架，由插件作者实现为 Panel Component 注册进页面，项目自有实现也不例外。
 _Avoid_: 前端框架、主界面、聊天壳（规范名词是 Shell）
 
 **Waterfall**:

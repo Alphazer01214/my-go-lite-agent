@@ -1,7 +1,7 @@
 // Command session is an append-only Session Log Plugin (file-backed JSONL + memory).
 //
 // Capability: session
-//   - create / append / query / derive
+//   - create / append / query / list / derive / current / select
 //
 // Persistence: each Session is one JSONL file under the data directory
 // (env SESSION_DATA_DIR, or ./sessions). Restart reloads facts.
@@ -279,6 +279,10 @@ func main() {
 	reg := newRegistry(dir)
 	fmt.Fprintf(os.Stderr, "session: dataDir=%s\n", dir)
 
+	// Current Session (ADR-0012): medium-agnostic current id on the session Capability.
+	var currentMu sync.Mutex
+	currentID := ""
+
 	s.Handle("session", "create", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
 			SessionID       string `json:"sessionId"`
@@ -291,6 +295,10 @@ func main() {
 				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 			}
 		}
+		if in.SessionID == "" {
+			// Mint a fresh id (ADR-0012): empty create must not collapse onto "default".
+			in.SessionID = fmt.Sprintf("s-%d", time.Now().UnixNano())
+		}
 		m, created, err := reg.create(in.SessionID, SessionMeta{
 			ParentSession:   in.ParentSession,
 			Origin:          in.Origin,
@@ -299,8 +307,12 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
+		id := normalizeID(in.SessionID)
+		currentMu.Lock()
+		currentID = id
+		currentMu.Unlock()
 		return json.Marshal(map[string]any{
-			"sessionId": normalizeID(in.SessionID),
+			"sessionId": id,
 			"created":   created,
 			"meta":      m,
 		})
@@ -380,6 +392,30 @@ func main() {
 			list = []item{}
 		}
 		return json.Marshal(map[string]any{"sessions": list})
+	})
+
+	s.Handle("session", "current", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		currentMu.Lock()
+		id := currentID
+		currentMu.Unlock()
+		return json.Marshal(map[string]any{"sessionId": id})
+	})
+
+	s.Handle("session", "select", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(req.Payload, &in); err != nil {
+			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+		}
+		if in.SessionID == "" {
+			return nil, &protocol.FrameError{Code: "bad_payload", Message: "sessionId required"}
+		}
+		reg.openStore(in.SessionID)
+		currentMu.Lock()
+		currentID = in.SessionID
+		currentMu.Unlock()
+		return json.Marshal(map[string]any{"ok": true, "sessionId": in.SessionID})
 	})
 
 	s.Handle("session", "derive", func(req *pluginsdk.Request) (json.RawMessage, error) {

@@ -53,7 +53,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 #pane-head a{color:var(--la-accent);text-decoration:none}
 /* The chat surface is the session-view Panel Component (ADR-0011);
    the layout owns sizing, the component owns scrolling and content. */
-#chat{flex:1;min-width:0;min-height:0}
+#chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#chat>session-view{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 #slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
 #status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
@@ -68,7 +69,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
   <section id="center">
     <div id="split">
       <section id="chat-col">
-        <div id="pane-head"><span>Chat</span><span id="session-label" style="font-family:var(--la-mono);font-size:11px"></span></div>
+        <div id="pane-head"><span>Chat</span><span id="layout-nav" style="display:flex;gap:10px;margin-left:12px"></span><span id="session-label" style="font-family:var(--la-mono);font-size:11px"></span></div>
         <div id="chat" class="panel-root"></div>
         <div id="status"></div>
       </section>
@@ -85,9 +86,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous"/>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
 <script type="module" src="/app/main.js"></script>
+
 </body>
 </html>

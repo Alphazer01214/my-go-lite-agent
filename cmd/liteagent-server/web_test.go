@@ -22,6 +22,7 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	layoutPath := writeTestLayout(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -30,7 +31,7 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr)
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr, "-layout", layoutPath)
 	cmd.Env = hostEnv(t)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -144,6 +145,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	layoutPath := writeTestLayout(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -152,7 +154,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr)
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-serve", addr, "-layout", layoutPath)
 	cmd.Env = hostEnv(t)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

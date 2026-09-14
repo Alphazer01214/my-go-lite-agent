@@ -1,13 +1,14 @@
 {
   "name": "uidemo",
-  "version": "0.3.0",
-  "protocol": 2,
+  "version": "0.4.0",
+  "protocol": 3,
   "provides": [],
   "consumes": [],
   "entry": "uidemo.exe",
   "description": "Web Panel Component reference (mode switch, Shadow DOM, session badge)",
   "ui": {
     "entry": "main.js",
+    "trust": "full",
     "assets": ["panels.css", "mode-panel.html", "echo-panel.html"],
     "mounts": [
       { "slot": "sidebar", "component": "uidemo-mode-panel", "props": { "initial": "chat" } }

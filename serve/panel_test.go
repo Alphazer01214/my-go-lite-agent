@@ -69,7 +69,7 @@ func TestDispatchPanelRejectsViolations(t *testing.T) {
 		{"foreign prefix", "other", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "uidemo-mode-panel"}},
 		{"missing component", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x"}},
 		{"append removed", "uidemo", PanelOp{Op: "append", Slot: "sidebar", ID: "x", Component: "uidemo-x"}},
-		{"unknown slot", "uidemo", PanelOp{Op: "set", Slot: "footer", ID: "x", Component: "uidemo-x"}},
+		{"unknown slot", "uidemo", PanelOp{Op: "set", Slot: "Footer", ID: "x", Component: "uidemo-x"}},
 		{"bad tag case", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "Uidemo-X"}},
 		{"tag without hyphen", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "uidemo"}},
 		{"missing id", "uidemo", PanelOp{Op: "set", Slot: "sidebar", Component: "uidemo-x"}},

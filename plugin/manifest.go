@@ -18,7 +18,7 @@ type CommandSpec struct {
 	Usage       string `json:"usage"`
 }
 
-// UISpec declares optional Web Medium Panel components (ADR-0010).
+// UISpec declares optional Web Medium Panel components (ADR-0010, ADR-0012).
 type UISpec struct {
 	// Entry is the plugin's UI Entry ES Module, relative to the plugin's ui/ dir.
 	Entry string `json:"entry"`
@@ -26,6 +26,26 @@ type UISpec struct {
 	// fetch at runtime, relative to ui/. Declared files must exist (ADR-0011).
 	Assets []string `json:"assets,omitempty"`
 	Mounts []UIMount `json:"mounts,omitempty"`
+	// Trust reserves isolation (ADR-0012). Default/only implemented value: full.
+	Trust string `json:"trust,omitempty"`
+	// Pages are additive page contributions (may not replace base layout pages).
+	Pages []UIPage `json:"pages,omitempty"`
+}
+
+// UIPage is a plugin-contributed layout page (ADR-0012).
+type UIPage struct {
+	Slug  string    `json:"slug"`
+	Title string    `json:"title,omitempty"`
+	Path  string    `json:"path"`
+	Slots []UISlot  `json:"slots"`
+}
+
+// UISlot is a slot declared on a contributed page.
+type UISlot struct {
+	ID        string `json:"id"`
+	Role      string `json:"role,omitempty"`
+	Preferred string `json:"preferred,omitempty"`
+	Region    string `json:"region,omitempty"`
 }
 
 // UIMount statically mounts one Panel Component into a Panel slot at startup.
@@ -37,12 +57,11 @@ type UIMount struct {
 	Props     json.RawMessage `json:"props,omitempty"`
 }
 
-// UISlots are the Panel slot names the layout may provide (ADR-0009/0011).
-// Names are page-scoped in practice: "chat" is the main page's conversation
-// surface, "trace" its center column, "main" the /trace debug page's slot.
+// UISlots are the Panel slot names a base layout page may provide (ADR-0009/0012).
+// Contributed pages may introduce additional slot ids; base layout slots stay stable.
 var UISlots = []string{"sidebar", "main-overlay", "toolbar-right", "trace", "main", "chat"}
 
-// ValidUISlot reports whether slot is a Shell Panel slot.
+// ValidUISlot reports whether slot is a known base Shell Panel slot.
 func ValidUISlot(slot string) bool {
 	for _, s := range UISlots {
 		if s == slot {
@@ -50,6 +69,17 @@ func ValidUISlot(slot string) bool {
 		}
 	}
 	return false
+}
+
+// slotPattern allows base slots and contributed-page slot ids (ADR-0012).
+var slotPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// ValidMountSlot reports whether a mount may target this slot id.
+func ValidMountSlot(slot string) bool {
+	if ValidUISlot(slot) {
+		return true
+	}
+	return slotPattern.MatchString(slot)
 }
 
 // NormalizedEntry returns the slash entry path guaranteed to resolve under ui/.
@@ -76,7 +106,8 @@ type Manifest struct {
 }
 
 // CurrentProtocol is the Frame/manifest protocol version this Host speaks.
-const CurrentProtocol = 2
+// Protocol 3 is the Web UI contract v2 (ADR-0012).
+const CurrentProtocol = 3
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
@@ -175,9 +206,9 @@ func ValidComponentTag(tag string) bool {
 	return elementTagPattern.MatchString(tag)
 }
 
-// validate enforces the Panel Component contract (ADR-0010): the UI Entry is
+// validate enforces the Panel Component contract (ADR-0010/0012): the UI Entry is
 // an ES Module under ui/, and every mounted component tag belongs to this
-// plugin's namespace and targets a real Shell slot.
+// plugin's namespace. Slot ids may be base layout slots or contributed page slots.
 func (u *UISpec) validate(pluginName string) error {
 	if strings.TrimSpace(u.Entry) == "" {
 		return fmt.Errorf("ui.entry is required")
@@ -188,6 +219,9 @@ func (u *UISpec) validate(pluginName string) error {
 	}
 	if !strings.HasSuffix(clean, ".js") {
 		return fmt.Errorf("ui.entry %q must be a .js ES Module", u.Entry)
+	}
+	if u.Trust != "" && u.Trust != "full" && u.Trust != "isolated" {
+		return fmt.Errorf("ui.trust must be full or isolated, got %q", u.Trust)
 	}
 	for i, a := range u.Assets {
 		cleanAsset := path.Clean(strings.ReplaceAll(a, "\\", "/"))
@@ -202,8 +236,8 @@ func (u *UISpec) validate(pluginName string) error {
 		if mount.Page != "" && !pagePattern.MatchString(mount.Page) {
 			return fmt.Errorf("ui.mounts[%d].page %q must match %v", i, mount.Page, pagePattern.String())
 		}
-		if !ValidUISlot(mount.Slot) {
-			return fmt.Errorf("ui.mounts[%d].slot %q must be one of %v", i, mount.Slot, UISlots)
+		if !ValidMountSlot(mount.Slot) {
+			return fmt.Errorf("ui.mounts[%d].slot %q must be a valid slot id", i, mount.Slot)
 		}
 		if !ValidComponentTag(mount.Component) {
 			return fmt.Errorf("ui.mounts[%d].component %q must be a valid custom element tag", i, mount.Component)
@@ -216,6 +250,27 @@ func (u *UISpec) validate(pluginName string) error {
 			if !json.Valid(mount.Props) || !strings.HasPrefix(trimmed, "{") {
 				return fmt.Errorf("ui.mounts[%d].props must be a JSON object", i)
 			}
+		}
+	}
+	for i, p := range u.Pages {
+		if !pagePattern.MatchString(p.Slug) {
+			return fmt.Errorf("ui.pages[%d].slug %q must match %v", i, p.Slug, pagePattern.String())
+		}
+		if !strings.HasPrefix(p.Path, "/") {
+			return fmt.Errorf("ui.pages[%d].path %q must start with /", i, p.Path)
+		}
+		if len(p.Slots) == 0 {
+			return fmt.Errorf("ui.pages[%d].slots is required", i)
+		}
+		seen := map[string]bool{}
+		for j, s := range p.Slots {
+			if !ValidMountSlot(s.ID) {
+				return fmt.Errorf("ui.pages[%d].slots[%d].id %q invalid", i, j, s.ID)
+			}
+			if seen[s.ID] {
+				return fmt.Errorf("ui.pages[%d].slot %q duplicated", i, s.ID)
+			}
+			seen[s.ID] = true
 		}
 	}
 	return nil

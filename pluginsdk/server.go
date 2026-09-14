@@ -2,7 +2,7 @@
 //
 // Public contract (breaking changes require protocol field bump):
 //   - Frame: uint32 big-endian length + JSON; fields v,id,type,cap,method,payload,error
-//   - Manifest: plugin.json beside the executable; protocol must equal 2
+//   - Manifest: plugin.json beside the executable; protocol must be 1..3
 //
 // Native and third-party Plugins use this package; do not hand-roll Frame loops.
 package pluginsdk

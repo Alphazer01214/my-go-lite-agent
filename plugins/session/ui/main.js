@@ -5,9 +5,10 @@
  *                 renders the dsh-style disclosure flow. Rendering semantics
  *                 match the CLI Medium (markdown_text / message_text /
  *                 summary_text / stream).
- * session-rail  — the session list / switcher (sidebar). Switching is medium
- *                 state (POST /api/session/select); the component announces
- *                 the switch over __session and the shell reloads the chat.
+ * session-rail  — the session list / switcher (sidebar). Switching is the
+ *                 Current Session on the session Capability (ADR-0012); the
+ *                 component announces the switch over __session so the view
+ *                 reloads.
  * session-trace — the Session Log's trace projection (main page trace column
  *                 and the /trace debug page).
  *
@@ -79,10 +80,10 @@ class SessionTrace extends HTMLElement {
   async refresh() {
     if (!this._root) return;
     try {
-      // Current session is medium state (GET /api/session), then facts come
-      // from the session Capability via the star route.
-      const st = await fetch('/api/session').then(r => r.json());
-      this._viewSid = st.sessionId !== undefined && st.sessionId !== null ? st.sessionId : (window.__liteSessionId || '');
+      // Current Session is a session Capability fact (ADR-0012).
+      const cur = await LiteAgent.call('session', 'current', {});
+      const curId = (cur && cur.ok !== false && cur.result && cur.result.sessionId) || '';
+      this._viewSid = curId !== '' ? curId : (window.__liteSessionId || '');
       const res = await LiteAgent.call('session', 'query', { sessionId: this._viewSid, afterSeq: 0, limit: 0 });
       if (!res || res.ok === false) throw new Error(res && res.error || 'session.query failed');
       const facts = mergeReasoningFacts((res.result && res.result.facts) || []);
@@ -211,8 +212,12 @@ class SessionRail extends HTMLElement {
   async loadSessions() {
     if (!this._root) return;
     try {
-      const b = await fetch('/api/sessions').then(r => r.json());
-      this.render(b.current || '', b.sessions || []);
+      // Current Session lives on the session Capability (ADR-0012).
+      const curRes = await LiteAgent.call('session', 'current', {});
+      const listRes = await LiteAgent.call('session', 'list', {});
+      const cur = (curRes && curRes.ok !== false && curRes.result && curRes.result.sessionId) || window.__liteSessionId || '';
+      const list = (listRes && listRes.ok !== false && listRes.result && listRes.result.sessions) || [];
+      this.render(cur || '', list);
     } catch (e) { /* rail is best-effort */ }
   }
   render(cur, list) {
@@ -246,20 +251,20 @@ class SessionRail extends HTMLElement {
     });
   }
   async select(id) {
-    const b = await fetch('/api/session/select', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id })
-    }).then(r => r.json());
-    if (b && b.ok === false) return;
-    // Announce the switch; the shell reloads the chat face for this session.
+    const b = await LiteAgent.call('session', 'select', { sessionId: id });
+    if (!b || b.ok === false) return;
+    // Announce the switch; the session-view reloads its history for this session.
     window.__liteSessionId = id;
     LiteAgent.emit('__session', id);
     this.loadSessions();
   }
   async newSession() {
-    const b = await fetch('/api/session/new', { method: 'POST' }).then(r => r.json());
+    // create mints a fresh id and selects it as Current Session (ADR-0012).
+    const b = await LiteAgent.call('session', 'create', {});
     if (!b || b.ok === false) return;
-    window.__liteSessionId = b.sessionId || '';
-    LiteAgent.emit('__session', b.sessionId || '');
+    const id = (b.result && b.result.sessionId) || '';
+    window.__liteSessionId = id;
+    LiteAgent.emit('__session', id);
     this.loadSessions();
   }
 }
@@ -269,8 +274,9 @@ if (!customElements.get('session-rail')) customElements.define('session-rail', S
 /* ---- session-view: the primary Session Log view (main chat surface) ---- */
 
 const VIEW_CSS = `
-  :host { display:block; overflow-y:auto; overflow-x:hidden; padding:16px 20px;
+  :host { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden;
           font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed); }
+  .flow { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:16px 20px 8px; }
   .msg { margin:0 0 14px; max-width:52rem; }
   .msg.user { color:var(--la-ink,#e8eaed); background:var(--la-panel2,#12161f); border-radius:10px; padding:10px 12px; }
   .msg.user:before { content:"you"; display:block; color:var(--la-dim,#9aa0a6); font-size:11px; margin-bottom:4px; }
@@ -383,6 +389,11 @@ class SessionView extends HTMLElement {
     this._queue = [];
     if (this._root) this._root.querySelector('.flow').innerHTML = '';
     try {
+      // Prefer Current Session from the capability; fall back to local id.
+      const cur = await LiteAgent.call('session', 'current', {});
+      if (cur && cur.ok !== false && cur.result && cur.result.sessionId) {
+        this._sid = cur.result.sessionId;
+      }
       const res = await LiteAgent.call('session', 'query', { sessionId: this._sid, afterSeq: 0, limit: 0 });
       if (!res || res.ok === false) throw new Error(res && res.error || 'session.query failed');
       // Prefer Session Log facts so Thinking/tools survive refresh & session switch.
@@ -429,6 +440,7 @@ class SessionView extends HTMLElement {
   }
   // Mid-run refresh: resume live Thinking from rebuilt facts.
   maybeResumeLiveThinking() {
+    // Host turn status is still medium-level (running/idle); facts rebuild from Log.
     fetch('/api/session').then(r => r.json()).then(b => {
       if (b.status !== 'running' || this._thinkingEl || this._liveEl) return;
       const thinks = this._root.querySelectorAll('details.think:not(.live) .disc-body');
@@ -567,11 +579,18 @@ class SessionView extends HTMLElement {
     });
   }
   nearBottom() {
-    return this.scrollHeight - this.scrollTop - this.clientHeight < 56;
+    const flow = this._flow();
+    if (!flow) return true;
+    return flow.scrollHeight - flow.scrollTop - flow.clientHeight < 56;
   }
   // Stick to bottom only when the user is already near it (don't yank mid-read).
   scroll(force) {
-    if (force || this.nearBottom()) this.scrollTop = this.scrollHeight;
+    const flow = this._flow();
+    if (!flow) return;
+    if (force || this.nearBottom()) flow.scrollTop = flow.scrollHeight;
+  }
+  _flow() {
+    return this._root && this._root.querySelector('.flow');
   }
   appendAssistant(html) {
     const el = document.createElement('div');

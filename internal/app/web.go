@@ -10,6 +10,7 @@ import (
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
+	"github.com/tomori/my-go-lite-agent/layout"
 	"github.com/tomori/my-go-lite-agent/serve"
 	"github.com/tomori/my-go-lite-agent/web"
 )
@@ -24,7 +25,7 @@ func (w webCommandPlane) HandleOut(line string) (string, bool, error) {
 func (w webCommandPlane) Complete(prefix string) []string { return w.cp.completeSlash(prefix) }
 
 // runWebAndOptionalREPL mounts Plugins, starts the Web Medium, and optionally the CLI REPL.
-func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr string, withREPL bool, dump *bool) error {
+func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool) error {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return err
@@ -42,6 +43,35 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr string, withREPL bool,
 	if dump != nil && *dump {
 		dumpAssembly(plan)
 	}
+
+	if layoutPath == "" {
+		layoutPath = "layout.json"
+	}
+	baseLayout, err := layout.Load(layoutPath)
+	if err != nil {
+		return err
+	}
+	var contribs []layout.Contribution
+	for _, c := range assembly.ManifestUIContributions(plan) {
+		var pages []layout.Page
+		for _, p := range c.Pages {
+			page := layout.Page{Slug: p.Slug, Title: p.Title, Path: p.Path}
+			for _, s := range p.Slots {
+				page.Slots = append(page.Slots, layout.Slot{ID: s.ID, Role: s.Role, Preferred: s.Preferred, Region: s.Region})
+			}
+			pages = append(pages, page)
+		}
+		contribs = append(contribs, layout.Contribution{Plugin: c.Plugin, Pages: pages})
+	}
+	merged, err := layout.Merge(baseLayout, contribs)
+	if err != nil {
+		return err
+	}
+	uiMounts, err := assembly.ResolveUIMounts(cfg, plan)
+	if err != nil {
+		return err
+	}
+
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {
 		return err
@@ -65,6 +95,8 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr string, withREPL bool,
 		Plan:         plan,
 		Srv:          srv,
 		CommandPlane: webCommandPlane{cp: cp},
+		Layout:       merged,
+		UIMounts:     uiMounts,
 	})
 	go func() {
 		if err := hs.Serve(ln); err != nil {

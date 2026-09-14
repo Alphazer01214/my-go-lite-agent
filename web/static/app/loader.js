@@ -4,8 +4,13 @@
 // loads; the custom element upgrade then wires the already-inserted element
 // without losing props.
 
-// Layout page vocabulary (ADR-0011): the layout owns the page enum.
-export const PAGES = ['main', 'trace'];
+// Layout page vocabulary comes from the merged layout (ADR-0012).
+// Fallback for tests / early boot before /api/layout lands.
+export var PAGES = ['main', 'trace'];
+
+export function setPages(list) {
+  if (list && list.length) PAGES = list.slice();
+}
 
 function pageOf(mount) {
   return mount.page || 'main';

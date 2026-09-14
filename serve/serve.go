@@ -447,7 +447,7 @@ func (s *Server) validatePanelOp(from string, op PanelOp) error {
 	if op.ID == "" {
 		return fmt.Errorf("id is required")
 	}
-	if !plugin.ValidUISlot(op.Slot) {
+	if !plugin.ValidMountSlot(op.Slot) {
 		return fmt.Errorf("unknown slot %q", op.Slot)
 	}
 	if op.Op == "set" {
