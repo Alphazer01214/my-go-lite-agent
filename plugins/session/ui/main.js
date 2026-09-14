@@ -332,6 +332,15 @@ const VIEW_CSS = `
   .btn-send { background:var(--la-accent,#7aa2f7); color:#0b1020; border:0; border-radius:10px;
     padding:0 18px; height:44px; font-weight:700; cursor:pointer; font-size:13px; min-width:72px; }
   .btn-send.running { background:var(--la-stop,#f7768e); color:#fff; }
+  .usage-bar {
+    flex-shrink:0; padding:4px 16px; font-size:11px; color:var(--la-dim,#9aa0a6);
+    font-family:var(--la-mono,monospace); border-top:1px solid var(--la-line,#2a2f3a);
+    background:var(--la-panel,#161a22); display:flex; gap:10px; align-items:center;
+    min-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .usage-bar .u-label { color:var(--la-dim,#9aa0a6); opacity:.75; }
+  .usage-bar .u-val { color:var(--la-ink,#e8eaed); }
+  .usage-bar .u-src { color:var(--la-accent,#7aa2f7); }
 `;
 
 class SessionView extends HTMLElement {
@@ -360,6 +369,13 @@ class SessionView extends HTMLElement {
     const flow = document.createElement('div');
     flow.className = 'flow';
     root.appendChild(flow);
+    // Per-session Context Usage strip (CONTEXT.md Context Usage).
+    const usageBar = document.createElement('div');
+    usageBar.className = 'usage-bar';
+    usageBar.innerHTML = '<span class="u-label">context</span><span class="u-val">—</span>';
+    root.appendChild(usageBar);
+    this._usageEl = usageBar.querySelector('.u-val');
+    this._usageBar = usageBar;
     // Composer (ADR-0011 ticket 08): the input belongs to the view, not the layout.
     const composer = document.createElement('div');
     composer.className = 'composer';
@@ -382,6 +398,7 @@ class SessionView extends HTMLElement {
     this._offs.push(LiteAgent.on('presentation', d => this.onPresentation(d)));
     this._offs.push(LiteAgent.on('stream', d => this.onStreamEvent(d)));
     this._offs.push(LiteAgent.on('status', d => this.onStatusEvent(d)));
+    this._offs.push(LiteAgent.on('session', d => this.onSessionFact(d)));
     this._offs.push(LiteAgent.on('__notice', d => this.onNotice(d)));
     this._offs.push(LiteAgent.onSessionChange(sid => this.onSessionChange(sid)));
     this.reload();
@@ -392,6 +409,8 @@ class SessionView extends HTMLElement {
     this._root = null;
     this._input = null;
     this._btnSend = null;
+    this._usageEl = null;
+    this._usageBar = null;
   }
   isCurrent(sid) {
     // Missing sessionId means the default Session (""), not "any session".
@@ -421,15 +440,62 @@ class SessionView extends HTMLElement {
       if (this._root) {
         const flow = this._root.querySelector('.flow');
         flow.innerHTML = '';
-        facts.forEach(f => this.renderHistoryFact(f));
+        let lastUsageFact = null;
+        facts.forEach(f => {
+          this.renderHistoryFact(f);
+          if (f.type === 'llm_usage') lastUsageFact = f;
+        });
         this.scroll(true);
+        if (lastUsageFact) this.applyUsageFromFact(lastUsageFact);
       }
       this._ready = true;
       this.maybeResumeLiveThinking();
+      this.refreshUsage();
     } catch (e) {
       this._ready = true;
       this.appendPre('history unavailable: ' + e, 'message error');
     }
+  }
+  formatUsage(u) {
+    if (!u) return '—';
+    const tok = u.estimatedTokens != null ? u.estimatedTokens : '';
+    const chars = u.chars != null ? u.chars : '';
+    const n = u.messageCount != null ? u.messageCount : '';
+    const src = u.source || 'chars';
+    const parts = [];
+    if (tok !== '') parts.push('≈' + tok + ' tok');
+    if (chars !== '') parts.push(chars + ' chars');
+    if (n !== '') parts.push(n + ' msgs');
+    if (!parts.length) return '—';
+    return parts.join(' · ') + ' · ' + src;
+  }
+  setUsageBar(u) {
+    if (!this._usageEl) return;
+    this._usageEl.textContent = this.formatUsage(u);
+    this._usageEl.className = 'u-val' + (u && u.source === 'provider' ? ' u-src' : '');
+  }
+  async refreshUsage() {
+    if (!this._root) return;
+    try {
+      const res = await LiteAgent.call('context', 'usage', { sessionId: this._sid || '' });
+      const u = (res && res.ok !== false && res.result && res.result.usage) || null;
+      this.setUsageBar(u);
+    } catch (e) { /* usage strip is best-effort */ }
+  }
+  applyUsageFromFact(f) {
+    const mu = f && f.meta && f.meta.usage;
+    if (!mu || !this._root) return;
+    const tok = mu.total_tokens != null ? mu.total_tokens : mu.totalTokens;
+    this.setUsageBar({
+      estimatedTokens: tok != null ? tok : null,
+      source: tok != null ? 'provider' : 'chars',
+    });
+  }
+  onSessionFact(f) {
+    if (!f || !f.type) return;
+    if (!this.isCurrent(f.sessionId)) return;
+    if (f.type === 'llm_usage') this.applyUsageFromFact(f);
+    if (f.type === 'turn_end') this.refreshUsage();
   }
   renderHistoryFact(f) {
     if (!f || !f.type) return;
@@ -516,6 +582,7 @@ class SessionView extends HTMLElement {
     this._sid = sid;
     this._running = false;
     this.setSendState(false);
+    this.setUsageBar(null);
     this.reload();
   }
   onStreamEvent(d) {
@@ -544,6 +611,7 @@ class SessionView extends HTMLElement {
           this.setSendState(false);
           this.clearTurnUI();
           this.appendPre(st.slice('error:'.length).trim() || 'turn failed', 'message error');
+          this.refreshUsage();
         }
         return;
       }
@@ -552,6 +620,7 @@ class SessionView extends HTMLElement {
           this._running = false;
           this.setSendState(false);
           this.clearTurnUI();
+          this.refreshUsage();
         }
       }
     });
