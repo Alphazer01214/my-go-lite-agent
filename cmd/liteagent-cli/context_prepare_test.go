@@ -128,3 +128,43 @@ func TestContextRegisterSkillAppearsInPrepare(t *testing.T) {
 		t.Fatalf("want skill catalog in System Prompt/derive: %s", out)
 	}
 }
+
+// TestLoopPreparePreservesToolCalls: derive history with tool_calls must survive
+// context.prepare echo (session_invariant_violation regression).
+func TestLoopPreparePreservesToolCalls(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
+	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager","echotool"]}`)
+
+	appendJSON := `[
+		{"type":"message","role":"user","content":"use a tool"},
+		{"type":"tool_call","role":"assistant","content":"","meta":{"tool_calls":[{"id":"call_1","name":"echo_text","arguments":{"text":"hi"}}]}},
+		{"type":"tool_result","role":"tool","content":"hi","meta":{"tool_call_id":"call_1"}}
+	]`
+
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-session-append", appendJSON,
+		"-turn", "next",
+	)
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("turn with tool history + CM: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "session_invariant_violation") {
+		t.Fatalf("prepare must preserve tool_calls: %s", out)
+	}
+	if !strings.Contains(string(out), "turn ok") {
+		t.Fatalf("want turn ok: %s", out)
+	}
+}

@@ -33,9 +33,19 @@ type Segment struct {
 	Text  string `json:"text"`
 }
 
+// message mirrors Host serve.Message so prepare can round-trip history
+// without dropping tool_calls (session_invariant_violation otherwise).
+type toolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
 type message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type usageInfo struct {
@@ -201,6 +211,9 @@ func buildSummary(msgs []message) string {
 	lines = append(lines, "Conversation summary (compacted):")
 	for _, m := range msgs {
 		c := strings.TrimSpace(m.Content)
+		if c == "" && len(m.ToolCalls) > 0 {
+			c = "tool_call " + m.ToolCalls[0].Name
+		}
 		c = strings.ReplaceAll(c, "\n", " ")
 		r := []rune(c)
 		if len(r) > 120 {
