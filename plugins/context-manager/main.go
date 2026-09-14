@@ -206,6 +206,20 @@ func estimateTokens(chars int) int {
 	return (chars + 3) / 4
 }
 
+// modelVisibleChars counts only what the LLM hop actually receives:
+// message.content plus tool_call name/arguments. Host meta / framing JSON is excluded.
+// Do not add systemText on top — derive messages already include the System Prompt.
+func modelVisibleChars(msgs []message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+		for _, tc := range m.ToolCalls {
+			n += len(tc.Name) + len(tc.Arguments)
+		}
+	}
+	return n
+}
+
 func buildSummary(msgs []message) string {
 	var lines []string
 	lines = append(lines, "Conversation summary (compacted):")
@@ -305,10 +319,8 @@ func main() {
 		if tools == nil {
 			tools = []map[string]any{}
 		}
-		chars := len(systemText)
-		for _, m := range in.Messages {
-			chars += len(m.Content)
-		}
+		// Model-visible content only (no double-count of systemText, no Host meta).
+		chars := modelVisibleChars(in.Messages)
 		u := usageInfo{
 			Chars:           chars,
 			EstimatedTokens: estimateTokens(chars),

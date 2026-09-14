@@ -168,3 +168,39 @@ func TestLoopPreparePreservesToolCalls(t *testing.T) {
 		t.Fatalf("want turn ok: %s", out)
 	}
 }
+
+// TestContextUsageCharsAreModelVisibleOnly: usage.chars must equal sum of
+// message content (not systemText again, not Host/JSON framing).
+func TestContextUsageCharsAreModelVisibleOnly(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
+		"segments": [{"name":"identity","order":-1000,"text":"SYS_ONLY_XXXX"}]
+	}`)
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","context-manager"]}`)
+
+	// 5-char user content only → chars must be 5 (not 5+len(SYS_ONLY_XXXX)).
+	payload := `{"sessionId":"","messages":[{"role":"user","content":"hello"}]}`
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-invoke", "context-manager",
+		"-frame-cap", "context",
+		"-frame-method", "prepare",
+		"-invoke-payload", payload,
+	)
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("prepare: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"chars":5`) && !strings.Contains(s, `"chars": 5`) {
+		t.Fatalf("want usage.chars==5 (model-visible content only): %s", s)
+	}
+}

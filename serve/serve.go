@@ -1777,10 +1777,13 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				}
 			}
 			// Auto-compact before the model hop when over budget (ADR-0013).
-			// modelMessages from derive already include System Prompt — do not add systemText again.
+			// Count only Model Context: content + tool_calls args (no Host meta JSON).
 			chars := 0
 			for _, m := range modelMessages {
 				chars += len(m.Content)
+				for _, tc := range m.ToolCalls {
+					chars += len(tc.Name) + len(tc.Arguments)
+				}
 			}
 			needCompact := chars > ContextBudgetChars || prep.CompactHint
 			if needCompact {
