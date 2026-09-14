@@ -17,7 +17,13 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"protocol": 2,
 		"provides": ["session"],
 		"consumes": [],
-		"entry": "`+name+`.exe"
+		"entry": "`+name+`.exe",
+		"commands": [
+			{"name":"dump-trace","description":"Export Session Log facts as JSON","usage":"/`+name+` dump-trace [sessionId]"},
+			{"name":"list","description":"List sessions","usage":"/`+name+` list"},
+			{"name":"derive","description":"Print Model Context","usage":"/`+name+` derive [sessionId]"},
+			{"name":"current","description":"Show Current Session id","usage":"/`+name+` current"}
+		]
 	}`)
 	b, err := os.ReadFile(bin)
 	if err != nil {

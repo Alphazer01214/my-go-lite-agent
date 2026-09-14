@@ -27,7 +27,7 @@ export function renderMath(root) {
 export function md(src) {
   if (!src) return '';
   var s = String(src).replace(/\r\n/g, '\n');
-  var fenceRe = new RegExp(FENCE + '([\\\\w-]*)\\\\n([\\\\s\\\\S]*?)' + FENCE, 'g');
+  var fenceRe = new RegExp(FENCE + '([\\w-]*)\\n([\\s\\S]*?)' + FENCE, 'g');
   s = s.replace(fenceRe, function (_, lang, code) { return '<pre><code>' + esc(code) + '</code></pre>'; });
   s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>');
   s = s.replace(/^## (.*)$/gm, '<h2>$1</h2>');

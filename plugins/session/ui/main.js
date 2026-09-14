@@ -36,7 +36,17 @@ function summary(f) {
   if (t === 'step_start') return 'step ' + ((f.meta && f.meta.step) || '');
   if (t === 'step_end') return 'step end · ' + ((f.meta && f.meta.reason) || '');
   if (t === 'turn_start') return 'turn start';
-  if (t === 'turn_end') return 'turn end · ' + ((f.meta && f.meta.reason) || '');
+  if (t === 'turn_end') {
+    const reason = (f.meta && f.meta.reason) || '';
+    const err = (f.meta && f.meta.error) || '';
+    return err ? ('turn end · ' + reason + ' · ' + String(err).slice(0, 60)) : ('turn end · ' + reason);
+  }
+  if (t === 'llm_usage') {
+    const u = (f.meta && f.meta.usage) || {};
+    const tok = u.total_tokens != null ? u.total_tokens : (u.totalTokens != null ? u.totalTokens : '');
+    return tok !== '' ? ('llm usage · tokens=' + tok) : 'llm usage';
+  }
+  if (t === 'context_summary') return 'context summary · ' + String(f.content || '').replace(/\s+/g, ' ').slice(0, 60);
   return t;
 }
 
@@ -95,11 +105,15 @@ class SessionTrace extends HTMLElement {
   render(facts) {
     if (!this._root) return;
     const list = this._root.querySelector('.list');
+    // Preserve expanded rows across the 2s rebuild (otherwise open state collapses).
+    const open = new Set();
+    list.querySelectorAll('.trace-row.open').forEach(r => open.add(String(r.dataset.seq)));
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     list.innerHTML = '';
-    facts.forEach(f => this.appendFact(f));
-    list.scrollTop = list.scrollHeight;
+    facts.forEach(f => this.appendFact(f, open));
+    if (nearBottom) list.scrollTop = list.scrollHeight;
   }
-  appendFact(f) {
+  appendFact(f, openSet) {
     if (!f || !f.type) return;
     const list = this._root.querySelector('.list');
     const t = f.type;
@@ -107,6 +121,7 @@ class SessionTrace extends HTMLElement {
     const cls = t === 'message' && role ? role : t;
     const row = document.createElement('div');
     row.className = 'trace-row ' + cls;
+    row.dataset.seq = String(f.seq != null ? f.seq : '');
     const kind = t === 'message' ? (role || 'msg') : t;
     const sid = f.sessionId !== undefined && f.sessionId !== null ? String(f.sessionId) : '';
     const short = sid ? (sid.length > 8 ? sid.slice(0, 8) : sid) : '·';
@@ -119,8 +134,13 @@ class SessionTrace extends HTMLElement {
     if (f.meta) detail += (detail ? '\n\n' : '') + JSON.stringify(f.meta, null, 2);
     det.textContent = detail || '(empty)';
     row.onclick = () => { row.classList.toggle('open'); det.classList.toggle('open'); };
+    if (openSet && openSet.has(row.dataset.seq)) {
+      row.classList.add('open');
+      det.classList.add('open');
+    }
     list.appendChild(row); list.appendChild(det);
-    list.scrollTop = list.scrollHeight;
+    // Live append during a run may stick to bottom; full render uses nearBottom in render().
+    if (!openSet) list.scrollTop = list.scrollHeight;
   }
   renderError(e) {
     const list = this._root.querySelector('.list');
@@ -518,7 +538,16 @@ class SessionView extends HTMLElement {
         if (this.isCurrent(sid)) { this._running = true; this.setSendState(true); }
         return;
       }
-      if (st === 'idle' || String(st).indexOf('error:') === 0 || st === 'cancelling') {
+      if (String(st).indexOf('error:') === 0) {
+        if (this.isCurrent(sid)) {
+          this._running = false;
+          this.setSendState(false);
+          this.clearTurnUI();
+          this.appendPre(st.slice('error:'.length).trim() || 'turn failed', 'message error');
+        }
+        return;
+      }
+      if (st === 'idle' || st === 'cancelling') {
         if (this.isCurrent(sid)) {
           this._running = false;
           this.setSendState(false);

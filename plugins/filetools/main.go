@@ -5,8 +5,7 @@
 //   - call: {"name","arguments"} → {"content", "additionalContexts"}
 //
 // This plugin is stateless and performs no safety gating.
-// Path sandboxing, read-before-edit enforcement, and other constraints
-// are delegated to future Session/Interceptor/Sandbox plugins.
+// Path sandboxing and other constraints are future work (sandbox model TBD).
 package main
 
 import (

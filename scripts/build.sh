@@ -59,7 +59,8 @@ build_pkg "./cmd/liteagent-server" "$DIST/liteagent-server"
 
 # ── plugins ──────────────────────────────────────────────────────────────────
 install_plugin "session"        "./plugins/session"        '["session"]' "[]" 0 \
-    "File-backed session log plugin (JSONL) with the session trace Web view"
+    "File-backed session log plugin (JSONL) with the session trace Web view" \
+    '[{"name":"dump-trace","description":"Export Session Log facts as JSON","usage":"/session dump-trace [sessionId]"},{"name":"list","description":"List sessions","usage":"/session list"},{"name":"derive","description":"Print Model Context from Session Log","usage":"/session derive [sessionId]"},{"name":"current","description":"Show Current Session id","usage":"/session current"}]'
 # session ships its own manifest (ui mounts: session-trace) and its UI entry
 cp "$ROOT/plugins/session/plugin.json" "$DIST/plugins/session/"
 cp -r "$ROOT/plugins/session/ui"        "$DIST/plugins/session/"
@@ -78,7 +79,8 @@ install_plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 \
     "Read/write workspace files"
 
 install_plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 \
-    "Context Manager: system prompt + prepare/compact/usage"
+    "Context Manager: system prompt + prepare/compact/usage" \
+    '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Last prepare messages preview","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
 
 install_plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 \
     "Echo capability plugin"

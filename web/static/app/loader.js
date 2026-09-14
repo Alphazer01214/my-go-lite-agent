@@ -30,7 +30,8 @@ export function createLoader(page, panelHost, onError) {
     node = document.createElement(op.component);
     node.id = 'panel-' + op.id;
     node.className = 'panel-root';
-    node.style.display = 'block';
+    // Do not force display:block — it overrides component :host{display:flex}
+    // and breaks scrolling inside Shadow DOM (chat/rail).
     var props = null;
     if (op.props !== undefined && op.props !== null) {
       try { props = (typeof op.props === 'string') ? JSON.parse(op.props) : op.props; }

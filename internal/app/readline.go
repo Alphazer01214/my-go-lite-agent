@@ -201,7 +201,7 @@ func (cp *commandPlane) completeSlash(line string) []string {
 		return out
 	}
 	// /partial → native + plugin names
-	native := []string{"/help", "/lp", "/refresh", "/dump-trace", "/exit"}
+	native := []string{"/help", "/lp", "/refresh", "/exit"}
 	var out []string
 	for _, n := range native {
 		if strings.HasPrefix(n, line) {

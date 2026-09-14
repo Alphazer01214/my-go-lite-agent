@@ -225,6 +225,20 @@ cd dist
 ./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "hello" -context-list 5
 ```
 
+### Session / Context 命令（REPL 或 Web 输入）
+
+```
+/help session              # session 插件命令说明
+/session dump-trace        # 导出 Session Log JSON
+/session list
+/session derive
+/context-manager usage
+/context-manager list
+/context-manager skills
+```
+
+原生 slash 仅：`/help` `/lp` `/refresh` `/exit`。
+
 ## 插件目录布局
 
 每个插件是一个目录：

@@ -6,15 +6,12 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
-
-func timeNowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // commandPlane is the Host-native slash-command router (ADR-0008).
 type commandPlane struct {
@@ -103,25 +100,6 @@ func (cp *commandPlane) handleOut(line string) (output string, quit bool, err er
 			return "", false, err
 		}
 		return "refresh ok — manifests updated (no hot-plug)\n", false, nil
-	case "dump-trace":
-		// Export default-Session facts as JSON for offline debugging.
-		// Web Shell also has a Trace "dump" button for the currently selected Session.
-		facts, err := cp.srv.QuerySessionFacts("", 0, 0)
-		if err != nil {
-			return "", false, err
-		}
-		if facts == nil {
-			facts = []map[string]any{}
-		}
-		raw, err := json.MarshalIndent(map[string]any{
-			"sessionId":  "",
-			"exportedAt": timeNowRFC3339(),
-			"facts":      facts,
-		}, "", "  ")
-		if err != nil {
-			return "", false, err
-		}
-		return string(raw) + "\n", false, nil
 	}
 
 	if _, ok := cp.manifests[name]; ok {
@@ -158,7 +136,7 @@ func splitCommandRest(rest string) (sub, args string) {
 }
 
 func (cp *commandPlane) nativeAndPluginNames() []string {
-	names := []string{"help", "lp", "refresh", "dump-trace", "exit"}
+	names := []string{"help", "lp", "refresh", "exit"}
 	names = append(names, cp.mounted...)
 	return names
 }
@@ -202,10 +180,21 @@ func (cp *commandPlane) helpText(pluginName string) string {
 
 	b.WriteString("Native commands:\n")
 	b.WriteString("  /help [plugin]     Show this help, or a plugin's commands\n")
-	b.WriteString("  /lp                List mounted plugins\n")
-	b.WriteString("  /refresh           Rescan plugin directory (metadata only)\n")
-	b.WriteString("  /dump-trace        Export default Session Log facts as JSON\n")
+	b.WriteString("  /lp                List mounted plugins (name, version, provides)\n")
+	b.WriteString("  /refresh           Rescan plugin directory (manifest metadata only)\n")
 	b.WriteString("  /exit              Quit (CLI only)\n")
+	b.WriteString("\nPlugin commands:\n")
+	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
+	b.WriteString("  Session Log ops live on the session plugin, e.g. /session dump-trace\n")
+	b.WriteString("  Context usage: /context-manager usage\n")
+	b.WriteString("\nCLI flags (one-shot, not slash):\n")
+	b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
+	b.WriteString("  -context-list N      Print last N prepare messages after the run\n")
+	b.WriteString("  -session-derive      Print Model Context from session.derive\n")
+	b.WriteString("  -session-query       Print Session Log facts\n")
+	b.WriteString("  -session-append JSON Append facts\n")
+	b.WriteString("  -invoke / -frame-cap / -frame-method / -invoke-payload\n")
+	b.WriteString("                       Host-initiated Frame call into a plugin\n")
 	b.WriteString("\nPlugins:\n")
 	if len(cp.mounted) == 0 {
 		b.WriteString("  (none)\n")

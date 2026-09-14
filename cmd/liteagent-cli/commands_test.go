@@ -69,7 +69,6 @@ func TestREPLHelpAndExit(t *testing.T) {
 		"/help",
 		"/lp",
 		"/refresh",
-		"/dump-trace",
 		"/exit",
 		"Plugins:",
 		"session",
@@ -78,6 +77,10 @@ func TestREPLHelpAndExit(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("want %q in help/lp output:\n%s", want, out)
 		}
+	}
+	// Session Log export is a session plugin command, not a Host native.
+	if strings.Contains(out, "/dump-trace") {
+		t.Fatalf("/dump-trace must not appear as a Host native (use /session dump-trace):\n%s", out)
 	}
 }
 
@@ -96,6 +99,33 @@ func TestREPLUnknownCommandSuggests(t *testing.T) {
 	}
 	if !strings.Contains(out, "did you mean") {
 		t.Fatalf("want suggestion: %s", out)
+	}
+}
+
+func TestREPLSessionDumpTracePluginCommand(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
+		"segments": [{"name":"identity","order":-1000,"text":"CMD_HELP_SYS"}]
+	}`)
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
+
+	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
+		"/session dump-trace",
+		"/context-manager usage",
+		"/context-manager skills",
+		"/help session",
+		"/exit",
+	})
+	if !strings.Contains(out, "facts") && !strings.Contains(out, "sessionId") {
+		t.Fatalf("want /session dump-trace JSON: %s", out)
+	}
+	if !strings.Contains(out, "dump-trace") {
+		t.Fatalf("want session command listed in /help session: %s", out)
 	}
 }
 

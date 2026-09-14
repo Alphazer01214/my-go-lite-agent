@@ -307,16 +307,21 @@ func main() {
 			sid = "default"
 		}
 		st.mu.Lock()
+		// Always refresh chars/messageCount from this prepare. Keep provider
+		// tokens as the preferred token figure when available (CONTEXT.md Usage).
+		var providerTokens int
 		if prev := st.session[sid]; prev != nil && prev.usage.Source == "provider" {
-			// Keep provider usage as the preferred observation (CONTEXT.md Context Usage).
-			u.Source = prev.usage.Source
-			u.EstimatedTokens = prev.usage.EstimatedTokens
-			if prev.usage.Chars > 0 {
-				u.Chars = prev.usage.Chars
-			}
+			providerTokens = prev.usage.EstimatedTokens
 		}
 		st.session[sid] = &sessionState{usage: u, messages: in.Messages}
 		st.mu.Unlock()
+		if providerTokens > 0 {
+			u.Source = "provider"
+			u.EstimatedTokens = providerTokens
+			st.mu.Lock()
+			st.session[sid].usage = u
+			st.mu.Unlock()
+		}
 
 		// compactHint when the estimated hop is large (Host still owns the final budget check).
 		hint := u.EstimatedTokens > 4000 || chars > 16000
@@ -433,6 +438,64 @@ func main() {
 			msgs = msgs[len(msgs)-n:]
 		}
 		return json.Marshal(map[string]any{"messages": msgs, "count": len(msgs)})
+	})
+
+	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Command string `json:"command"`
+			Args    string `json:"args"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		sid := strings.TrimSpace(in.Args)
+		if sid == "" {
+			sid = "default"
+		}
+		switch in.Command {
+		case "usage":
+			st.mu.Lock()
+			sess := st.session[sid]
+			st.mu.Unlock()
+			if sess == nil {
+				return json.Marshal(map[string]string{"text": "(no usage yet — run a turn first)"})
+			}
+			raw, _ := json.MarshalIndent(sess.usage, "", "  ")
+			return json.Marshal(map[string]string{"text": string(raw)})
+		case "list":
+			n := 10
+			st.mu.Lock()
+			sess := st.session[sid]
+			st.mu.Unlock()
+			if sess == nil || len(sess.messages) == 0 {
+				return json.Marshal(map[string]string{"text": "(no prepare messages yet)"})
+			}
+			msgs := sess.messages
+			if len(msgs) > n {
+				msgs = msgs[len(msgs)-n:]
+			}
+			raw, _ := json.MarshalIndent(msgs, "", "  ")
+			return json.Marshal(map[string]string{"text": string(raw)})
+		case "skills":
+			st.mu.Lock()
+			var names []string
+			for _, sk := range st.skills {
+				names = append(names, sk.Name)
+			}
+			st.mu.Unlock()
+			if len(names) == 0 {
+				return json.Marshal(map[string]string{"text": "(no skills registered)"})
+			}
+			sort.Strings(names)
+			return json.Marshal(map[string]string{"text": strings.Join(names, "\n")})
+		default:
+			return nil, &protocol.FrameError{
+				Code:    "unknown_command",
+				Message: fmt.Sprintf("unknown command %q (try usage|list|skills)", in.Command),
+			}
+		}
 	})
 
 	_ = s.Serve()

@@ -485,5 +485,91 @@ func main() {
 		})
 	})
 
+	// Slash commands (ADR-0008): Session Log ops live on the session plugin, not Host natives.
+	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Command string `json:"command"`
+			Args    string `json:"args"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		sid := strings.TrimSpace(in.Args)
+		currentMu.Lock()
+		if sid == "" {
+			sid = currentID
+		}
+		currentMu.Unlock()
+		switch in.Command {
+		case "dump-trace":
+			st := reg.openStore(sid)
+			facts := st.query(0, 0)
+			if facts == nil {
+				facts = []Fact{}
+			}
+			raw, err := json.MarshalIndent(map[string]any{
+				"sessionId": sid,
+				"exportedAt": time.Now().UTC().Format(time.RFC3339),
+				"facts":      facts,
+			}, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]string{"text": string(raw)})
+		case "list":
+			// Reuse list handler shape via store walk.
+			type item struct {
+				ID    string `json:"id"`
+				Title string `json:"title,omitempty"`
+				Seq   int    `json:"seq,omitempty"`
+			}
+			var list []item
+			entries, _ := os.ReadDir(reg.dataDir)
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+					continue
+				}
+				id := strings.TrimSuffix(e.Name(), ".jsonl")
+				st := reg.openStore(id)
+				facts := st.query(0, 0)
+				title := id
+				seq := 0
+				for _, f := range facts {
+					seq = f.Seq
+					if f.Type == "message" && f.Role == "user" && f.Content != "" {
+						title = f.Content
+						if len([]rune(title)) > 40 {
+							title = string([]rune(title)[:40]) + "…"
+						}
+						break
+					}
+				}
+				list = append(list, item{ID: id, Title: title, Seq: seq})
+			}
+			if list == nil {
+				list = []item{}
+			}
+			raw, _ := json.MarshalIndent(list, "", "  ")
+			return json.Marshal(map[string]string{"text": string(raw)})
+		case "derive":
+			st := reg.openStore(sid)
+			msgs := st.derive()
+			raw, _ := json.MarshalIndent(msgs, "", "  ")
+			return json.Marshal(map[string]string{"text": string(raw)})
+		case "current":
+			currentMu.Lock()
+			id := currentID
+			currentMu.Unlock()
+			return json.Marshal(map[string]string{"text": "sessionId=" + id})
+		default:
+			return nil, &protocol.FrameError{
+				Code:    "unknown_command",
+				Message: fmt.Sprintf("unknown command %q (try dump-trace|list|derive|current)", in.Command),
+			}
+		}
+	})
+
 	_ = s.Serve()
 }

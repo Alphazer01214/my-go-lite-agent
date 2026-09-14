@@ -1604,7 +1604,7 @@ func (s *Server) NewSessionID(id string) (string, error) {
 // runTurn executes one Turn on sessionID (empty = default).
 // allowSubagent controls whether Host injects the run_subagent tool schema.
 // extraSystem is an additional System Prompt fragment logged inside the Turn.
-func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraSystem string) (*TurnResult, error) {
+func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraSystem string) (result *TurnResult, err error) {
 	if strings.TrimSpace(userInput) == "" {
 		return nil, fmt.Errorf("agent loop: user input is required")
 	}
@@ -1639,17 +1639,24 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	s.emitStatus(sessionID, "running")
 	turnFailed := true
 	defer func() {
-		reason := "completed"
+		meta := map[string]any{"turn": 1, "reason": "completed"}
+		status := "idle"
 		if turnFailed {
-			reason = "error"
+			meta["reason"] = "error"
+			if err != nil {
+				meta["error"] = err.Error()
+				status = "error: " + err.Error()
+			} else {
+				status = "error"
+			}
 		}
 		_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type": "turn_end",
 			"role": "host",
-			"meta": map[string]any{"turn": 1, "reason": reason},
+			"meta": meta,
 		}})
 		s.endRunning(sessionID)
-		s.emitStatus(sessionID, "idle")
+		s.emitStatus(sessionID, status)
 	}()
 
 	// System Prompt is assembled then logged before any model-visible user input (ADR-0005/0006).
@@ -1770,7 +1777,8 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				}
 			}
 			// Auto-compact before the model hop when over budget (ADR-0013).
-			chars := len(prep.SystemText)
+			// modelMessages from derive already include System Prompt — do not add systemText again.
+			chars := 0
 			for _, m := range modelMessages {
 				chars += len(m.Content)
 			}
