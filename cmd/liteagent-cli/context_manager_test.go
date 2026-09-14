@@ -10,7 +10,7 @@ import (
 
 func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, segmentsJSON string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/contextmanager")
+	bin := buildPkg(t, root, "./plugins/context-manager")
 	dir := filepath.Join(pluginsDir, name)
 	dst := filepath.Join(dir, name+".exe")
 	writeFile(t, filepath.Join(dir, "plugin.json"), `{
@@ -43,7 +43,7 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "contextmanager", `{
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [
 			{"name": "identity", "order": -1000, "text": "You are a lite agent."},
 			{"name": "rules", "order": 100, "text": "Be brief."}
@@ -51,7 +51,7 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 	}`)
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","contextmanager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -114,11 +114,11 @@ func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "contextmanager", "")
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
 	buildPromptRegPluginDir(t, root, pluginsDir, "promptreg")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","contextmanager","promptreg"]}`)
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager","promptreg"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

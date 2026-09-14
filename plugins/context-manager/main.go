@@ -1,4 +1,4 @@
-// Command contextmanager is the Context Manager Plugin: provides system-prompt.
+// Command context-manager is the Context Manager Plugin: provides system-prompt.
 //
 // Capability: system-prompt
 //   - registerSegment: register one Prompt Segment {name, order, text}

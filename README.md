@@ -12,8 +12,8 @@
 │  Session 不变量 · 默认 Agent Loop      │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
- session    llm        tools    interceptor
-（插件）  （插件）    （插件）     （插件）
+ session    llm        tools    echo
+（插件）  （插件）    （插件）   （插件）
 ```
 
 规范名词见 [CONTEXT.md](CONTEXT.md)；架构决策见 [docs/adr/](docs/adr/)。
@@ -29,52 +29,88 @@
 - **`llm-openai`**：OpenAI 兼容适配（DeepSeek 等），流式输出
 - **REPL**：`-repl` 多轮同 Session，实时流式打印
 - **Presentation**：`stream` / `status` / `card` 三类信号，CLI 为默认 Render Medium
-- **Windows 一等公民**：进程模型按 Windows 语义验证
+- **跨平台**：macOS (arm64) / Linux (amd64) / Windows (amd64) 全支持
 
 ## 快速开始
 
 ### 构建
 
+**Windows（PowerShell）**
+
 ```powershell
-# Windows PowerShell
 .\scripts\build.ps1
 ```
 
-产物在 `dist/`：
+**macOS / Linux（Bash）**
+
+```bash
+bash scripts/build.sh
+```
+
+产物在 `dist/`（macOS/Linux 二进制无 `.exe` 后缀）：
 
 ```text
 dist/
-  liteagent-cli.exe     CLI Medium（REPL / -turn / session ops / 诊断）
-  liteagent-server.exe  Web Medium（-serve，可与 -repl 组合）
+  liteagent-cli[.exe]       CLI Medium（REPL / -turn / session ops / 诊断）
+  liteagent-server[.exe]    Web Medium（-serve，可与 -repl 组合）
   plugins/
-    session/           memory Session Log
+    session/           memory Session Log + Web UI
     llm-openai/        OpenAI 兼容 LLM（DeepSeek 等）+ config.example.json
-    fakellm/           测试用假模型
-    contextmanager/    system-prompt 组装 + segments.json
+    context-manager/    system-prompt 组装 + segments.json
     filetools/         读写/grep/glob
     echotool/          演示工具 + Presentation Card
-    echo/ interceptor/
+    echo/              Echo 能力插件
   examples/
-    chat.json          session + llm-openai + contextmanager
+    chat.json          session + llm-openai + context-manager
     agent.json         chat + filetools
-    assembly.json      fakellm 最小集（测试）
+    assembly.json      session + llm-openai + context-manager（最小集）
     assembly-with-tools.json
 ```
 
 ### 真实模型（DeepSeek / OpenAI 兼容）
 
+**方式一：环境变量（优先）**
+
 ```powershell
-# 方式一：环境变量（优先）
+# Windows
 $env:OPENAI_API_KEY = "sk-..."
 $env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"   # 可省略，默认 DeepSeek
 $env:OPENAI_MODEL = "deepseek-chat"                   # 或你账户可用的模型名
+```
 
-# 方式二：复制配置到插件目录
+```bash
+# macOS / Linux
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"   # 可省略，默认 DeepSeek
+export OPENAI_MODEL="deepseek-chat"                     # 或你账户可用的模型名
+```
+
+**方式二：复制配置到插件目录**
+
+```powershell
+# Windows
 copy plugins\llm-openai\config.example.json plugins\llm-openai\config.json
-# 编辑 config.json 填入 apiKey / model
+```
 
+```bash
+# macOS / Linux
+cp plugins/llm-openai/config.example.json plugins/llm-openai/config.json
+```
+
+编辑 `config.json` 填入 apiKey / model。
+
+**启动 REPL**
+
+```powershell
+# Windows
 cd dist
 .\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -repl
+```
+
+```bash
+# macOS / Linux
+cd dist
+./liteagent-cli -plugins plugins -assembly examples/chat.json -repl
 ```
 
 输入多轮对话；`/help` 查看命令；`/` 后按 Tab 可补全命令/插件名；`/exit` 或 Ctrl+C 退出。
@@ -92,15 +128,29 @@ cd dist
 带文件工具：
 
 ```powershell
+# Windows
 .\liteagent-cli.exe -plugins plugins -assembly examples\agent.json -repl
+```
+
+```bash
+# macOS / Linux
+./liteagent-cli -plugins plugins -assembly examples/agent.json -repl
 ```
 
 ### Web Medium（浏览器）
 
 ```powershell
+# Windows
 .\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788
 # 可与终端 REPL 并存：
 .\liteagent-server.exe -plugins plugins -assembly examples\chat.json -serve 127.0.0.1:7788 -repl
+```
+
+```bash
+# macOS / Linux
+./liteagent-server -plugins plugins -assembly examples/chat.json -serve 127.0.0.1:7788
+# 可与终端 REPL 并存：
+./liteagent-server -plugins plugins -assembly examples/chat.json -serve 127.0.0.1:7788 -repl
 ```
 
 打开 `http://127.0.0.1:7788`：
@@ -125,48 +175,53 @@ cd dist
 ### 单发一轮（脚本友好）
 
 ```powershell
+# Windows
 .\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "hello" -session-derive
 ```
 
-### 无真实 Key 时（fixture）
-
-```powershell
-.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
-  -turn "hello" -session-derive
+```bash
+# macOS / Linux
+./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "hello" -session-derive
 ```
 
 ### 发现与挂载
 
 ```powershell
-# 只扫描，不挂载
+# Windows
 .\liteagent-cli.exe -discover plugins
-
-# 挂载并 dump Assembly 树
 .\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -dump
+```
+
+```bash
+# macOS / Linux
+./liteagent-cli -discover plugins
+./liteagent-cli -plugins plugins -assembly examples/chat.json -dump
 ```
 
 ### Session / 不变量 / 注入
 
 ```powershell
-# 追加事实并派生 Model Context
-.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
+# Windows — 追加事实并派生 Model Context
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json `
   -session-append '[{"role":"user","content":"hi"}]' -session-derive
+```
 
-# 校验：claimed 必须能从 Session Log 重建，否则拒绝
-.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
-  -session-append '[{"role":"user","content":"hi"}]' `
-  -agent-request '[{"role":"user","content":"hi"}]'
-
-# 注入模型可见消息（不启动 Loop）
-.\liteagent-cli.exe -plugins plugins -assembly examples\assembly.json `
-  -agent-inject '[{"role":"system","content":"note"}]' -session-derive
+```bash
+# macOS / Linux — 追加事实并派生 Model Context
+./liteagent-cli -plugins plugins -assembly examples/chat.json \
+  -session-append '[{"role":"user","content":"hi"}]' -session-derive
 ```
 
 ### Waterfall 审计
 
 ```powershell
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json `
-  -turn "audit me" -audit
+# Windows
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "audit me" -audit
+```
+
+```bash
+# macOS / Linux
+./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "audit me" -audit
 ```
 
 ## 插件目录布局
@@ -180,7 +235,7 @@ my-plugin/
   ui/             # 可选：Panel Component 资产（ui.entry 指向的 ES Module）
   static/         # 可选静态文件（默认仅本插件可见）
   config.json     # 可选（llm-openai 等）
-  segments.json   # 可选（contextmanager）
+  segments.json   # 可选（context-manager）
 ```
 
 `plugin.json` 最小示例：
@@ -211,7 +266,7 @@ my-plugin/
 ## Assembly 配置
 
 ```json
-{ "plugins": ["session", "fakellm"] }
+{ "plugins": ["session", "llm-openai", "context-manager"] }
 ```
 
 只挂载点名的插件；引用不存在的名字会 fail-loud。
@@ -256,11 +311,11 @@ func main() {
 | `agent.inject` | 追加模型可见消息，不启动 Loop |
 | 默认 Loop | `session` + `llm`（+ 可选 `tools`）驱动一轮对话 |
 
-插件提供的 Capability 示例：`session`、`llm`、`tools`、`interceptor`、`echo`。
+插件提供的 Capability 示例：`session`、`llm`、`tools`、`echo`。
 
 ## 开发
 
-```powershell
+```bash
 go test ./...
 go vet ./...
 ```
@@ -271,9 +326,9 @@ go vet ./...
 
 ## 发布说明（v0.1）
 
-- 平台：Windows amd64（进程模型按 Windows 验证）
+- 平台：macOS arm64 / Linux amd64 / Windows amd64
 - 依赖：无第三方运行时库（仅 Go 标准库）
-- LLM：附带 `fakellm` 本地假模型；接真实提供商请实现 `llm.complete` 插件
+- LLM：接真实提供商请配置 `llm-openai` 插件（OpenAI / DeepSeek 兼容）
 - 范围：单机 stdio 插件；无 HMR、无远程插件、无图形 UI
 
 ## 许可

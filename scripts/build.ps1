@@ -62,19 +62,17 @@ try {
     # session ships its own manifest (ui mounts: session-trace) and its UI Entry.
     Copy-Item (Join-Path $root "plugins\session\plugin.json") (Join-Path $dist "plugins\session\") -Force
     Copy-Item (Join-Path $root "plugins\session\ui") (Join-Path $dist "plugins\session\") -Recurse -Force
-    Install-Plugin "fakellm"        "./plugins/fakellm"        '["llm"]' "[]" 0 "Deterministic fake LLM for tests"
     Install-Plugin "llm-openai"     "./plugins/llm-openai"     '["llm"]' "[]" 120000 "OpenAI-compatible LLM provider" '[{"name":"config","description":"Show or set API key / model / baseURL","usage":"/llm-openai config [get|set key=value]"}]'
     Install-Plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 "Echo tool with presentation card"
     Install-Plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 "Read/write workspace files"
-    Install-Plugin "contextmanager" "./plugins/contextmanager" '["system-prompt"]' "[]" 0 "System prompt segment assembler"
+    Install-Plugin "context-manager" "./plugins/context-manager" '["system-prompt"]' "[]" 0 "System prompt segment assembler"
     Install-Plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 "Echo capability plugin"
-    Install-Plugin "interceptor"    "./plugins/interceptor"    '["interceptor"]' "[]" 0 "Demo waterfall interceptor"
     Install-Plugin "uidemo"         "./plugins/uidemo"         '[]' "[]" 0 "Web Panel Component reference"
     # uidemo ships its own manifest (ui.entry + ui.mounts) and its UI Entry module.
     Copy-Item (Join-Path $root "plugins\uidemo\plugin.json") (Join-Path $dist "plugins\uidemo\") -Force
     Copy-Item (Join-Path $root "plugins\uidemo\ui") (Join-Path $dist "plugins\uidemo\") -Recurse -Force
 
-    Copy-Item (Join-Path $root "plugins\contextmanager\segments.json") (Join-Path $dist "plugins\contextmanager\") -Force
+    Copy-Item (Join-Path $root "plugins\context-manager\segments.json") (Join-Path $dist "plugins\context-manager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
     # Ship the working llm-openai config (apiKey included) so dist is runnable out of the box.
     $llmCfg = Join-Path $root "plugins\llm-openai\config.json"

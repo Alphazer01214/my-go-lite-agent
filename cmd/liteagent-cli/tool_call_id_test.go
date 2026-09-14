@@ -82,12 +82,12 @@ func TestChatAssemblyInjectsNoToolsNote(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "contextmanager", `{
+	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments":[{"name":"identity","order":-1000,"text":"You are a lite agent."}]
 	}`)
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","contextmanager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
