@@ -24,16 +24,6 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func printAudit(entries []serve.AuditEntry) {
-	for _, e := range entries {
-		fmt.Printf("audit from=%s cap=%s method=%s action=%s", e.From, e.Cap, e.Method, e.Action)
-		if e.Reason != "" {
-			fmt.Printf(" reason=%s", e.Reason)
-		}
-		fmt.Println()
-	}
-}
-
 func printCards(cards []serve.PresentationCard) {
 	for i, c := range cards {
 		fmt.Printf("card[%d] type=%s tool=%s data=%s\n", i, c.CardType, c.Tool, string(c.Data))
@@ -171,7 +161,7 @@ func roundtrip(pluginPath, id string) error {
 	return nil
 }
 
-func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audit bool) error {
+func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump bool) error {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return err
@@ -195,9 +185,6 @@ func runServe(pluginsDir, assemblyPath, invokePlugin, callCap string, dump, audi
 		return err
 	}
 	defer func() {
-		if audit {
-			printAudit(srv.Audit())
-		}
 		_ = srv.Close()
 	}()
 

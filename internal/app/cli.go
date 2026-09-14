@@ -27,7 +27,9 @@ func CLI() {
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or /exit to quit)")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
-	audit := flag.Bool("audit", false, "print built-in Waterfall audit entries after the run")
+	frameCap := flag.String("frame-cap", "", "Frame Capability for -invoke (default demo)")
+	frameMethod := flag.String("frame-method", "", "Frame method for -invoke (default invoke)")
+	contextList := flag.Int("context-list", 0, "print last N Model Context messages from Context Manager (0=off)")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
 	flag.Parse()
 
@@ -46,7 +48,7 @@ func CLI() {
 			}
 			return
 		}
-		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards {
+		if *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards || *contextList > 0 || *invokePlugin != "" {
 			opts := sessionAgentOpts{
 				pluginsDir:    pluginsDir,
 				assemblyPath:  assemblyPath,
@@ -60,16 +62,12 @@ func CLI() {
 				invokePlugin:  invokePlugin,
 				callCap:       callCap,
 				invokePayload: invokePayload,
-				audit:         audit,
+				frameCap:      frameCap,
+				frameMethod:   frameMethod,
+				contextList:   contextList,
 				cards:         cards,
 			}
 			if err := runSessionAgent(opts); err != nil {
-				fatal(err)
-			}
-			return
-		}
-		if *invokePlugin != "" {
-			if err := runServe(*pluginsDir, *assemblyPath, *invokePlugin, *callCap, *dump, *audit); err != nil {
 				fatal(err)
 			}
 			return

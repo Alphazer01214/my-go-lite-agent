@@ -225,14 +225,56 @@ func (st *store) query(afterSeq, limit int) []Fact {
 	return out
 }
 
+type summaryMeta struct {
+	Active           bool `json:"active"`
+	CoversThroughSeq int  `json:"coversThroughSeq"`
+}
+
 func (st *store) derive() []Message {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	msgs := make([]Message, 0, len(st.facts))
+
+	// Latest active Context Summary replaces covered history (ADR-0013).
+	var summaryContent string
+	covers := 0
 	for _, f := range st.facts {
+		if f.Type != "context_summary" {
+			continue
+		}
+		var m summaryMeta
+		if len(f.Meta) > 0 {
+			_ = json.Unmarshal(f.Meta, &m)
+		}
+		if !m.Active {
+			continue
+		}
+		summaryContent = f.Content
+		covers = m.CoversThroughSeq
+	}
+
+	var out []Message
+	lastSystemIdx := -1
+	for _, f := range st.facts {
+		if f.Type == "context_summary" {
+			// Summary is placed after the walk via summaryContent (kept as the
+			// compacted history block, not competing with System Prompt stacking).
+			continue
+		}
+		if f.Seq <= covers {
+			continue
+		}
 		switch f.Type {
 		case "message":
-			msgs = append(msgs, Message{Role: f.Role, Content: f.Content})
+			if f.Role == "system" {
+				// Single System Prompt projection: keep only the latest, in place.
+				if lastSystemIdx >= 0 {
+					out = append(out[:lastSystemIdx], out[lastSystemIdx+1:]...)
+				}
+				out = append(out, Message{Role: f.Role, Content: f.Content})
+				lastSystemIdx = len(out) - 1
+				continue
+			}
+			out = append(out, Message{Role: f.Role, Content: f.Content})
 		case "tool_call":
 			var meta struct {
 				ToolCalls []struct {
@@ -259,7 +301,7 @@ func (st *store) derive() []Message {
 			if len(calls) == 0 && meta.ToolCallID != "" {
 				calls = []ToolCall{{ID: meta.ToolCallID, Name: meta.Name, Arguments: meta.Arguments}}
 			}
-			msgs = append(msgs, Message{Role: f.Role, Content: f.Content, ToolCalls: calls})
+			out = append(out, Message{Role: f.Role, Content: f.Content, ToolCalls: calls})
 		case "tool_result":
 			var meta struct {
 				ToolCallID string `json:"tool_call_id"`
@@ -267,10 +309,20 @@ func (st *store) derive() []Message {
 			if len(f.Meta) > 0 {
 				_ = json.Unmarshal(f.Meta, &meta)
 			}
-			msgs = append(msgs, Message{Role: f.Role, Content: f.Content, ToolCallID: meta.ToolCallID})
+			out = append(out, Message{Role: f.Role, Content: f.Content, ToolCallID: meta.ToolCallID})
 		}
 	}
-	return msgs
+	if summaryContent != "" {
+		// Compacted history sits before post-cover messages; if a System Prompt
+		// already exists, keep summary as a system-role block after it.
+		sum := Message{Role: "system", Content: summaryContent}
+		if lastSystemIdx >= 0 {
+			out = append(out[:lastSystemIdx+1], append([]Message{sum}, out[lastSystemIdx+1:]...)...)
+		} else {
+			out = append([]Message{sum}, out...)
+		}
+	}
+	return out
 }
 
 func main() {

@@ -1,18 +1,25 @@
-// Command context-manager is the Context Manager Plugin: provides system-prompt.
+// Command context-manager is the Context Manager Plugin (CONTEXT.md).
 //
 // Capability: system-prompt
-//   - registerSegment: register one Prompt Segment {name, order, text}
-//   - registerContext: register one dynamic context segment (v1 merged into text tail)
-//   - assemble:        return ordered assembled System Prompt {text, segments}
+//   - registerSegment / registerContext / assemble
+//
+// Capability: context
+//   - prepare:  {sessionId, messages} → {messages, tools, systemText, usage, compactHint}
+//   - compact:  {messages, coversThroughSeq} → {summary, coversThroughSeq}
+//   - usage:    last prepare usage for a session
+//   - listContext: last prepare messages preview
+//   - registerSkill: skill catalog segment (trigger injection is a later feature)
 //
 // Optional static base segments load from segments.json beside the executable.
 package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
@@ -26,16 +33,37 @@ type Segment struct {
 	Text  string `json:"text"`
 }
 
+type message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type usageInfo struct {
+	EstimatedTokens int    `json:"estimatedTokens"`
+	Chars           int    `json:"chars"`
+	MessageCount    int    `json:"messageCount"`
+	Source          string `json:"source"`
+}
+
+type sessionState struct {
+	usage    usageInfo
+	messages []message
+}
+
 type store struct {
 	mu       sync.Mutex
 	segments map[string]Segment
 	contexts map[string]Segment
+	skills   map[string]Segment
+	session  map[string]*sessionState
 }
 
 func newStore() *store {
 	return &store{
 		segments: make(map[string]Segment),
 		contexts: make(map[string]Segment),
+		skills:   make(map[string]Segment),
+		session:  make(map[string]*sessionState),
 	}
 }
 
@@ -89,6 +117,22 @@ func (st *store) registerContext(seg Segment) error {
 	return nil
 }
 
+func (st *store) registerSkill(seg Segment) error {
+	if seg.Name == "" {
+		return &protocol.FrameError{Code: "bad_payload", Message: "name is required"}
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if seg.Order == 0 {
+		seg.Order = 200
+	}
+	if seg.Text == "" {
+		seg.Text = seg.Name
+	}
+	st.skills[seg.Name] = seg
+	return nil
+}
+
 func sortByOrderName(items []Segment) {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Order != items[j].Order {
@@ -98,11 +142,29 @@ func sortByOrderName(items []Segment) {
 	})
 }
 
+func joinParts(parts []string) string {
+	var b strings.Builder
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(p)
+		_ = i
+	}
+	return b.String()
+}
+
 func (st *store) assemble() (text string, segments []Segment) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	segments = make([]Segment, 0, len(st.segments))
+	segments = make([]Segment, 0, len(st.segments)+len(st.skills))
 	for _, seg := range st.segments {
+		segments = append(segments, seg)
+	}
+	for _, seg := range st.skills {
 		segments = append(segments, seg)
 	}
 	sortByOrderName(segments)
@@ -124,19 +186,55 @@ func (st *store) assemble() (text string, segments []Segment) {
 			parts = append(parts, seg.Text)
 		}
 	}
-	for i, p := range parts {
-		if i > 0 {
-			text += "\n\n"
-		}
-		text += p
+	return joinParts(parts), segments
+}
+
+func estimateTokens(chars int) int {
+	if chars <= 0 {
+		return 0
 	}
-	return text, segments
+	return (chars + 3) / 4
+}
+
+func buildSummary(msgs []message) string {
+	var lines []string
+	lines = append(lines, "Conversation summary (compacted):")
+	for _, m := range msgs {
+		c := strings.TrimSpace(m.Content)
+		c = strings.ReplaceAll(c, "\n", " ")
+		r := []rune(c)
+		if len(r) > 120 {
+			c = string(r[:120]) + "…"
+		}
+		if c == "" {
+			c = "(empty)"
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", m.Role, c))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func main() {
 	s := pluginsdk.New()
 	st := newStore()
 	st.loadBaseFile()
+
+	listTools := func() []map[string]any {
+		raw, err := s.Call("tools", "list", json.RawMessage(`{}`))
+		if err != nil {
+			return nil
+		}
+		var out struct {
+			Tools []map[string]any `json:"tools"`
+		}
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &out)
+		}
+		if out.Tools == nil {
+			return []map[string]any{}
+		}
+		return out.Tools
+	}
 
 	s.Handle("system-prompt", "registerSegment", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var seg Segment
@@ -166,6 +264,175 @@ func main() {
 			"text":     text,
 			"segments": segments,
 		})
+	})
+
+	s.Handle("context", "registerSkill", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var seg Segment
+		if err := json.Unmarshal(req.Payload, &seg); err != nil {
+			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+		}
+		if err := st.registerSkill(seg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"name": seg.Name})
+	})
+
+	s.Handle("context", "prepare", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string    `json:"sessionId"`
+			Messages  []message `json:"messages"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		systemText, segments := st.assemble()
+		tools := listTools()
+		if tools == nil {
+			tools = []map[string]any{}
+		}
+		chars := len(systemText)
+		for _, m := range in.Messages {
+			chars += len(m.Content)
+		}
+		u := usageInfo{
+			Chars:           chars,
+			EstimatedTokens: estimateTokens(chars),
+			MessageCount:    len(in.Messages),
+			Source:          "chars",
+		}
+		sid := in.SessionID
+		if sid == "" {
+			sid = "default"
+		}
+		st.mu.Lock()
+		if prev := st.session[sid]; prev != nil && prev.usage.Source == "provider" {
+			// Keep provider usage as the preferred observation (CONTEXT.md Context Usage).
+			u.Source = prev.usage.Source
+			u.EstimatedTokens = prev.usage.EstimatedTokens
+			if prev.usage.Chars > 0 {
+				u.Chars = prev.usage.Chars
+			}
+		}
+		st.session[sid] = &sessionState{usage: u, messages: in.Messages}
+		st.mu.Unlock()
+
+		// compactHint when the estimated hop is large (Host still owns the final budget check).
+		hint := u.EstimatedTokens > 4000 || chars > 16000
+
+		return json.Marshal(map[string]any{
+			"messages":    in.Messages,
+			"tools":       tools,
+			"systemText":  systemText,
+			"segments":    segments,
+			"usage":       u,
+			"compactHint": hint,
+		})
+	})
+
+	s.Handle("context", "noteUsage", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string         `json:"sessionId"`
+			Usage     map[string]any `json:"usage"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		if len(in.Usage) == 0 {
+			return json.Marshal(map[string]any{"ok": false})
+		}
+		sid := in.SessionID
+		if sid == "" {
+			sid = "default"
+		}
+		providerTokens := 0
+		if v, ok := in.Usage["total_tokens"].(float64); ok {
+			providerTokens = int(v)
+		} else if v, ok := in.Usage["totalTokens"].(float64); ok {
+			providerTokens = int(v)
+		}
+		st.mu.Lock()
+		prev := st.session[sid]
+		if prev == nil {
+			prev = &sessionState{}
+			st.session[sid] = prev
+		}
+		prev.usage.Source = "provider"
+		if providerTokens > 0 {
+			prev.usage.EstimatedTokens = providerTokens
+		}
+		st.mu.Unlock()
+		return json.Marshal(map[string]any{"ok": true, "source": "provider"})
+	})
+
+	s.Handle("context", "compact", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID        string    `json:"sessionId"`
+			Messages         []message `json:"messages"`
+			CoversThroughSeq int       `json:"coversThroughSeq"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		summary := buildSummary(in.Messages)
+		return json.Marshal(map[string]any{
+			"summary":          summary,
+			"coversThroughSeq": in.CoversThroughSeq,
+		})
+	})
+
+	s.Handle("context", "usage", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		sid := in.SessionID
+		if sid == "" {
+			sid = "default"
+		}
+		st.mu.Lock()
+		sess := st.session[sid]
+		st.mu.Unlock()
+		if sess == nil {
+			return json.Marshal(map[string]any{"usage": nil})
+		}
+		return json.Marshal(map[string]any{"usage": sess.usage})
+	})
+
+	s.Handle("context", "listContext", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+			N         int    `json:"n"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		sid := in.SessionID
+		if sid == "" {
+			sid = "default"
+		}
+		n := in.N
+		if n <= 0 {
+			n = 20
+		}
+		st.mu.Lock()
+		sess := st.session[sid]
+		st.mu.Unlock()
+		if sess == nil {
+			return json.Marshal(map[string]any{"messages": []message{}})
+		}
+		msgs := sess.messages
+		if len(msgs) > n {
+			msgs = msgs[len(msgs)-n:]
+		}
+		return json.Marshal(map[string]any{"messages": msgs, "count": len(msgs)})
 	})
 
 	_ = s.Serve()

@@ -77,8 +77,8 @@ install_plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 \
 install_plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 \
     "Read/write workspace files"
 
-install_plugin "context-manager" "./plugins/context-manager" '["system-prompt"]' "[]" 0 \
-    "System prompt segment assembler"
+install_plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 \
+    "Context Manager: system prompt + prepare/compact/usage"
 
 install_plugin "echo"           "./plugins/echo"           '["echo"]' "[]" 0 \
     "Echo capability plugin"

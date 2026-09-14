@@ -17,7 +17,7 @@ func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, s
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
-		"provides": ["system-prompt"],
+		"provides": ["system-prompt", "context"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
 	}`)

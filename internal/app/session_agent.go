@@ -26,7 +26,9 @@ type sessionAgentOpts struct {
 	invokePlugin  *string
 	callCap       *string
 	invokePayload *string
-	audit         *bool
+	frameCap      *string
+	frameMethod   *string
+	contextList   *int
 	cards         *bool
 }
 
@@ -187,9 +189,6 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		return err
 	}
 	defer func() {
-		if opts.audit != nil && *opts.audit {
-			printAudit(srv.Audit())
-		}
 		if opts.cards != nil && *opts.cards {
 			printCards(srv.Cards())
 		}
@@ -232,11 +231,18 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		} else {
 			rawPayload = serve.MarshalPayload(payload)
 		}
+		capName, methodName := "demo", "invoke"
+		if opts.frameCap != nil && *opts.frameCap != "" {
+			capName = *opts.frameCap
+		}
+		if opts.frameMethod != nil && *opts.frameMethod != "" {
+			methodName = *opts.frameMethod
+		}
 		frame := &protocol.Frame{
 			V:       protocol.Version,
 			Type:    protocol.TypeReq,
-			Cap:     "demo",
-			Method:  "invoke",
+			Cap:     capName,
+			Method:  methodName,
 			Payload: rawPayload,
 		}
 		out, err := srv.Call(*opts.invokePlugin, frame)
@@ -270,6 +276,10 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		for i, name := range out.ToolCalls {
 			fmt.Printf("tool_call[%d]=%s\n", i, name)
 		}
+		if u, err := srv.ContextUsage(""); err == nil && u != nil {
+			body, _ := json.Marshal(u)
+			fmt.Printf("context usage=%s\n", body)
+		}
 	}
 
 	if *opts.derive {
@@ -288,6 +298,15 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 		body, _ := json.Marshal(facts)
 		fmt.Printf("query ok facts=%s\n", body)
+	}
+
+	if opts.contextList != nil && *opts.contextList > 0 {
+		msgs, err := srv.ListContextMessages("", *opts.contextList)
+		if err != nil {
+			return err
+		}
+		body, _ := json.Marshal(msgs)
+		fmt.Printf("context list count=%d messages=%s\n", len(msgs), body)
 	}
 
 	if *opts.requestJSON != "" {

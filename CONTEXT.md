@@ -9,7 +9,7 @@
 _Avoid_: 扩展、模块、组件（除非特指 Go module）
 
 **Host**:
-插件树的宿主进程：负责 Discovery、Assembly、生命周期、Frame 路由与双层 Waterfall 的薄内核。
+插件树的宿主进程：负责 Discovery、Assembly、生命周期、Frame 路由与 Session 不变量的薄内核。
 _Avoid_: 宿主程序、主程序、kernel（正文可用，规范名词是 Host）
 
 **Assembly**:
@@ -100,14 +100,6 @@ _Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
 Web Render Medium 中项目提供的最薄骨架：按合并 Layout 渲染 chrome 与导航、提供 Design Token 与必要全局脚本（SDK 与组件装载器）。内容面（聊天、trace 等）不属骨架，由插件作者实现为 Panel Component 注册进页面，项目自有实现也不例外。
 _Avoid_: 前端框架、主界面、聊天壳（规范名词是 Shell）
 
-**Waterfall**:
-环绕式拦截链：下游处理完才返回，监听方不放行则短路。Host 内建强制链 + 可选外部 Interceptor。
-_Avoid_: 中间件链、拦截器（若语义相同，正文可用，规范名词是 Waterfall）
-
-**Interceptor**:
-挂在 Waterfall 上的策略插件：放行、改写或短路一次调用。
-_Avoid_: 中间件、守卫（守卫若语义为单调否决可另立术语）
-
 **Frame**:
 Host 与插件之间的一条完整结构化消息：`uint32` 长度前缀 + JSON body，携带 id 以对齐请求/响应。
 _Avoid_: 包、报文（规范名词是 Frame）
@@ -133,7 +125,7 @@ _Avoid_: 附加上下文、注入内容（规范名词是 Additional Contexts）
 _Avoid_: 智能体实例、机器人、bot、agent 组装（规范名词是 Agent）
 
 **Agent Loop**:
-驱动 Turn/Step 的执行策略：组装 Model Context、调用 LLM、调度工具、写回 Session Log。默认编译在 Host，可由 loop Capability 替换。
+驱动 Turn/Step 的执行策略：经 Context Prepare 组装 Model Context、调用 LLM、调度工具、写回 Session Log。默认编译在 Host，可由 loop Capability 替换。
 _Avoid_: 主循环、orchestrator、执行器（规范名词是 Agent Loop，简称 Loop）
 
 **Turn**:
@@ -157,9 +149,21 @@ _Avoid_: 请求头、调用配置（规范名词是 Request Header）
 _Avoid_: 子智能体、nested agent、child agent（规范名词是 Subagent）
 
 **Context Manager**:
-提供 system-prompt Capability 的插件：持有 Prompt Segment 注册表，按序拼装 System Prompt。v1 只做组装，不做历史压缩。
+提供模型上下文内容管理的插件：持有 Prompt Segment 注册表并拼装 System Prompt，经 `context` Capability 提供 prepare/compact/usage 等；tools schema 与 skills 说明的注入策略也归此。历史真源仍是 Session Log，CM 不改写旧事实。
 _Avoid_: 上下文管理器、prompt engine、prompt builder（规范名词是 Context Manager）
 
 **Prompt Segment**:
-可注册的 System Prompt 片段：带 name/order/text，由 Assembly 静态提供或插件运行时注册。
+可注册的 System Prompt 片段：带 name/order/text，由 Assembly 静态提供或插件运行时注册。Skills 目录等说明性内容也可作为段注册。
 _Avoid_: prompt 段、提示片段、section（可作别名，规范名词是 Prompt Segment）
+
+**Context Prepare**:
+Loop 在 `llm.complete` 前拉取的一次上下文产物：最终 messages、tools schema、System Text、usage 占位与 compact 提示。内容选择结果必须能从 Session Log 重建。
+_Avoid_: 上下文组装结果、prompt 包（规范名词是 Context Prepare）
+
+**Context Summary**:
+Compact 写入 Session Log 的摘要事实（model-visible）：meta 记录覆盖范围（如 coversThroughSeq）；derive 只投影 active summary 及其之后的原文。不删除、不改写旧事实。
+_Avoid_: 压缩块、记忆摘要（规范名词是 Context Summary）
+
+**Context Usage**:
+单次模型请求的 token 占用观测：优先供应商 usage，缺失时字符估算。经 log/接口暴露给 CLI 与 Render Medium，不是第二真源。
+_Avoid_: 配额、计费用量（若语义不同）

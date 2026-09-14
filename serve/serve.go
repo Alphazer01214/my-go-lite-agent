@@ -68,7 +68,6 @@ type Server struct {
 	closed   bool
 	seq      int
 	gen      map[string]int
-	audit    []AuditEntry
 	cards    []PresentationCard
 	panels   []PanelOp
 	subs     []*Subscriber
@@ -483,22 +482,16 @@ func (s *Server) rejectPanel(from, reason string) {
 }
 
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
-	// Dual Waterfall first: built-in cancel/audit always on; optional external Interceptor.
-	// Applies to every plugin-originated star call, including agent/request.
-	dec := s.runWaterfall(from, f)
-	if dec.Action == ActionReject {
-		code := dec.Code
-		if code == "" {
-			code = "interceptor_rejected"
-		}
+	// Host closed: reject star calls without an interceptor plane (ADR-0014).
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		_ = s.writeTo(from, &protocol.Frame{
 			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
-			Error: &protocol.FrameError{Code: code, Message: dec.Reason},
+			Error: &protocol.FrameError{Code: "host_closed", Message: "host_closed"},
 		})
 		return
-	}
-	if dec.Action == ActionRewrite && len(dec.Payload) > 0 {
-		f.Payload = dec.Payload
 	}
 
 	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
@@ -879,6 +872,13 @@ const LLMCap = "llm"
 // SystemPromptCap is the Capability Context Manager Plugins provide (ADR-0006).
 const SystemPromptCap = "system-prompt"
 
+// ContextCap is the Capability Context Manager Plugins provide for prepare/compact/usage (ADR-0013).
+const ContextCap = "context"
+
+// ContextBudgetChars triggers auto-compact when prepare's character estimate
+// exceeds this budget (provider usage preferred when present).
+const ContextBudgetChars = 24000
+
 // LoopCap is the replaceable Agent Loop Capability (ADR-0003). Host uses the
 // in-process default unless a mounted Plugin provides this Capability.
 const LoopCap = "loop"
@@ -1108,6 +1108,272 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 		}
 	}
 	return out.Text, nil
+}
+
+// ContextPrepareResult is one context.prepare outcome (ADR-0013).
+type ContextPrepareResult struct {
+	Messages    []Message      `json:"messages"`
+	Tools       []ToolSchema   `json:"tools"`
+	SystemText  string         `json:"systemText"`
+	Usage       map[string]any `json:"usage,omitempty"`
+	CompactHint bool           `json:"compactHint"`
+}
+
+// HasContextProvider reports whether a Context Manager provides `context`.
+func (s *Server) HasContextProvider() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.provides[ContextCap]
+	return ok
+}
+
+// PrepareContext asks Context Manager to assemble messages/tools for one model hop.
+func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextPrepareResult, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ContextCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no plugin provides %q", ContextCap)
+	}
+	payload := MarshalPayload(map[string]any{
+		"sessionId": sessionID,
+		"messages":  messages,
+	})
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     ContextCap,
+		Method:  "prepare",
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context.prepare: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("context.prepare: %w", res.Error)
+	}
+	var out struct {
+		Messages    []Message      `json:"messages"`
+		Tools       []ToolSchema   `json:"tools"`
+		SystemText  string         `json:"systemText"`
+		Usage       map[string]any `json:"usage"`
+		CompactHint bool           `json:"compactHint"`
+	}
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return nil, fmt.Errorf("context.prepare: bad payload: %w", err)
+		}
+	}
+	if out.Messages == nil {
+		out.Messages = messages
+	}
+	if out.Tools == nil {
+		out.Tools = []ToolSchema{}
+	}
+	return &ContextPrepareResult{
+		Messages:    out.Messages,
+		Tools:       out.Tools,
+		SystemText:  out.SystemText,
+		Usage:       out.Usage,
+		CompactHint: out.CompactHint,
+	}, nil
+}
+
+// CompactContext asks Context Manager for a Context Summary body.
+func (s *Server) CompactContext(sessionID string, messages []Message, coversThroughSeq int) (summary string, covers int, err error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ContextCap]
+	s.mu.Unlock()
+	if !ok {
+		return "", 0, fmt.Errorf("no plugin provides %q", ContextCap)
+	}
+	payload := MarshalPayload(map[string]any{
+		"sessionId":        sessionID,
+		"messages":         messages,
+		"coversThroughSeq": coversThroughSeq,
+	})
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     ContextCap,
+		Method:  "compact",
+		Payload: payload,
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("context.compact: %w", err)
+	}
+	if res.Error != nil {
+		return "", 0, fmt.Errorf("context.compact: %w", res.Error)
+	}
+	var out struct {
+		Summary          string `json:"summary"`
+		CoversThroughSeq int    `json:"coversThroughSeq"`
+	}
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &out); err != nil {
+			return "", 0, fmt.Errorf("context.compact: bad payload: %w", err)
+		}
+	}
+	if out.CoversThroughSeq == 0 {
+		out.CoversThroughSeq = coversThroughSeq
+	}
+	return out.Summary, out.CoversThroughSeq, nil
+}
+
+// lastSystemAfterSummary returns the latest role=system message content that
+// sits after any active context_summary fact, plus whether a summary exists.
+func (s *Server) lastSystemAfterSummary(sessionID string) (content string, hasSummary bool) {
+	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
+	if err != nil {
+		return "", false
+	}
+	summarySeq := 0
+	for _, f := range facts {
+		if fmt.Sprint(f["type"]) != "context_summary" {
+			continue
+		}
+		meta, _ := f["meta"].(map[string]any)
+		if meta == nil {
+			continue
+		}
+		if active, _ := meta["active"].(bool); active {
+			if seq, ok := f["seq"].(float64); ok {
+				summarySeq = int(seq)
+			} else if seq, ok := f["seq"].(int); ok {
+				summarySeq = seq
+			}
+			hasSummary = true
+		}
+	}
+	for _, f := range facts {
+		if fmt.Sprint(f["type"]) != "message" || fmt.Sprint(f["role"]) != "system" {
+			continue
+		}
+		seq := 0
+		switch v := f["seq"].(type) {
+		case float64:
+			seq = int(v)
+		case int:
+			seq = v
+		}
+		if seq <= summarySeq {
+			continue
+		}
+		content, _ = f["content"].(string)
+	}
+	return content, hasSummary
+}
+
+func (s *Server) lastSessionSeq(sessionID string) int {
+	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
+	if err != nil {
+		return 0
+	}
+	last := 0
+	for _, f := range facts {
+		switch v := f["seq"].(type) {
+		case float64:
+			last = int(v)
+		case int:
+			last = v
+		}
+	}
+	return last
+}
+
+// ContextUsage returns the Context Manager's last prepare usage for a session.
+func (s *Server) ContextUsage(sessionID string) (map[string]any, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ContextCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	payload := json.RawMessage(`{}`)
+	if sessionID != "" {
+		payload = MarshalPayload(map[string]string{"sessionId": sessionID})
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     ContextCap,
+		Method:  "usage",
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context.usage: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("context.usage: %w", res.Error)
+	}
+	var out struct {
+		Usage map[string]any `json:"usage"`
+	}
+	if len(res.Payload) > 0 {
+		_ = json.Unmarshal(res.Payload, &out)
+	}
+	return out.Usage, nil
+}
+
+// NoteContextUsage pushes provider usage into Context Manager (source=provider).
+func (s *Server) NoteContextUsage(sessionID string, usage map[string]any) error {
+	s.mu.Lock()
+	owner, ok := s.provides[ContextCap]
+	s.mu.Unlock()
+	if !ok || len(usage) == 0 {
+		return nil
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:      protocol.Version,
+		Type:   protocol.TypeReq,
+		Cap:    ContextCap,
+		Method: "noteUsage",
+		Payload: MarshalPayload(map[string]any{
+			"sessionId": sessionID,
+			"usage":     usage,
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("context.noteUsage: %w", err)
+	}
+	if res.Error != nil {
+		return fmt.Errorf("context.noteUsage: %w", res.Error)
+	}
+	return nil
+}
+
+// ListContextMessages returns the last prepare messages preview from Context Manager.
+func (s *Server) ListContextMessages(sessionID string, n int) ([]Message, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[ContextCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	payload := MarshalPayload(map[string]any{"sessionId": sessionID, "n": n})
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     ContextCap,
+		Method:  "listContext",
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context.listContext: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("context.listContext: %w", res.Error)
+	}
+	var out struct {
+		Messages []Message `json:"messages"`
+	}
+	if len(res.Payload) > 0 {
+		_ = json.Unmarshal(res.Payload, &out)
+	}
+	if out.Messages == nil {
+		out.Messages = []Message{}
+	}
+	return out.Messages, nil
 }
 
 // sessionTurn is one Session's in-flight default-Loop turn control.
@@ -1407,13 +1673,22 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 		sysText += note
 	}
+
+	// Snapshot log end before this Turn's appends (compact covers prior history).
+	turnStartSeq := s.lastSessionSeq(sessionID)
+
 	if sysText != "" {
-		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type":    "message",
-			"role":    "system",
-			"content": sysText,
-		}}); err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
+		// Skip re-append when the same System Prompt is already the active one
+		// after any Context Summary (Q13 / ADR-0013).
+		lastSys, _ := s.lastSystemAfterSummary(sessionID)
+		if lastSys != sysText {
+			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+				"type":    "message",
+				"role":    "system",
+				"content": sysText,
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
 		}
 	}
 
@@ -1470,6 +1745,88 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
 
+		modelMessages := ar.Messages
+		if s.HasContextProvider() {
+			prep, perr := s.PrepareContext(sessionID, ar.Messages)
+			if perr != nil {
+				return nil, fmt.Errorf("agent loop: %w", perr)
+			}
+			// ADR-0002: prepare must not invent history. Prefer derive; reject drift.
+			if len(prep.Messages) > 0 && !messagesEqual(prep.Messages, ar.Messages) {
+				return nil, &protocol.FrameError{
+					Code:    "session_invariant_violation",
+					Message: "context.prepare messages are not reconstructable from session log",
+				}
+			}
+			// Prefer CM-collected tools; re-merge Host Subagent schema (prepare only sees tools.list).
+			if len(prep.Tools) > 0 {
+				schemas = prep.Tools
+				if allowSubagent {
+					schemas = append(schemas, ToolSchema{
+						Name:        SubagentToolName,
+						Description: "Run a focused subagent on a new session and return its final reply.",
+						InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
+					})
+				}
+			}
+			// Auto-compact before the model hop when over budget (ADR-0013).
+			chars := len(prep.SystemText)
+			for _, m := range modelMessages {
+				chars += len(m.Content)
+			}
+			needCompact := chars > ContextBudgetChars || prep.CompactHint
+			if needCompact {
+				// Cover history before this Turn's appends; keep current turn intact.
+				oldMsgs := modelMessages
+				if len(oldMsgs) > 0 {
+					// Compact a prefix: everything except the trailing user message.
+					if len(oldMsgs) > 1 {
+						oldMsgs = oldMsgs[:len(oldMsgs)-1]
+					}
+				}
+				summary, covers, cerr := s.CompactContext(sessionID, oldMsgs, turnStartSeq)
+				if cerr != nil {
+					return nil, fmt.Errorf("agent loop: %w", cerr)
+				}
+				if summary != "" {
+					if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+						"type":    "context_summary",
+						"role":    "system",
+						"content": summary,
+						"meta": map[string]any{
+							"active":           true,
+							"coversThroughSeq": covers,
+						},
+					}}); err != nil {
+						return nil, fmt.Errorf("agent loop: %w", err)
+					}
+					// Re-append System Prompt after the summary so it stays model-visible.
+					if sysText != "" {
+						if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+							"type":    "message",
+							"role":    "system",
+							"content": sysText,
+						}}); err != nil {
+							return nil, fmt.Errorf("agent loop: %w", err)
+						}
+					}
+					ar2, err := s.AgentRequest(sessionID, nil)
+					if err != nil {
+						return nil, fmt.Errorf("agent loop: %w", err)
+					}
+					modelMessages = ar2.Messages
+					if prep2, perr := s.PrepareContext(sessionID, ar2.Messages); perr == nil {
+						if len(prep2.Messages) > 0 && !messagesEqual(prep2.Messages, ar2.Messages) {
+							return nil, &protocol.FrameError{
+								Code:    "session_invariant_violation",
+								Message: "context.prepare messages are not reconstructable from session log",
+							}
+						}
+					}
+				}
+			}
+		}
+
 		s.mu.Lock()
 		llmOwner, ok := s.provides[LLMCap]
 		s.mu.Unlock()
@@ -1479,7 +1836,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 
 		// sessionId lets the LLM Plugin persist its own non-content streams
 		// (e.g. reasoning) via session.append without Host special-casing channels.
-		reqBody := map[string]any{"messages": ar.Messages, "sessionId": sessionID}
+		reqBody := map[string]any{"messages": modelMessages, "sessionId": sessionID}
 		if len(schemas) > 0 {
 			reqBody["tools"] = schemas
 		}
@@ -1528,8 +1885,9 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		}
 
 		var llmOut struct {
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls"`
+			Content   string         `json:"content"`
+			ToolCalls []ToolCall     `json:"tool_calls"`
+			Usage     map[string]any `json:"usage"`
 		}
 		if len(out.Frame.Payload) > 0 {
 			if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
@@ -1541,6 +1899,23 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			if delta, _, ok := extractStreamDelta(ev); ok {
 				allChunks = append(allChunks, delta)
 			}
+		}
+
+		// Context Usage: prefer provider usage; keep for audit (CONTEXT.md Context Usage).
+		if len(llmOut.Usage) > 0 {
+			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
+				"type": "llm_usage",
+				"role": "host",
+				"meta": map[string]any{
+					"step":  stepN,
+					"turn":  1,
+					"usage": llmOut.Usage,
+				},
+			}}); err != nil {
+				return nil, fmt.Errorf("agent loop: %w", err)
+			}
+			// Surface provider usage to Context Manager so CLI/Web prefer it over chars.
+			s.NoteContextUsage(sessionID, llmOut.Usage)
 		}
 
 		// Final assistant reply (no tool calls).

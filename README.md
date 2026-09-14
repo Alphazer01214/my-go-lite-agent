@@ -8,8 +8,8 @@
    ▼
 ┌──────────── Host（薄内核）────────────┐
 │  Discovery · Assembly · 生命周期       │
-│  Frame 路由（星型）· 双层 Waterfall    │
-│  Session 不变量 · 默认 Agent Loop      │
+│  Frame 路由（星型） · Session 不变量   │
+│  默认 Agent Loop · Context Prepare    │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
  session    llm        tools    echo
@@ -23,8 +23,8 @@
 - **进程外插件**：stdin/stdout 上的长度前缀 JSON Frame；崩溃隔离、可独立分发
 - **Discovery ≠ Assembly**：扫描看见插件，配置决定挂载；未点名不拉起
 - **星型路由**：插件之间不直连，策略平面唯一
-- **双层 Waterfall**：内建审计/取消始终生效；外部 Interceptor 可放行/改写/短路
 - **Session Log 不变量**：仅追加日志是历史唯一真源；模型可见内容必须可从日志重建
+- **Context Manager**：System Prompt / prepare / compact / usage；压缩以 Context Summary 落日志
 - **默认 Agent Loop 在 Host**：开箱跑通一轮对话；可用外置 `loop` 插件替换
 - **`llm-openai`**：OpenAI 兼容适配（DeepSeek 等），流式输出
 - **REPL**：`-repl` 多轮同 Session，实时流式打印
@@ -213,16 +213,16 @@ cd dist
   -session-append '[{"role":"user","content":"hi"}]' -session-derive
 ```
 
-### Waterfall 审计
+### Context 用量
 
 ```powershell
-# Windows
-.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "audit me" -audit
+# Windows — 一轮结束后打印 usage，并列出最近 5 条 prepare 消息
+.\liteagent-cli.exe -plugins plugins -assembly examples\chat.json -turn "hello" -context-list 5
 ```
 
 ```bash
 # macOS / Linux
-./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "audit me" -audit
+./liteagent-cli -plugins plugins -assembly examples/chat.json -turn "hello" -context-list 5
 ```
 
 ## 插件目录布局

@@ -112,50 +112,6 @@ func buildEchoToolPluginDir(t *testing.T, root, pluginsDir, name string) {
 	}
 }
 
-func buildInterceptorPluginDir(t *testing.T, root, pluginsDir, name, mode string) {
-	t.Helper()
-	bin := buildPkg(t, root, "./plugins/interceptor")
-	dir := filepath.Join(pluginsDir, name)
-	dst := filepath.Join(dir, name+".exe")
-	writeFile(t, filepath.Join(dir, "plugin.json"), `{
-		"name": "`+name+`",
-		"version": "0.1.0",
-		"protocol": 2,
-		"provides": ["interceptor"],
-		"consumes": [],
-		"entry": "`+name+`.exe"
-	}`)
-	writeFile(t, filepath.Join(dir, "mode.txt"), mode)
-	b, err := os.ReadFile(bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func buildCrashInterceptorPluginDir(t *testing.T, root, pluginsDir, name string) {
-	t.Helper()
-	bin := buildPkg(t, root, "./plugins/crashix")
-	dst := filepath.Join(pluginsDir, name, name+".exe")
-	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
-		"name": "`+name+`",
-		"version": "0.1.0",
-		"protocol": 2,
-		"provides": ["interceptor"],
-		"consumes": [],
-		"entry": "`+name+`.exe"
-	}`)
-	b, err := os.ReadFile(bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func buildCrashOncePluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
 	bin := buildPkg(t, root, "./plugins/crashonce")
