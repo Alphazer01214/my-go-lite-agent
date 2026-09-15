@@ -5,6 +5,7 @@
 import { state, setSessionId } from './state.js';
 import { setPageLoader, createLoader, setPages } from './loader.js';
 import { openSSE } from './events.js';
+import { openPluginsPanel } from './plugins-panel.js';
 
 var sessionLabel = document.getElementById('session-label');
 
@@ -76,3 +77,6 @@ fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay)
   refreshRunState();
   openSSE();
 });
+
+var btnPlugins = document.getElementById('btn-plugins');
+if (btnPlugins) btnPlugins.addEventListener('click', function () { openPluginsPanel(); });

@@ -13,11 +13,13 @@
  *                 and the /trace debug page).
  *
  * Facts come from the session Capability through the star route
- * (LiteAgent.call('session','query')), never from dedicated endpoints.
- * Shell coordination rides private topics: __session (switches),
- * __notice (loader diagnostics → view).
+ * (LiteAgent.call('session','query')). Turn status and cancel are the
+ * medium's own endpoints (/api/session, /api/turn/cancel) — the author SDK
+ * does not surface them yet. A 2s fact refresh backstops missed SSE events
+ * (incremental; skips rebuild while text is selected). Shell coordination
+ * rides private topics: __session (switches), __notice (loader diagnostics).
  */
-import { esc, md, renderMath } from '/app/md.js';
+import { esc, md } from '/app/md.js';
 import { mergeReasoningFacts } from '/app/facts.js';
 
 const POLL_MS = 2000;
@@ -58,6 +60,9 @@ class SessionTrace extends HTMLElement {
     this._offSession = null;
     this._offFacts = null;
     this._timer = null;
+    this._lastSeq = -1;
+    this._lastCount = -1;
+    this._booted = false;
   }
   async connectedCallback() {
     const root = this.attachShadow({ mode: 'open' });
@@ -69,10 +74,11 @@ class SessionTrace extends HTMLElement {
     list.className = 'list';
     root.appendChild(list);
     // The medium owns the current session; learn it, then re-render on switches.
-    this._offSession = LiteAgent.onSessionChange(() => this.refresh());
+    this._offSession = LiteAgent.onSessionChange(() => this.refresh(true));
     this._offFacts = LiteAgent.on('session', f => this.onFact(f));
-    await this.refresh();
-    if (!this._timer) this._timer = setInterval(() => this.refresh(), POLL_MS);
+    await this.refresh(true);
+    // SSE is the live path; this timer only backstops missed events.
+    if (!this._timer) this._timer = setInterval(() => this.refresh(false), POLL_MS);
   }
   disconnectedCallback() {
     if (this._offSession) this._offSession();
@@ -80,24 +86,54 @@ class SessionTrace extends HTMLElement {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
     this._root = null;
   }
+  hasTextSelection() {
+    const sel = this._root && this._root.getSelection ? this._root.getSelection() : window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+    const node = sel.anchorNode;
+    return !!(node && this._root && this._root.contains(node));
+  }
   onFact(f) {
     // Live append only when the fact belongs to the session being viewed.
     if (!this._root) return;
     const sid = f && f.sessionId !== undefined ? String(f.sessionId) : '';
     if (String(this._viewSid || '') !== sid) return;
+    if (f && f.seq != null) {
+      const n = Number(f.seq);
+      if (n > this._lastSeq) this._lastSeq = n;
+    }
     this.appendFact(f);
   }
-  async refresh() {
+  async refresh(force) {
     if (!this._root) return;
+    // Never tear down the DOM while the user is selecting text in this panel.
+    if (!force && this.hasTextSelection()) return;
     try {
       // Current Session is a session Capability fact (ADR-0012).
       const cur = await LiteAgent.call('session', 'current', {});
       const curId = (cur && cur.ok !== false && cur.result && cur.result.sessionId) || '';
-      this._viewSid = curId !== '' ? curId : (window.__liteSessionId || '');
+      const sid = curId !== '' ? curId : (window.__liteSessionId || '');
+      const prevSid = this._viewSid;
+      const switched = sid !== '' && String(prevSid || '') !== String(sid);
+      if (switched) force = true;
+      this._viewSid = sid;
       const res = await LiteAgent.call('session', 'query', { sessionId: this._viewSid, afterSeq: 0, limit: 0 });
       if (!res || res.ok === false) throw new Error(res && res.error || 'session.query failed');
       const facts = mergeReasoningFacts((res.result && res.result.facts) || []);
-      this.render(facts);
+      const lastSeq = facts.length ? Number(facts[facts.length - 1].seq || 0) : -1;
+      // Incremental backstop: same session, nothing new → leave the DOM (and selection) alone.
+      if (!force && this._booted && !switched && facts.length === this._lastCount && lastSeq === this._lastSeq) {
+        return;
+      }
+      if (force || switched || !this._booted) {
+        this.render(facts);
+      } else {
+        // Append only facts the live path may have missed.
+        const fresh = facts.filter(f => Number(f.seq || 0) > this._lastSeq);
+        fresh.forEach(f => this.appendFact(f));
+      }
+      this._lastCount = facts.length;
+      this._lastSeq = Math.max(this._lastSeq, lastSeq);
+      this._booted = true;
     } catch (e) {
       if (this._root) this.renderError(e);
     }
@@ -105,12 +141,14 @@ class SessionTrace extends HTMLElement {
   render(facts) {
     if (!this._root) return;
     const list = this._root.querySelector('.list');
-    // Preserve expanded rows across the 2s rebuild (otherwise open state collapses).
+    // Preserve expanded rows across rebuilds (otherwise open state collapses).
     const open = new Set();
     list.querySelectorAll('.trace-row.open').forEach(r => open.add(String(r.dataset.seq)));
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     list.innerHTML = '';
+    this._lastSeq = -1;
     facts.forEach(f => this.appendFact(f, open));
+    if (facts.length) this._lastSeq = Number(facts[facts.length - 1].seq || 0);
     if (nearBottom) list.scrollTop = list.scrollHeight;
   }
   appendFact(f, openSet) {
@@ -187,6 +225,11 @@ const RAIL_CSS = `
   }
   .sess-item:hover { background:#1a1f2a; color:var(--la-ink,#e8eaed); }
   .sess-item.active { background:#1a1f2a; color:var(--la-ink,#e8eaed); border:1px solid var(--la-line,#2a2f3a); }
+  .sess-item.child { padding-left:22px; }
+  .sess-item .badge {
+    display:inline-block; margin-right:6px; font-size:10px; color:var(--la-accent,#7aa2f7);
+    font-family:var(--la-mono,monospace);
+  }
 `;
 
 class SessionRail extends HTMLElement {
@@ -240,6 +283,33 @@ class SessionRail extends HTMLElement {
       this.render(cur || '', list);
     } catch (e) { /* rail is best-effort */ }
   }
+  // Flatten the parent/child Session tree so Subagent sessions nest under their parent.
+  flattenTree(list) {
+    const byParent = {};
+    const ids = new Set(list.map(s => s.id || ''));
+    const roots = [];
+    list.forEach(s => {
+      const p = s.parentSession || '';
+      if (p && ids.has(p)) {
+        if (!byParent[p]) byParent[p] = [];
+        byParent[p].push(s);
+      } else {
+        roots.push(s);
+      }
+    });
+    const out = [];
+    const walk = (items, depth) => {
+      items
+        .slice()
+        .sort((a, b) => (a.id || '').localeCompare(b.id || ''))
+        .forEach(s => {
+          out.push({ s: s, depth: depth });
+          walk(byParent[s.id] || [], depth + 1);
+        });
+    };
+    walk(roots, 0);
+    return out;
+  }
   render(cur, list) {
     if (!this._root) return;
     this._current = cur || '';
@@ -252,13 +322,19 @@ class SessionRail extends HTMLElement {
       el.appendChild(empty);
       return;
     }
-    list.forEach(s => {
+    this.flattenTree(list).forEach(({ s, depth }) => {
       const id = s.id || '';
       const title = s.title || id;
       const item = document.createElement('div');
-      item.className = 'sess-item' + (id === this._current ? ' active' : '');
-      item.textContent = title;
-      item.title = id;
+      item.className = 'sess-item' + (id === this._current ? ' active' : '') + (depth > 0 ? ' child' : '');
+      if (s.origin === 'subagent') {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = '↳';
+        item.appendChild(badge);
+      }
+      item.appendChild(document.createTextNode(title));
+      item.title = id + (s.parentSession ? '\nparent: ' + s.parentSession : '');
       item.onclick = () => this.select(id);
       el.appendChild(item);
     });
@@ -267,7 +343,7 @@ class SessionRail extends HTMLElement {
     this._current = id || '';
     if (!this._root) return;
     this._root.querySelectorAll('.sess-item').forEach(el => {
-      el.classList.toggle('active', el.title === this._current);
+      el.classList.toggle('active', el.title.split('\n')[0] === this._current);
     });
   }
   async select(id) {
@@ -356,6 +432,19 @@ const VIEW_CSS = `
   .ctx-msg .role { color:var(--la-accent,#7aa2f7); font-weight:600; margin-right:6px; }
   .ctx-msg.tool { border-color:#e0af6855; }
   .ctx-msg.system .role { color:#bb9af7; }
+  .family-bar {
+    flex-shrink:0; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    padding:6px 16px; font-size:11px; color:var(--la-dim,#9aa0a6);
+    border-bottom:1px solid var(--la-line,#2a2f3a); background:var(--la-panel2,#12161f);
+    font-family:var(--la-mono,monospace);
+  }
+  .family-bar:empty { display:none; }
+  .family-bar button {
+    background:transparent; border:1px solid var(--la-line,#2a2f3a); color:var(--la-accent,#7aa2f7);
+    border-radius:6px; padding:3px 8px; font:inherit; cursor:pointer;
+  }
+  .family-bar button:hover { background:#1a1f2a; }
+  .family-bar .f-label { opacity:.8; }
 `;
 
 class SessionView extends HTMLElement {
@@ -381,6 +470,11 @@ class SessionView extends HTMLElement {
     const style = document.createElement('style');
     style.textContent = VIEW_CSS;
     root.appendChild(style);
+    // Parent/child Session bar: enter a Subagent child, or return to the parent.
+    const familyBar = document.createElement('div');
+    familyBar.className = 'family-bar';
+    root.appendChild(familyBar);
+    this._familyBar = familyBar;
     const flow = document.createElement('div');
     flow.className = 'flow';
     root.appendChild(flow);
@@ -433,11 +527,12 @@ class SessionView extends HTMLElement {
     this._usageEl = null;
     this._usageBar = null;
     this._ctxPanel = null;
+    this._familyBar = null;
   }
   isCurrent(sid) {
-    // Missing sessionId means the default Session (""), not "any session".
-    if (sid === undefined || sid === null) return !this._sid;
-    return String(sid) === String(this._sid || '');
+    // Empty/missing ids all mean the default Session (always non-empty).
+    const norm = (v) => (v === undefined || v === null || String(v) === '') ? 'default' : String(v);
+    return norm(sid) === norm(this._sid);
   }
   // Presentation/stream events that fire before history lands are queued and
   // replayed — the old shell gate (history-first, then SSE) becomes local.
@@ -473,10 +568,55 @@ class SessionView extends HTMLElement {
       this._ready = true;
       this.maybeResumeLiveThinking();
       this.refreshUsage();
+      await this.refreshFamilyBar();
     } catch (e) {
       this._ready = true;
       this.appendPre('history unavailable: ' + e, 'message error');
     }
+  }
+  // Family bar: "← parent" when this is a Subagent child; child chips when this parent spawned Subagents.
+  async refreshFamilyBar() {
+    if (!this._familyBar) return;
+    this._familyBar.innerHTML = '';
+    try {
+      const res = await LiteAgent.call('session', 'list', {});
+      const list = (res && res.ok !== false && res.result && res.result.sessions) || [];
+      const me = list.find(s => (s.id || '') === (this._sid || ''));
+      if (me && me.parentSession) {
+        const label = document.createElement('span');
+        label.className = 'f-label';
+        label.textContent = me.origin === 'subagent' ? 'subagent of' : 'parent';
+        this._familyBar.appendChild(label);
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.textContent = '← ' + me.parentSession;
+        back.title = 'Open parent session ' + me.parentSession;
+        back.onclick = () => this.enterSession(me.parentSession);
+        this._familyBar.appendChild(back);
+      }
+      const kids = list.filter(s => s.parentSession && s.parentSession === (this._sid || ''));
+      if (kids.length) {
+        const label = document.createElement('span');
+        label.className = 'f-label';
+        label.textContent = kids.length === 1 ? '1 subagent' : (kids.length + ' subagents');
+        this._familyBar.appendChild(label);
+        kids.forEach(s => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = '↳ ' + ((s.title || s.id || '').slice(0, 28));
+          btn.title = 'Open subagent session ' + s.id;
+          btn.onclick = () => this.enterSession(s.id);
+          this._familyBar.appendChild(btn);
+        });
+      }
+    } catch (e) { /* family bar is best-effort */ }
+  }
+  async enterSession(id) {
+    if (!id) return;
+    const b = await LiteAgent.call('session', 'select', { sessionId: id });
+    if (!b || b.ok === false) return;
+    window.__liteSessionId = id;
+    LiteAgent.emit('__session', id);
   }
   formatUsage(u) {
     if (!u) return '—';
@@ -520,6 +660,8 @@ class SessionView extends HTMLElement {
     if (f.type === 'turn_end') {
       this.refreshUsage();
       if (this._ctxPanel && this._ctxPanel.classList.contains('open')) this.loadModelContext();
+      // A Turn may have spawned Subagent children — refresh the family bar.
+      this.refreshFamilyBar();
     }
   }
   async toggleModelContext() {
@@ -775,7 +917,7 @@ class SessionView extends HTMLElement {
     const el = document.createElement('div');
     el.className = 'msg assistant';
     el.innerHTML = html || '';
-    this._root.querySelector('.flow').appendChild(el); renderMath(el); this.scroll(true); return el;
+    this._root.querySelector('.flow').appendChild(el); this.scroll(true); return el;
   }
   appendUser(text) {
     const el = document.createElement('div');

@@ -9,21 +9,6 @@ export function esc(s) {
   });
 }
 
-export function renderMath(root) {
-  if (!window.katex || !window.renderMathInElement) return;
-  try {
-    window.renderMathInElement(root, {
-      delimiters: [
-        { left: '$$', right: '$$', display: true },
-        { left: '\\[', right: '\\]', display: true },
-        { left: '$', right: '$', display: false },
-        { left: '\\(', right: '\\)', display: false }
-      ],
-      throwOnError: false
-    });
-  } catch (e) { }
-}
-
 export function md(src) {
   if (!src) return '';
   var s = String(src).replace(/\r\n/g, '\n');

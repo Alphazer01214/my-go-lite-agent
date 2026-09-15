@@ -126,10 +126,59 @@ func TestPluginUIAndTraversal(t *testing.T) {
 		`"name":"demo"`,
 		`"name":"webonly"`,
 		`"component":"webonly-panel"`,
+		`"graph"`,
+		`"edges"`,
+		`"nodes"`,
 	} {
 		if !strings.Contains(string(pb), want) {
 			t.Fatalf("api/plugins missing %s: %s", want, pb)
 		}
+	}
+	// Dependency edge: a consumer of a provided Capability yields provider→consumer.
+	// demo provides "demo" in this fixture; if anything consumes it the edge appears.
+	var payload struct {
+		Plugins []struct {
+			Name     string   `json:"name"`
+			Provides []string `json:"provides"`
+			Consumes []string `json:"consumes"`
+		} `json:"plugins"`
+		Graph struct {
+			Nodes []struct {
+				ID    string   `json:"id"`
+				Unmet []string `json:"unmet"`
+			} `json:"nodes"`
+			Edges []struct {
+				From       string `json:"from"`
+				To         string `json:"to"`
+				Capability string `json:"capability"`
+			} `json:"edges"`
+		} `json:"graph"`
+	}
+	if err := json.Unmarshal(pb, &payload); err != nil {
+		t.Fatalf("parse /api/plugins: %v\n%s", err, pb)
+	}
+	if len(payload.Graph.Nodes) < 2 {
+		t.Fatalf("want graph nodes for mounted plugins, got %+v", payload.Graph.Nodes)
+	}
+	foundDemoNode := false
+	for _, n := range payload.Graph.Nodes {
+		if n.ID == "demo" {
+			foundDemoNode = true
+		}
+	}
+	if !foundDemoNode {
+		t.Fatalf("graph nodes missing demo: %+v", payload.Graph.Nodes)
+	}
+
+	// Floating panel module is served under /app/ (shell overlay, not a page).
+	mres, err := http.Get(ts.URL + "/app/plugins-panel.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, _ := io.ReadAll(mres.Body)
+	_ = mres.Body.Close()
+	if mres.StatusCode != http.StatusOK || !strings.Contains(string(mb), "openPluginsPanel") {
+		t.Fatalf("want /app/plugins-panel.js, status=%d", mres.StatusCode)
 	}
 
 	// The UI-only plugin's UI Entry is served like any other.
@@ -158,6 +207,78 @@ func TestPluginUIAndTraversal(t *testing.T) {
 		if res.StatusCode == http.StatusOK && strings.Contains(string(raw), "nope") {
 			t.Fatalf("traversal leaked via %s", p)
 		}
+	}
+}
+
+func TestPluginDependencyGraph(t *testing.T) {
+	plan := assembly.Plan{Mounted: []discovery.Found{
+		{Manifest: plugin.Manifest{Name: "session", Version: "1", Protocol: plugin.CurrentProtocol,
+			Provides: []string{"session"}}},
+		{Manifest: plugin.Manifest{Name: "agentprobe", Version: "1", Protocol: plugin.CurrentProtocol,
+			Provides: []string{"demo"}, Consumes: []string{"session"}}},
+		{Manifest: plugin.Manifest{Name: "orphan", Version: "1", Protocol: plugin.CurrentProtocol,
+			Consumes: []string{"missing-cap"}}},
+	}}
+	s := New(Options{Plan: plan, CommandPlane: nopCommands{}})
+	ts := httptest.NewServer(s.http.Handler)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/api/plugins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	var payload struct {
+		Graph struct {
+			Nodes []graphNode `json:"nodes"`
+			Edges []graphEdge `json:"edges"`
+		} `json:"graph"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("parse: %v\n%s", err, raw)
+	}
+
+	hasEdge := func(from, to, kind, capName string) bool {
+		for _, e := range payload.Graph.Edges {
+			if e.From == from && e.To == to && e.Kind == kind && e.Capability == capName {
+				return true
+			}
+		}
+		return false
+	}
+	// Bipartite: plugin provides capability; Host uses that capability.
+	if !hasEdge("session", "cap:session", "provides", "session") {
+		t.Fatalf("want session provides cap:session, edges=%+v", payload.Graph.Edges)
+	}
+	if !hasEdge("cap:session", "host", "host-uses", "session") {
+		t.Fatalf("want cap:session host-uses host, edges=%+v", payload.Graph.Edges)
+	}
+	// Consumer edge: capability → plugin.
+	if !hasEdge("cap:session", "agentprobe", "consumes", "session") {
+		t.Fatalf("want cap:session consumed by agentprobe, edges=%+v", payload.Graph.Edges)
+	}
+	// Host node always present.
+	foundHost := false
+	var orphan *graphNode
+	for i := range payload.Graph.Nodes {
+		if payload.Graph.Nodes[i].ID == "host" && payload.Graph.Nodes[i].Kind == "host" {
+			foundHost = true
+		}
+		if payload.Graph.Nodes[i].ID == "orphan" {
+			orphan = &payload.Graph.Nodes[i]
+		}
+	}
+	if !foundHost {
+		t.Fatalf("missing host node: %+v", payload.Graph.Nodes)
+	}
+	if orphan == nil || len(orphan.Unmet) != 1 || orphan.Unmet[0] != "missing-cap" {
+		t.Fatalf("orphan unmet = %+v", orphan)
+	}
+	// Even a provides-only plugin still yields edges (no empty graph).
+	if len(payload.Graph.Edges) < 3 {
+		t.Fatalf("want visible relationship edges, got %d: %+v", len(payload.Graph.Edges), payload.Graph.Edges)
 	}
 }
 

@@ -36,7 +36,8 @@ type Options struct {
 	UIMounts []assembly.EffectiveMount
 }
 
-// CommandPlane is the slash-command surface the Shell uses (implemented by cmd/host).
+// CommandPlane is the slash-command surface the Shell uses (implemented by
+// internal/app's webCommandPlane).
 type CommandPlane interface {
 	HandleOut(line string) (output string, quit bool, err error)
 	Complete(prefix string) []string
@@ -514,26 +515,122 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.opts.Layout)
 }
 
-// handlePlugins reports mounted plugins plus Assembly-adjudicated UI mounts
-// and the Panel Component contract (ADR-0010/0012).
+// graphEdge is one directed dependency in the plugin graph.
+// kind: provides | host-uses | consumes | ui-mount
+type graphEdge struct {
+	From       string `json:"from"`
+	To         string `json:"to"`
+	Kind       string `json:"kind"`
+	Capability string `json:"capability,omitempty"`
+	// UI mount extras
+	Page      string `json:"page,omitempty"`
+	Slot      string `json:"slot,omitempty"`
+	Component string `json:"component,omitempty"`
+}
+
+// graphNode is one vertex: plugin, host, capability, or UI slot.
+type graphNode struct {
+	ID          string   `json:"id"`
+	Kind        string   `json:"kind"` // plugin | host | capability | slot
+	Label       string   `json:"label"`
+	Version     string   `json:"version,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Provides    []string `json:"provides,omitempty"`
+	Consumes    []string `json:"consumes,omitempty"`
+	// Unmet lists consumed capabilities no mounted plugin provides.
+	Unmet []string `json:"unmet,omitempty"`
+	// UI mount summary for plugin nodes
+	Mounts []map[string]string `json:"mounts,omitempty"`
+}
+
+// hostUsedCapabilities are Capabilities the default Loop / Host star-routes
+// when a mounted plugin provides them (CONTEXT.md Capability).
+var hostUsedCapabilities = []string{
+	serve.SessionCap, serve.LLMCap, serve.ToolsCap,
+	serve.SystemPromptCap, serve.ContextCap, serve.LoopCap,
+}
+
+// handlePlugins reports mounted plugins, Assembly-adjudicated UI mounts,
+// and a relationship graph: plugin → capability → host, plus UI mounts.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	type uiItem struct {
-		Entry  string              `json:"entry"`
-		Trust  string              `json:"trust,omitempty"`
+		Entry  string                    `json:"entry"`
+		Trust  string                    `json:"trust,omitempty"`
 		Mounts []assembly.EffectiveMount `json:"mounts"`
-		Pages  []plugin.UIPage     `json:"pages,omitempty"`
+		Pages  []plugin.UIPage           `json:"pages,omitempty"`
 	}
 	type item struct {
-		Name     string               `json:"name"`
-		Version  string               `json:"version,omitempty"`
-		Provides []string             `json:"provides,omitempty"`
-		Commands []plugin.CommandSpec `json:"commands,omitempty"`
-		UI       *uiItem              `json:"ui,omitempty"`
+		Name        string               `json:"name"`
+		Version     string               `json:"version,omitempty"`
+		Description string               `json:"description,omitempty"`
+		Provides    []string             `json:"provides,omitempty"`
+		Consumes    []string             `json:"consumes,omitempty"`
+		Commands    []plugin.CommandSpec `json:"commands,omitempty"`
+		UI          *uiItem              `json:"ui,omitempty"`
 	}
+
+	providers := map[string][]string{}
+	for _, p := range s.opts.Plan.Mounted {
+		for _, c := range p.Manifest.Provides {
+			providers[c] = append(providers[c], p.Manifest.Name)
+		}
+	}
+
 	var list []item
+	var nodes []graphNode
+	var edges []graphEdge
+	seenNode := map[string]bool{}
+	seenEdge := map[string]bool{}
+
+	addNode := func(n graphNode) {
+		if seenNode[n.ID] {
+			return
+		}
+		seenNode[n.ID] = true
+		nodes = append(nodes, n)
+	}
+	addEdge := func(e graphEdge) {
+		key := e.From + "\x00" + e.To + "\x00" + e.Kind + "\x00" + e.Capability + "\x00" + e.Component
+		if seenEdge[key] {
+			return
+		}
+		seenEdge[key] = true
+		edges = append(edges, e)
+	}
+
+	// Host vertex: always present — the star-router that uses Capabilities.
+	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", Description: "Plugin host / default Agent Loop"})
+
 	for _, p := range s.opts.Plan.Mounted {
 		it := item{Name: p.Manifest.Name, Version: p.Manifest.Version,
-			Provides: p.Manifest.Provides, Commands: p.Manifest.Commands}
+			Description: p.Manifest.Description,
+			Provides:    p.Manifest.Provides, Consumes: p.Manifest.Consumes,
+			Commands: p.Manifest.Commands}
+		node := graphNode{
+			ID: p.Manifest.Name, Kind: "plugin", Label: p.Manifest.Name,
+			Version: p.Manifest.Version, Description: p.Manifest.Description,
+			Provides: p.Manifest.Provides, Consumes: p.Manifest.Consumes,
+		}
+		// provides: plugin → capability
+		for _, capName := range p.Manifest.Provides {
+			capID := "cap:" + capName
+			addNode(graphNode{ID: capID, Kind: "capability", Label: capName})
+			addEdge(graphEdge{From: p.Manifest.Name, To: capID, Kind: "provides", Capability: capName})
+		}
+		// consumes: capability → plugin (plugin depends on the capability)
+		for _, need := range p.Manifest.Consumes {
+			capID := "cap:" + need
+			owners := providers[need]
+			if len(owners) == 0 {
+				node.Unmet = append(node.Unmet, need)
+				addNode(graphNode{ID: capID, Kind: "capability", Label: need})
+				addEdge(graphEdge{From: capID, To: p.Manifest.Name, Kind: "consumes", Capability: need})
+				continue
+			}
+			addNode(graphNode{ID: capID, Kind: "capability", Label: need})
+			addEdge(graphEdge{From: capID, To: p.Manifest.Name, Kind: "consumes", Capability: need})
+		}
+		// UI mounts: plugin → slot
 		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
 			entry := strings.TrimPrefix(p.Manifest.UI.NormalizedEntry(), "ui/")
 			var mounts []assembly.EffectiveMount
@@ -544,7 +641,6 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else {
-				// Fallback when Assembly adjudication was not supplied (tests / simple hosts).
 				for _, m := range ui.Mounts {
 					page := m.Page
 					if page == "" {
@@ -556,6 +652,17 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 			}
+			for _, m := range mounts {
+				slotID := "ui:" + m.Page + "/" + m.Slot
+				addNode(graphNode{ID: slotID, Kind: "slot", Label: m.Page + " · " + m.Slot})
+				addEdge(graphEdge{
+					From: p.Manifest.Name, To: slotID, Kind: "ui-mount",
+					Page: m.Page, Slot: m.Slot, Component: m.Component,
+				})
+				node.Mounts = append(node.Mounts, map[string]string{
+					"page": m.Page, "slot": m.Slot, "component": m.Component,
+				})
+			}
 			it.UI = &uiItem{
 				Entry:  "/plugin-ui/" + p.Manifest.Name + "/" + entry,
 				Trust:  ui.Trust,
@@ -563,9 +670,33 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 				Pages:  ui.Pages,
 			}
 		}
+		addNode(node)
 		list = append(list, it)
 	}
-	writeJSON(w, map[string]any{"plugins": list})
+
+	// Host uses each Capability that some mounted plugin provides.
+	for _, capName := range hostUsedCapabilities {
+		if len(providers[capName]) == 0 {
+			continue
+		}
+		capID := "cap:" + capName
+		addNode(graphNode{ID: capID, Kind: "capability", Label: capName})
+		addEdge(graphEdge{From: capID, To: "host", Kind: "host-uses", Capability: capName})
+	}
+
+	if nodes == nil {
+		nodes = []graphNode{}
+	}
+	if edges == nil {
+		edges = []graphEdge{}
+	}
+	writeJSON(w, map[string]any{
+		"plugins": list,
+		"graph": map[string]any{
+			"nodes": nodes,
+			"edges": edges,
+		},
+	})
 }
 
 func (s *Server) handlePluginUI(w http.ResponseWriter, r *http.Request) {

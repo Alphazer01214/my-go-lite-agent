@@ -61,6 +61,15 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
+/* Floating plugin-graph modal (shell-owned, not a layout page). */
+.pg-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:24px}
+.pg-modal{background:var(--la-panel);border:1px solid var(--la-line);border-radius:12px;width:min(920px,100%);max-height:min(80vh,720px);display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.45);overflow:hidden}
+.pg-modal-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--la-line);font-size:13px;font-weight:600}
+.pg-modal-head button{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
+.pg-modal-head button:hover{color:var(--la-ink);border-color:var(--la-accent)}
+.pg-modal-body{flex:1;min-height:0;overflow:auto;display:flex}
+.btn-plugins{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:8px}
+.btn-plugins:hover{color:var(--la-accent);border-color:var(--la-accent)}
 </style>
 </head>
 <body>
@@ -69,7 +78,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
   <section id="center">
     <div id="split">
       <section id="chat-col">
-        <div id="pane-head"><span>Chat</span><span id="layout-nav" style="display:flex;gap:10px;margin-left:12px"></span><span id="session-label" style="font-family:var(--la-mono);font-size:11px"></span></div>
+        <div id="pane-head"><span>Chat</span><span id="layout-nav" style="display:flex;gap:10px;margin-left:12px;align-items:center"></span><span style="display:flex;align-items:center"><button id="btn-plugins" class="btn-plugins" type="button" title="Mounted plugins & dependency graph">Plugins</button><span id="session-label" style="font-family:var(--la-mono);font-size:11px;margin-left:8px"></span></span></div>
         <div id="chat" class="panel-root"></div>
         <div id="status"></div>
       </section>

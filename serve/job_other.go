@@ -7,17 +7,13 @@ import (
 	"syscall"
 )
 
-// jobHolder is a no-op on non-Windows; process groups handle reaping.
+// jobHolder is a no-op on non-Windows: there is no Job Object, so orphaned
+// plugin processes are reaped via killTree when the Host shuts down.
 type jobHolder struct{}
 
 func newJob() (*jobHolder, error) { return &jobHolder{}, nil }
 
-func (j *jobHolder) assign(cmd *exec.Cmd) error {
-	if cmd == nil || cmd.SysProcAttr == nil {
-		return nil
-	}
-	return nil
-}
+func (j *jobHolder) assign(*exec.Cmd) error { return nil }
 
 func (j *jobHolder) close() {}
 
