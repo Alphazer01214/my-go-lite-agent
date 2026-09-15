@@ -34,10 +34,10 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 	}
 }
 
-// buildFakeLLMPluginDir mirrors the CLI-side fixture (cmd/liteagent-cli).
-func buildFakeLLMPluginDir(t *testing.T, root, pluginsDir, name string) {
+// buildStubLLMPluginDir mirrors the CLI-side in-test LLM stub helper.
+func buildStubLLMPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/fakellm")
+	bin := buildStubLLMBin(t, root)
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",

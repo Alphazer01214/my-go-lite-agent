@@ -13,11 +13,11 @@ func TestToolCallPathOneTurn(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -47,7 +47,7 @@ func TestToolCallPathOneTurn(t *testing.T) {
 	if !strings.Contains(s, "derive ok") {
 		t.Fatalf("want derive after turn: %s", s)
 	}
-	// Model Context: user → assistant tool_call → tool result → final assistant.
+	// Model Context: user 鈫?assistant tool_call 鈫?tool result 鈫?final assistant.
 	if !strings.Contains(s, `"role":"tool"`) {
 		t.Fatalf("want tool role message in derived Model Context: %s", s)
 	}
@@ -69,7 +69,7 @@ func TestToolCallPathOneTurn(t *testing.T) {
 	finalIdx := strings.Index(derived, `"Tool said:`)
 	if userIdx < 0 || callIdx < 0 || toolRoleIdx < 0 || finalIdx < 0 ||
 		!(userIdx < callIdx && callIdx < toolRoleIdx && toolRoleIdx < finalIdx) {
-		t.Fatalf("want user → tool_call → tool result → final assistant order in derive: %s", derived)
+		t.Fatalf("want user 鈫?tool_call 鈫?tool result 鈫?final assistant order in derive: %s", derived)
 	}
 }
 
@@ -79,10 +79,10 @@ func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
 
 	// No tools plugin: fake-llm must still answer without tool_calls.
 	cmd := exec.Command(hostBin,
@@ -114,11 +114,11 @@ func TestToolCallErrorStillCompletesTurn(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
 
 	// "boom" makes echotool fail; Loop must log error tool_result and continue.
 	cmd := exec.Command(hostBin,

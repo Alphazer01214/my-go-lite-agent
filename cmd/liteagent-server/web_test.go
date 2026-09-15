@@ -19,9 +19,9 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-server")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
 	layoutPath := writeTestLayout(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -89,7 +89,7 @@ func TestWebServeShellAndMessage(t *testing.T) {
 		t.Fatalf("shell missing split layout")
 	}
 
-	// Post a message; fakellm should settle markdown over SSE eventually.
+	// Post a message; stubllm should settle markdown over SSE eventually.
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/message", strings.NewReader(`{"text":"web-hello"}`))
 	req.Header.Set("Content-Type", "application/json")
 	mres, err := http.DefaultClient.Do(req)
@@ -142,9 +142,9 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-server")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
 	layoutPath := writeTestLayout(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

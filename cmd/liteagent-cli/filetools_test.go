@@ -7,21 +7,21 @@ import (
 	"testing"
 )
 
-// TestFileToolsIntegration mounts filetools alongside session+fakellm and runs a turn.
-// fakellm calls the first tool (read_file) with {"text":"..."} which fails because
-// path is required — this verifies the full call path: Host → tools.call → filetools
-// error → tool_result in Session Log → final assistant reply.
+// TestFileToolsIntegration mounts filetools alongside session+stubllm and runs a turn.
+// stubllm calls the first tool (read_file) with {"text":"..."} which fails because
+// path is required 鈥?this verifies the full call path: Host 鈫?tools.call 鈫?filetools
+// error 鈫?tool_result in Session Log 鈫?final assistant reply.
 func TestFileToolsIntegration(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildFileToolsPluginDir(t, root, pluginsDir, "filetools")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","filetools"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","filetools"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -38,7 +38,7 @@ func TestFileToolsIntegration(t *testing.T) {
 	if !strings.Contains(s, "turn ok") {
 		t.Fatalf("want turn ok: %s", s)
 	}
-	// fakellm calls read_file which fails with "path is required"
+	// stubllm calls read_file which fails with "path is required"
 	if !strings.Contains(s, "tool_call") {
 		t.Fatalf("want tool_call observed in turn: %s", s)
 	}

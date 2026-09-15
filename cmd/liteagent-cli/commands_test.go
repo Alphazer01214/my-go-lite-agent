@@ -59,9 +59,9 @@ func TestREPLHelpAndExit(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{"/help", "/lp", "/exit"})
 	for _, want := range []string{
@@ -72,7 +72,7 @@ func TestREPLHelpAndExit(t *testing.T) {
 		"/exit",
 		"Plugins:",
 		"session",
-		"fakellm",
+		"stubllm",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("want %q in help/lp output:\n%s", want, out)
@@ -89,9 +89,9 @@ func TestREPLUnknownCommandSuggests(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{"/hlp", "/exit"})
 	if !strings.Contains(out, "unknown command: hlp") {
@@ -107,12 +107,12 @@ func TestREPLSessionDumpTracePluginCommand(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"CMD_HELP_SYS"}]
 	}`)
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
 		"/session dump-trace",
@@ -135,12 +135,12 @@ func TestContextManagerListModelContext(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"LIST_MC_SYS"}]
 	}`)
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
 		"hello list mc",
@@ -178,10 +178,10 @@ func TestAssemblyRejectsNativeCommandConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["lp","session","fakellm"]}`)
+	writeFile(t, cfg, `{"plugins":["lp","session","stubllm"]}`)
 
 	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-repl")
 	cmd.Env = hostEnv(t)

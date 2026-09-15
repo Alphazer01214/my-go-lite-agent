@@ -75,3 +75,121 @@ func writeTestLayout(t *testing.T) string {
 	}`)
 	return path
 }
+
+// stubLLMMain / buildStubLLMBin: deterministic test LLM built from a temp module
+// (mirrors cmd/liteagent-cli). No fixture package lives in the repo.
+const stubLLMMain = `package main
+
+import (
+	"encoding/json"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
+)
+
+type toolSchema struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+
+type toolCall struct {
+	ID        string          ` + "`json:\"id\"`" + `
+	Name      string          ` + "`json:\"name\"`" + `
+	Arguments json.RawMessage ` + "`json:\"arguments\"`" + `
+}
+
+func main() {
+	s := pluginsdk.New()
+	s.Handle("llm", "complete", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Messages []struct {
+				Role    string ` + "`json:\"role\"`" + `
+				Content string ` + "`json:\"content\"`" + `
+			} ` + "`json:\"messages\"`" + `
+			Tools []toolSchema ` + "`json:\"tools\"`" + `
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+
+		lastUser := ""
+		lastTool := ""
+		hasToolMsg := false
+		for _, m := range in.Messages {
+			switch m.Role {
+			case "user":
+				lastUser = m.Content
+			case "tool":
+				hasToolMsg = true
+				lastTool = m.Content
+			}
+		}
+
+		if len(in.Tools) > 0 && !hasToolMsg {
+			args, _ := json.Marshal(map[string]string{"text": lastUser})
+			out, _ := json.Marshal(map[string]any{
+				"content": "",
+				"tool_calls": []toolCall{{
+					ID:        "call-1",
+					Name:      in.Tools[0].Name,
+					Arguments: args,
+				}},
+			})
+			return out, nil
+		}
+
+		var reply string
+		var parts []string
+		if hasToolMsg {
+			reply = "Tool said: " + lastTool
+			parts = []string{"Tool ", "said: "}
+			if lastTool != "" {
+				parts = append(parts, lastTool)
+			}
+		} else {
+			reply = "You said: " + lastUser
+			parts = []string{"You ", "said: "}
+			if lastUser != "" {
+				parts = append(parts, lastUser)
+			}
+		}
+		if !hasToolMsg {
+			rp, _ := json.Marshal(map[string]string{
+				"delta":   "thinking: " + lastUser,
+				"channel": "reasoning",
+			})
+			_ = s.EmitTo(req.ID, "llm", "chunk", rp)
+		}
+		for _, p := range parts {
+			payload, _ := json.Marshal(map[string]string{"delta": p, "channel": "content"})
+			_ = s.EmitTo(req.ID, "llm", "chunk", payload)
+		}
+		return json.Marshal(map[string]any{"content": reply})
+	})
+	_ = s.Serve()
+}
+`
+
+func buildStubLLMBin(t *testing.T, root string) string {
+	t.Helper()
+	const cacheKey = "stub-llm"
+	if v, ok := binCache.Load(cacheKey); ok {
+		return v.(string)
+	}
+	src := filepath.Join(t.TempDir(), "stub-llm")
+	writeFile(t, filepath.Join(src, "go.mod"),
+		"module la-stub-llm\n\ngo 1.21\n\nrequire github.com/tomori/my-go-lite-agent v0.0.0\n\nreplace github.com/tomori/my-go-lite-agent => "+filepath.ToSlash(root)+"\n")
+	writeFile(t, filepath.Join(src, "main.go"), stubLLMMain)
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = src
+	if b, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy stub LLM: %v\n%s", err, b)
+	}
+	out := filepath.Join(os.TempDir(), fmt.Sprintf("la-test-%d-stub-llm.exe", os.Getpid()))
+	cmd := exec.Command("go", "build", "-o", out, ".")
+	cmd.Dir = src
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build stub LLM: %v\n%s", err, b)
+	}
+	binCache.Store(cacheKey, out)
+	return out
+}

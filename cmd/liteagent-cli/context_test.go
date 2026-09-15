@@ -13,11 +13,11 @@ func TestAdditionalContextsAfterToolResult(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
 
 	// "ctx" makes echotool return content + additionalContexts.
 	cmd := exec.Command(hostBin,
@@ -96,7 +96,7 @@ func TestPluginAgentInjectViaStar(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","agentprobe"]}`)
 
-	// agentprobe demo.inject → agent.inject through Host star.
+	// agentprobe demo.inject 鈫?agent.inject through Host star.
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
 		"-assembly", cfg,

@@ -15,7 +15,7 @@ func TestContextPrepareReturnsSystemAndTools(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [
 			{"name": "identity", "order": -1000, "text": "You are CM_PREPARE_IDENTITY."}
@@ -24,7 +24,7 @@ func TestContextPrepareReturnsSystemAndTools(t *testing.T) {
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","echotool"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -102,11 +102,11 @@ func TestContextRegisterSkillAppearsInPrepare(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
 
 	// Same Host process: register skill, then turn so assemble includes the catalog.
 	cmd := exec.Command(hostBin,
@@ -137,12 +137,12 @@ func TestLoopPreparePreservesToolCalls(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","context-manager","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","echotool"]}`)
 
 	appendJSON := `[
 		{"type":"message","role":"user","content":"use a tool"},
@@ -184,7 +184,7 @@ func TestContextUsageCharsAreModelVisibleOnly(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","context-manager"]}`)
 
-	// 5-char user content only → chars must be 5 (not 5+len(SYS_ONLY_XXXX)).
+	// 5-char user content only 鈫?chars must be 5 (not 5+len(SYS_ONLY_XXXX)).
 	payload := `{"sessionId":"","messages":[{"role":"user","content":"hello"}]}`
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

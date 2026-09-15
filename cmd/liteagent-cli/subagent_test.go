@@ -37,13 +37,13 @@ func TestSubagentSyncToolResult(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEmptyToolsPluginDir(t, root, pluginsDir, "emptytools")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","emptytools"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","emptytools"]}`)
 
-	// Fake LLM: first hop with tools → tool_call to first tool (run_subagent injected).
+	// Fake LLM: first hop with tools 鈫?tool_call to first tool (run_subagent injected).
 	// Input "SUBAGENT_TASK" becomes the subagent prompt.
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -72,6 +72,39 @@ func TestSubagentSyncToolResult(t *testing.T) {
 	// Parent must observe a tool role fact.
 	if !strings.Contains(s, `"role":"tool"`) && !strings.Contains(s, `"role": "tool"`) {
 		t.Fatalf("want tool role in parent derive: %s", s)
+	}
+	// Parent/child link: a subagent-*.jsonl exists with persisted session_meta.
+	sessDir := ""
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "SESSION_DATA_DIR=") {
+			sessDir = strings.TrimPrefix(e, "SESSION_DATA_DIR=")
+		}
+	}
+	if sessDir == "" {
+		t.Fatal("hostEnv must set SESSION_DATA_DIR")
+	}
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundChild := false
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "subagent-") && strings.HasSuffix(e.Name(), ".jsonl") {
+			foundChild = true
+			raw, err := os.ReadFile(filepath.Join(sessDir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), `"type":"session_meta"`) && !strings.Contains(string(raw), `"type": "session_meta"`) {
+				t.Fatalf("child session must persist session_meta parent link: %s", e.Name())
+			}
+			if !strings.Contains(string(raw), `"parentSession":"default"`) && !strings.Contains(string(raw), `"parentSession": "default"`) {
+				t.Fatalf("child session parentSession must be default (empty parent 鈫?default): %s", e.Name())
+			}
+		}
+	}
+	if !foundChild {
+		t.Fatalf("want a subagent-*.jsonl child session under %s, got %v", sessDir, entries)
 	}
 }
 

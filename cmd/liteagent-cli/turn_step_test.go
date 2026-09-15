@@ -15,13 +15,13 @@ func TestTurnStepBoundaryEvents(t *testing.T) {
 
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildFakeLLMPluginDir(t, root, pluginsDir, "fakellm")
+	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","fakellm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
 
-	// "hello" with tools → fake-llm issues one tool call → second step final reply.
+	// "hello" with tools 鈫?fake-llm issues one tool call 鈫?second step final reply.
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
 		"-assembly", cfg,
@@ -68,7 +68,7 @@ func TestTurnStepBoundaryEvents(t *testing.T) {
 	if turnStart != 1 || turnEnd != 1 {
 		t.Fatalf("want 1 turn_start and 1 turn_end, got start=%d end=%d\n%s", turnStart, turnEnd, s)
 	}
-	// Tool path uses two model hops → two steps.
+	// Tool path uses two model hops 鈫?two steps.
 	if stepStart < 2 || stepEnd < 2 {
 		t.Fatalf("want >=2 step_start/step_end, got start=%d end=%d\n%s", stepStart, stepEnd, s)
 	}
