@@ -543,8 +543,7 @@ type graphNode struct {
 	Mounts []map[string]string `json:"mounts,omitempty"`
 }
 
-// hostUsedCapabilities are Capabilities the default Loop / Host star-routes
-// when a mounted plugin provides them (CONTEXT.md Capability).
+// hostUsedCapabilities are Capabilities the Host star-routes (Agent Loop / media).
 var hostUsedCapabilities = []string{
 	serve.SessionCap, serve.LLMCap, serve.ToolsCap,
 	serve.SystemPromptCap, serve.ContextCap, serve.LoopCap,
@@ -599,7 +598,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Host vertex: always present — the star-router that uses Capabilities.
-	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", Description: "Plugin host / default Agent Loop"})
+	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", Description: "Plugin host: assembly, routing, session invariant"})
 
 	for _, p := range s.opts.Plan.Mounted {
 		it := item{Name: p.Manifest.Name, Version: p.Manifest.Version,

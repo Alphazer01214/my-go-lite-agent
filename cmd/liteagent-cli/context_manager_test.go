@@ -39,7 +39,7 @@ func buildContextManagerPluginDir(t *testing.T, root, pluginsDir, name string, s
 }
 
 // TestContextManagerAssemblesSystemPrompt is the main-seam test for ticket 01:
-// Context Manager plugin provides system-prompt; default Loop appends assembled
+// Context Manager plugin provides system-prompt; Agent Loop appends assembled
 // System Prompt as a Session Log fact; derive includes it in Model Context.
 func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 	root := moduleRoot(t)

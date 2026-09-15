@@ -874,7 +874,7 @@ const SessionCap = "session"
 // AgentCap is the Host-owned Capability namespace for agent/request and agent.inject.
 const AgentCap = "agent"
 
-// LLMCap is the Capability name LLM Plugins must provide for the default Loop.
+// LLMCap is the Capability name LLM Plugins provide (consumed by Agent Loop).
 const LLMCap = "llm"
 
 // SystemPromptCap is the Capability Context Manager Plugins provide (ADR-0006).
@@ -883,8 +883,8 @@ const SystemPromptCap = "system-prompt"
 // ContextCap is the Capability Context Manager Plugins provide for prepare/compact/usage (ADR-0013).
 const ContextCap = "context"
 
-// LoopCap is the replaceable Agent Loop Capability (ADR-0003). Host uses the
-// in-process default unless a mounted Plugin provides this Capability.
+// LoopCap is the Agent Loop Capability (ADR-0016). A mounted Agent Plugin must
+// provide it; Host has no in-process default Loop.
 const LoopCap = "loop"
 
 // LLMChunkMethod is the evt method LLM Plugins use to stream a delta.
@@ -896,27 +896,6 @@ const LLMCompleteMethod = "complete"
 // ToolsCap is the Capability Tools Plugins provide (list/call).
 const ToolsCap = "tools"
 
-// SubagentToolName is the model-facing tool Host injects to spawn a Subagent (CONTEXT.md).
-const SubagentToolName = "run_subagent"
-
-// MaxSteps bounds model hops (Steps) inside one Turn (CONTEXT.md Turn/Step).
-const MaxSteps = 128
-
-// ToolSchema is one model-facing tool registration from tools.list.
-type ToolSchema struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema,omitempty"`
-}
-
-// subagentSchema is the Host-injected run_subagent tool schema (single source;
-// re-appended after Context Prepare replaces the collected tools list).
-var subagentSchema = ToolSchema{
-	Name:        SubagentToolName,
-	Description: "Run a focused subagent on a child session linked to this session and return its final reply.",
-	InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
-}
-
 // ToolCall is a model-requested tool invocation.
 type ToolCall struct {
 	ID        string          `json:"id"`
@@ -924,7 +903,7 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
-// TurnResult is one default-Loop turn (ADR-0003: Loop compiled into Host).
+// TurnResult is one Agent Loop turn returned by the mounted loop provider (ADR-0016).
 type TurnResult struct {
 	User      string    `json:"user"`
 	Assistant string    `json:"assistant"`
@@ -1087,215 +1066,6 @@ func (s *Server) AgentRequest(sessionID string, claimed []Message) (*AgentReques
 		}
 	}
 	return &AgentRequestResult{Messages: derived, Rebuilt: len(claimed) == 0}, nil
-}
-
-// AssembleSystemPrompt asks the mounted Context Manager for the assembled System Prompt.
-// Returns empty text when no plugin provides system-prompt (ADR-0006).
-func (s *Server) AssembleSystemPrompt() (string, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[SystemPromptCap]
-	s.mu.Unlock()
-	if !ok {
-		return "", nil
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     SystemPromptCap,
-		Method:  "assemble",
-		Payload: json.RawMessage(`{}`),
-	})
-	if err != nil {
-		return "", fmt.Errorf("system-prompt.assemble: %w", err)
-	}
-	if res.Error != nil {
-		return "", fmt.Errorf("system-prompt.assemble: %w", res.Error)
-	}
-	var out struct {
-		Text string `json:"text"`
-	}
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return "", fmt.Errorf("system-prompt.assemble: bad payload: %w", err)
-		}
-	}
-	return out.Text, nil
-}
-
-// ContextPrepareResult is one context.prepare outcome (ADR-0013).
-type ContextPrepareResult struct {
-	Messages      []Message      `json:"messages"`
-	Tools         []ToolSchema   `json:"tools"`
-	SystemText    string         `json:"systemText"`
-	Usage         map[string]any `json:"usage,omitempty"`
-	CompactHint   map[string]any `json:"compactHint,omitempty"`
-	ContextWindow int            `json:"contextWindow,omitempty"`
-}
-
-// LLMInfo is the llm.info payload (Context Window observation, ADR-0015).
-type LLMInfo struct {
-	ContextWindow int    `json:"contextWindow"`
-	Model         string `json:"model"`
-	Provider      string `json:"provider"`
-}
-
-// LLMInfo queries the mounted LLM plugin for model metadata (empty when absent).
-func (s *Server) LLMInfo() (*LLMInfo, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[LLMCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", LLMCap)
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     LLMCap,
-		Method:  "info",
-		Payload: json.RawMessage(`{}`),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm.info: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("llm.info: %w", res.Error)
-	}
-	var info LLMInfo
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &info); err != nil {
-			return nil, fmt.Errorf("llm.info: bad payload: %w", err)
-		}
-	}
-	return &info, nil
-}
-
-// HasContextProvider reports whether a Context Manager provides `context`.
-func (s *Server) HasContextProvider() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.provides[ContextCap]
-	return ok
-}
-
-// PrepareContext asks Context Manager to assemble messages/tools for one model hop.
-// contextWindow (0 = unknown) enables compactHint without auto-compaction.
-func (s *Server) PrepareContext(sessionID string, messages []Message, contextWindow int) (*ContextPrepareResult, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[ContextCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", ContextCap)
-	}
-	payload := MarshalPayload(map[string]any{
-		"sessionId":     sessionID,
-		"messages":      messages,
-		"contextWindow": contextWindow,
-	})
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     ContextCap,
-		Method:  "prepare",
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("context.prepare: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("context.prepare: %w", res.Error)
-	}
-	var out struct {
-		Messages      []Message      `json:"messages"`
-		Tools         []ToolSchema   `json:"tools"`
-		SystemText    string         `json:"systemText"`
-		Usage         map[string]any `json:"usage"`
-		CompactHint   map[string]any `json:"compactHint"`
-		ContextWindow int            `json:"contextWindow"`
-	}
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return nil, fmt.Errorf("context.prepare: bad payload: %w", err)
-		}
-	}
-	if out.Messages == nil {
-		out.Messages = messages
-	}
-	if out.Tools == nil {
-		out.Tools = []ToolSchema{}
-	}
-	window := out.ContextWindow
-	if window == 0 {
-		window = contextWindow
-	}
-	return &ContextPrepareResult{
-		Messages:      out.Messages,
-		Tools:         out.Tools,
-		SystemText:    out.SystemText,
-		Usage:         out.Usage,
-		CompactHint:   out.CompactHint,
-		ContextWindow: window,
-	}, nil
-}
-
-// lastSystemAfterSummary returns the latest role=system message content that
-// sits after any active context_summary fact, plus whether a summary exists.
-func (s *Server) lastSystemAfterSummary(sessionID string) (content string, hasSummary bool) {
-	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
-	if err != nil {
-		return "", false
-	}
-	summarySeq := 0
-	for _, f := range facts {
-		if fmt.Sprint(f["type"]) != "context_summary" {
-			continue
-		}
-		meta, _ := f["meta"].(map[string]any)
-		if meta == nil {
-			continue
-		}
-		if active, _ := meta["active"].(bool); active {
-			if seq, ok := f["seq"].(float64); ok {
-				summarySeq = int(seq)
-			} else if seq, ok := f["seq"].(int); ok {
-				summarySeq = seq
-			}
-			hasSummary = true
-		}
-	}
-	for _, f := range facts {
-		if fmt.Sprint(f["type"]) != "message" || fmt.Sprint(f["role"]) != "system" {
-			continue
-		}
-		seq := 0
-		switch v := f["seq"].(type) {
-		case float64:
-			seq = int(v)
-		case int:
-			seq = v
-		}
-		if seq <= summarySeq {
-			continue
-		}
-		content, _ = f["content"].(string)
-	}
-	return content, hasSummary
-}
-
-// nextTurnNumber derives the next Turn ordinal from the Session Log: one
-// prior turn_start fact per Turn, so numbering survives Host restarts
-// (Session Log is the only truth, CONTEXT.md).
-func (s *Server) nextTurnNumber(sessionID string) (int, error) {
-	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
-	if err != nil {
-		return 0, err
-	}
-	n := 1
-	for _, f := range facts {
-		if fmt.Sprint(f["type"]) == "turn_start" {
-			n++
-		}
-	}
-	return n, nil
 }
 
 // ContextUsage returns the Context Manager's last prepare usage for a session.
@@ -1520,9 +1290,9 @@ func extractStreamDelta(f *protocol.Frame) (delta, channel string, ok bool) {
 	return "", "", false
 }
 
-// RunTurn is the Host-compiled default Agent Loop for one chat turn.
+// RunTurn is the Host entry for one chat turn: lock + status + loop.turn (ADR-0016).
 //
-// If a mounted Plugin provides LoopCap, that external Loop is used (ADR-0003).
+// RunTurn is the Host entry for one chat turn: lock + status + loop.turn (ADR-0016).
 // Default flow: turn/start → system-prompt.assemble → session.append(system) → session.append(user)
 // → per Step: step/start → AgentRequest(rebuild) → llm.complete(tools)
 // → optional tools.call → session tool facts → step/end → repeat until final assistant reply
@@ -1629,6 +1399,35 @@ func (s *Server) ListSessions() ([]map[string]any, error) {
 	return out.Sessions, nil
 }
 
+// CreateSession creates a Session by id via the mounted Session Plugin (idempotent).
+func (s *Server) CreateSession(sessionID, parentSession, origin string, delegationDepth int) error {
+	s.mu.Lock()
+	owner, ok := s.provides[SessionCap]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no plugin provides %q", SessionCap)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:      protocol.Version,
+		Type:   protocol.TypeReq,
+		Cap:    SessionCap,
+		Method: "create",
+		Payload: MarshalPayload(map[string]any{
+			"sessionId":       sessionID,
+			"parentSession":   parentSession,
+			"origin":          origin,
+			"delegationDepth": delegationDepth,
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("session.create: %w", err)
+	}
+	if res.Error != nil {
+		return fmt.Errorf("session.create: %w", res.Error)
+	}
+	return nil
+}
+
 // NewSessionID creates a Session (auto id when empty) and returns the id.
 func (s *Server) NewSessionID(id string) (string, error) {
 	if id == "" {
@@ -1681,180 +1480,6 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		return nil, err
 	}
 	return res, nil
-}
-
-// CollectToolSchemas asks the mounted Tools Plugin for model-facing tool registrations.
-func (s *Server) CollectToolSchemas() ([]ToolSchema, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[ToolsCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, nil
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     ToolsCap,
-		Method:  "list",
-		Payload: json.RawMessage(`{}`),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("tools.list: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("tools.list: %w", res.Error)
-	}
-	var out struct {
-		Tools []ToolSchema `json:"tools"`
-	}
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return nil, fmt.Errorf("tools.list: bad payload: %w", err)
-		}
-	}
-	return out.Tools, nil
-}
-
-// CallToolResult is one tools.call outcome, including Additional Contexts (CONTEXT.md).
-type CallToolResult struct {
-	Content            string    `json:"content"`
-	AdditionalContexts []Message `json:"additionalContexts,omitempty"`
-}
-
-// CreateSession creates a Session by id via the mounted Session Plugin (idempotent).
-func (s *Server) CreateSession(sessionID, parentSession, origin string, delegationDepth int) error {
-	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("no plugin provides %q", SessionCap)
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:      protocol.Version,
-		Type:   protocol.TypeReq,
-		Cap:    SessionCap,
-		Method: "create",
-		Payload: MarshalPayload(map[string]any{
-			"sessionId":       sessionID,
-			"parentSession":   parentSession,
-			"origin":          origin,
-			"delegationDepth": delegationDepth,
-		}),
-	})
-	if err != nil {
-		return fmt.Errorf("session.create: %w", err)
-	}
-	if res.Error != nil {
-		return fmt.Errorf("session.create: %w", res.Error)
-	}
-	return nil
-}
-
-// RunSubagent spawns a Subagent: new Session linked to parentSessionID + default Loop
-// (allowSubagent=false to avoid recursion). The child does not become Current Session.
-// v1 supports mode=sync only; async returns an error (spec Out of Scope / ticket 06).
-func (s *Server) RunSubagent(parentSessionID, input, systemPrompt, mode string, toolFilter []string) (string, error) {
-	if strings.TrimSpace(input) == "" {
-		return "", &protocol.FrameError{Code: "bad_payload", Message: "subagent input is required"}
-	}
-	if mode == "async" {
-		return "", &protocol.FrameError{Code: "not_supported", Message: "async subagent is not supported in v1"}
-	}
-	if mode == "" {
-		mode = "sync"
-	}
-	s.mu.Lock()
-	s.seq++
-	// Unique per spawn: reusing bare "subagent-N" collided with prior runs' files
-	// and made create() a no-op (parent never updated).
-	childID := fmt.Sprintf("subagent-%d-%d", time.Now().UnixNano(), s.seq)
-	s.mu.Unlock()
-
-	// Parent is the Session whose Turn invoked run_subagent (empty → default).
-	parent := parentSessionID
-	if strings.TrimSpace(parent) == "" {
-		parent = "default"
-	}
-	// origin=subagent: plugin stores parent/origin/depth and does not switch Current.
-	if err := s.CreateSession(childID, parent, "subagent", 0); err != nil {
-		return "", err
-	}
-	// v1: toolFilter reserved; child does not inherit run_subagent (no recursion).
-	_ = toolFilter
-
-	// extraSystem is appended inside the child Turn after turn_start (not outside the boundary).
-	res, err := s.runTurn(childID, input, false, systemPrompt)
-	if err != nil {
-		return "", err
-	}
-	return res.Assistant, nil
-}
-
-// CallTool executes one ToolCall through the mounted Tools Plugin,
-// or Host-run Subagent when the tool is run_subagent.
-// sessionID scopes the "running tool" status line for parallel Web sessions.
-func (s *Server) CallTool(sessionID string, tc ToolCall) (*CallToolResult, error) {
-	if s.OnToolCall != nil {
-		s.OnToolCall(tc.Name, tc.Arguments)
-	}
-	s.emitRenderIntent(RenderIntent{Kind: KindMessageText, Level: "info", Text: formatRunningLine(tc.Name), SessionID: sessionID})
-	if tc.Name == SubagentToolName {
-		var in struct {
-			Input        string   `json:"input"`
-			Text         string   `json:"text"`
-			SystemPrompt string   `json:"systemPrompt"`
-			Mode         string   `json:"mode"`
-			Tools        []string `json:"tools"`
-		}
-		if len(tc.Arguments) > 0 {
-			if err := json.Unmarshal(tc.Arguments, &in); err != nil {
-				return nil, fmt.Errorf("tools.call %s: bad arguments: %w", SubagentToolName, err)
-			}
-		}
-		input := in.Input
-		if input == "" {
-			input = in.Text
-		}
-		out, err := s.RunSubagent(sessionID, input, in.SystemPrompt, in.Mode, in.Tools)
-		if err != nil {
-			return nil, err
-		}
-		return &CallToolResult{Content: out}, nil
-	}
-
-	s.mu.Lock()
-	owner, ok := s.provides[ToolsCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", ToolsCap)
-	}
-	args := tc.Arguments
-	if len(args) == 0 {
-		args = json.RawMessage(`{}`)
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:      protocol.Version,
-		Type:   protocol.TypeReq,
-		Cap:    ToolsCap,
-		Method: "call",
-		Payload: MarshalPayload(map[string]any{
-			"name":      tc.Name,
-			"arguments": json.RawMessage(args),
-		}),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("tools.call %s: %w", tc.Name, err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("tools.call %s: %w", tc.Name, res.Error)
-	}
-	var out CallToolResult
-	if len(res.Payload) > 0 {
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return nil, fmt.Errorf("tools.call %s: bad payload: %w", tc.Name, err)
-		}
-	}
-	return &out, nil
 }
 
 func (s *Server) runExternalTurn(owner, sessionID, userInput string, allowSubagent bool, extraSystem string) (*TurnResult, error) {

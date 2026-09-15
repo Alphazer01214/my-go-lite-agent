@@ -122,42 +122,6 @@ func callJSON(s *pluginsdk.Server, cap, method string, payload any) (json.RawMes
 	return out, nil
 }
 
-func (a *agent) appendFacts(sessionID string, facts []map[string]any) (int, error) {
-	body := map[string]any{"facts": facts}
-	if sessionID != "" {
-		body["sessionId"] = sessionID
-	}
-	raw, err := callJSON(a.s, "session", "append", body)
-	if err != nil {
-		// Older session plugins accept a single fact object or array; try array form.
-		if len(facts) == 1 {
-			single := facts[0]
-			if sessionID != "" {
-				single["sessionId"] = sessionID
-			}
-			raw, err = callJSON(a.s, "session", "append", single)
-		}
-		if err != nil {
-			return 0, fmt.Errorf("session.append: %w", err)
-		}
-	}
-	var out struct {
-		Seq   int `json:"seq"`
-		Count int `json:"count"`
-		Facts []struct {
-			Seq int `json:"seq"`
-		} `json:"facts"`
-	}
-	_ = json.Unmarshal(raw, &out)
-	if out.Seq > 0 {
-		return out.Seq, nil
-	}
-	if len(out.Facts) > 0 {
-		return out.Facts[len(out.Facts)-1].Seq, nil
-	}
-	return out.Count, nil
-}
-
 func (a *agent) appendOne(sessionID string, fact map[string]any) error {
 	if sessionID != "" {
 		cp := make(map[string]any, len(fact)+1)
@@ -271,12 +235,6 @@ func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow i
 	}
 	_ = json.Unmarshal(raw, &out)
 	return out.Messages, out.Tools, nil
-}
-
-func (a *agent) hasContextProvider() bool {
-	// Probe with a cheap prepare; absence is an error or empty provider.
-	// Host used provides map; here we try and ignore errors.
-	return a.contextProbe
 }
 
 func (a *agent) nextTurnNumber(sessionID string) int {

@@ -163,7 +163,7 @@ func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
 	}
 }
 
-// runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
+// runSessionAgent mounts Plugins then runs session ops, optional Agent Loop turn, and optional invoke.
 func runSessionAgent(opts sessionAgentOpts) error {
 	plan, _, err := resolveAssembly(*opts.pluginsDir, *opts.assemblyPath, opts.dump != nil && *opts.dump)
 	if err != nil {

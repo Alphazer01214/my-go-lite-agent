@@ -189,7 +189,7 @@ func TestContextUsageCharsAreModelVisibleOnly(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","context-manager","agent"]}`)
 
-	// 5-char user content only 鈫?chars must be 5 (not 5+len(SYS_ONLY_XXXX)).
+	// 5-char user content only → chars must be 5 (not 5+len(SYS_ONLY_XXXX)).
 	payload := `{"sessionId":"","messages":[{"role":"user","content":"hello"}]}`
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
