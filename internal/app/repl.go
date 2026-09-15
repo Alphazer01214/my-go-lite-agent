@@ -7,29 +7,14 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/tomori/my-go-lite-agent/assembly"
-	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
 func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
-	cfg, err := assembly.Load(assemblyPath)
+	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
-	}
-	res := discovery.Scan(pluginsDir)
-	if len(res.Errors) > 0 {
-		printDiscovery(res)
-		return fmt.Errorf("discovery failed before assembly")
-	}
-	plan := assembly.Resolve(cfg, res)
-	printRejected(plan.Rejected)
-	if len(plan.Missing) > 0 {
-		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
-	}
-	if dump != nil && *dump {
-		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

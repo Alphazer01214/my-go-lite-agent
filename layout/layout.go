@@ -189,27 +189,3 @@ func clonePage(p Page) Page {
 	out.Slots = append([]Slot(nil), p.Slots...)
 	return out
 }
-
-// FindPage returns the page with slug, or nil.
-func (m Merged) FindPage(slug string) *Page {
-	for i := range m.Pages {
-		if m.Pages[i].Slug == slug {
-			return &m.Pages[i]
-		}
-	}
-	return nil
-}
-
-// FindSlot returns the slot id on page slug, or nil.
-func (m Merged) FindSlot(pageSlug, slotID string) *Slot {
-	p := m.FindPage(pageSlug)
-	if p == nil {
-		return nil
-	}
-	for i := range p.Slots {
-		if p.Slots[i].ID == slotID {
-			return &p.Slots[i]
-		}
-	}
-	return nil
-}

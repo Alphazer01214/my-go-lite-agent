@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tomori/my-go-lite-agent/assembly"
-	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/protocol"
 	"github.com/tomori/my-go-lite-agent/render/mdansi"
 	"github.com/tomori/my-go-lite-agent/serve"
@@ -167,22 +165,9 @@ func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
 
 // runSessionAgent mounts Plugins then runs session ops, optional default Loop turn, and optional invoke.
 func runSessionAgent(opts sessionAgentOpts) error {
-	cfg, err := assembly.Load(*opts.assemblyPath)
+	plan, _, err := resolveAssembly(*opts.pluginsDir, *opts.assemblyPath, opts.dump != nil && *opts.dump)
 	if err != nil {
 		return err
-	}
-	res := discovery.Scan(*opts.pluginsDir)
-	if len(res.Errors) > 0 {
-		printDiscovery(res)
-		return fmt.Errorf("discovery failed before assembly")
-	}
-	plan := assembly.Resolve(cfg, res)
-	printRejected(plan.Rejected)
-	if len(plan.Missing) > 0 {
-		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
-	}
-	if *opts.dump {
-		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

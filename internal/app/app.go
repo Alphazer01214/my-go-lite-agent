@@ -61,30 +61,40 @@ func plural(n int) string {
 	return "ies"
 }
 
-func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
+// resolveAssembly loads the assembly config, discovers plugins, resolves the
+// mount plan, and reports rejections/missing entries — the shared preamble
+// before callers mount or probe. dump prints the resolved tree.
+func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan, assembly.Config, error) {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
-		return err
+		return assembly.Plan{}, assembly.Config{}, err
 	}
 	res := discovery.Scan(pluginsDir)
 	if len(res.Errors) > 0 {
 		printDiscovery(res)
-		return fmt.Errorf("discovery failed before assembly")
+		return assembly.Plan{}, assembly.Config{}, fmt.Errorf("discovery failed before assembly")
 	}
 	plan := assembly.Resolve(cfg, res)
 	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
-		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+		return assembly.Plan{}, assembly.Config{}, fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+	}
+	if dump {
+		dumpAssembly(plan)
+	}
+	return plan, cfg, nil
+}
+
+func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
+	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump)
+	if err != nil {
+		return err
 	}
 
 	for _, p := range plan.Mounted {
 		if err := probePlugin(p); err != nil {
 			return fmt.Errorf("mount %s: %w", p.Manifest.Name, err)
 		}
-	}
-
-	if dump {
-		dumpAssembly(plan)
 	}
 	return nil
 }
@@ -162,22 +172,9 @@ func roundtrip(pluginPath, id string) error {
 }
 
 func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
-	cfg, err := assembly.Load(assemblyPath)
+	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump)
 	if err != nil {
 		return err
-	}
-	res := discovery.Scan(pluginsDir)
-	if len(res.Errors) > 0 {
-		printDiscovery(res)
-		return fmt.Errorf("discovery failed before assembly")
-	}
-	plan := assembly.Resolve(cfg, res)
-	printRejected(plan.Rejected)
-	if len(plan.Missing) > 0 {
-		return fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
-	}
-	if dump {
-		dumpAssembly(plan)
 	}
 	srv, err := serve.Start(plan.Mounted)
 	if err != nil {

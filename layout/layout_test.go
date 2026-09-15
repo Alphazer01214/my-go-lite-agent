@@ -65,11 +65,22 @@ func TestMergeAdditive(t *testing.T) {
 	if len(m.Pages) != 2 {
 		t.Fatalf("pages=%d", len(m.Pages))
 	}
-	main := m.FindPage("main")
-	if len(main.Slots) != 2 || main.Slots[1].ID != "addon" {
-		t.Fatalf("main slots=%v", main.Slots)
+	var main *Page
+	for i := range m.Pages {
+		if m.Pages[i].Slug == "main" {
+			main = &m.Pages[i]
+		}
 	}
-	if m.FindPage("tools") == nil {
+	if main == nil || len(main.Slots) != 2 || main.Slots[1].ID != "addon" {
+		t.Fatalf("main slots=%v", m.Pages)
+	}
+	hasTools := false
+	for _, p := range m.Pages {
+		if p.Slug == "tools" {
+			hasTools = true
+		}
+	}
+	if !hasTools {
 		t.Fatal("contributed page missing")
 	}
 }
