@@ -6,12 +6,22 @@ $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root "dist"
 $go = "go"
 
-# Preserve the user's llm-openai config (API key) across the dist wipe below.
+# Preserve user data across the dist wipe: llm-openai config (API key) and
+# session logs (dist/plugins/session/sessions).
 $llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
+$sessDistDir = Join-Path $dist "plugins\session\sessions"
+$stash = Join-Path ([IO.Path]::GetTempPath()) ("liteagent-stash-" + [guid]::NewGuid().ToString("N"))
 $llmStash = $null
+$sessStash = $null
 if (Test-Path $llmDistCfg) {
-    $llmStash = Join-Path ([IO.Path]::GetTempPath()) ("llm-openai-config-" + [guid]::NewGuid().ToString("N") + ".json")
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $llmStash = Join-Path $stash "llm-config.json"
     Copy-Item $llmDistCfg $llmStash -Force
+}
+if (Test-Path $sessDistDir) {
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $sessStash = Join-Path $stash "sessions"
+    Copy-Item $sessDistDir $sessStash -Recurse -Force
 }
 
 if (Test-Path $dist) {
@@ -83,14 +93,26 @@ try {
 
     Copy-Item (Join-Path $root "plugins\context-manager\segments.json") (Join-Path $dist "plugins\context-manager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
-    # llm-openai config priority: keep what the user already runs (dist), then a
-    # repo-local config.json (gitignored), else seed the empty example template.
+    # Restore user data first (llm config + sessions), then seed llm if still missing.
+    if ($null -ne $llmStash) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
+        Copy-Item $llmStash $llmDistCfg -Force
+        Write-Host "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+    }
+    if ($null -ne $sessStash) {
+        New-Item -ItemType Directory -Path (Join-Path $dist "plugins\session") -Force | Out-Null
+        Copy-Item $sessStash (Join-Path $dist "plugins\session\sessions") -Recurse -Force
+        Write-Host "sessions: preserved $( (Get-ChildItem -Path (Join-Path $dist 'plugins\session\sessions') -Filter *.jsonl -ErrorAction SilentlyContinue).Count ) file(s)"
+    }
+    if ($null -ne $stash -and (Test-Path $stash)) {
+        Remove-Item $stash -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # llm-openai config priority: stashed dist config (above), then a repo-local
+    # config.json (gitignored), else seed the empty example template.
     # The build never injects or rewrites an API key.
     $repoCfg = Join-Path $root "plugins\llm-openai\config.json"
-    if ($null -ne $llmStash) {
-        Copy-Item $llmStash $llmDistCfg -Force
-        Remove-Item $llmStash -Force
-        Write-Host "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+    if (Test-Path $llmDistCfg) {
+        # already restored
     } elseif (Test-Path $repoCfg) {
         Copy-Item $repoCfg $llmDistCfg -Force
         Write-Host "llm-openai config: seeded from repo plugins\llm-openai\config.json (kept as-is)"

@@ -4,7 +4,7 @@
 //   - create / append / query / list / derive / current / select
 //
 // Persistence: each Session is one JSONL file under the data directory
-// (env SESSION_DATA_DIR, or ./sessions). Restart reloads facts.
+// (env SESSION_DATA_DIR, or <plugin-exe-dir>/sessions). Restart reloads facts.
 package main
 
 import (
@@ -144,6 +144,10 @@ type registry struct {
 func dataDir() string {
 	if v := os.Getenv("SESSION_DATA_DIR"); v != "" {
 		return v
+	}
+	// Same policy as configPath(): pin to the plugin executable, not process cwd.
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "sessions")
 	}
 	return "sessions"
 }

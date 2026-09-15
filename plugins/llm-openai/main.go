@@ -245,6 +245,40 @@ func toWireTools(in []struct {
 	return out
 }
 
+// streamPayload builds a presentation.stream body. sessionId is required so
+// Web session-view can attribute live chunks (Host forwards it on the SSE event).
+func streamPayload(sessionID, op, channel, delta string) json.RawMessage {
+	m := map[string]string{"op": op}
+	if channel != "" {
+		m["channel"] = channel
+	}
+	if delta != "" {
+		m["delta"] = delta
+	}
+	if sessionID != "" {
+		m["sessionId"] = sessionID
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+// noteUsage pushes provider token usage into Context Manager (star call).
+// Best-effort: missing context-manager must not fail the model hop.
+func noteUsage(s *pluginsdk.Server, sessionID string, usage *Usage) {
+	if s == nil || usage == nil || sessionID == "" {
+		return
+	}
+	u := usageOrNil(*usage)
+	if u == nil {
+		return
+	}
+	body, err := json.Marshal(map[string]any{"sessionId": sessionID, "usage": u})
+	if err != nil {
+		return
+	}
+	_, _ = s.Call("context", "noteUsage", body)
+}
+
 func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, messages []chatMessage, tools []chatTool) (json.RawMessage, error) {
 	if cfg.APIKey == "" {
 		return nil, &protocol.FrameError{
@@ -304,10 +338,10 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		}
 		msg := cr.Choices[0].Message
 		if msg.Content != "" {
-			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": msg.Content, "channel": "content"})
-			_ = s.EmitTo(reqID, "presentation", "stream", payload)
+			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "content", msg.Content))
 		}
 		usage := cr.Usage
+		noteUsage(s, sessionID, usageOrNil(usage))
 		return marshalOut(msg, usageOrNil(usage))
 	}
 
@@ -324,7 +358,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 	// after the hop (Host does not interpret channel).
 	var reasonAcc strings.Builder
 
-	_ = s.EmitTo(reqID, "presentation", "stream", json.RawMessage(`{"op":"start"}`))
+	_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "start", "", ""))
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -350,18 +384,12 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		delta := d.Choices[0].Delta
 		// DeepSeek (and OpenAI-compatible reasoning models) stream thinking in reasoning_content.
 		if delta.ReasoningContent != "" {
-			payload, _ := json.Marshal(map[string]string{
-				"op":      "chunk",
-				"delta":   delta.ReasoningContent,
-				"channel": "reasoning",
-			})
-			_ = s.EmitTo(reqID, "presentation", "stream", payload)
+			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "reasoning", delta.ReasoningContent))
 			reasonAcc.WriteString(delta.ReasoningContent)
 		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
-			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": delta.Content, "channel": "content"})
-			_ = s.EmitTo(reqID, "presentation", "stream", payload)
+			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "content", delta.Content))
 		}
 		for _, tc := range delta.ToolCalls {
 			i, ok := callIdx[tc.Index]
@@ -387,7 +415,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 	if err := sc.Err(); err != nil {
 		return nil, &protocol.FrameError{Code: "llm_stream_error", Message: err.Error()}
 	}
-	_ = s.EmitTo(reqID, "presentation", "stream", json.RawMessage(`{"op":"end"}`))
+	_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "end", "", ""))
 
 	msg := chatMessage{Role: "assistant", Content: content.String()}
 	for _, c := range calls {
@@ -404,6 +432,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		}
 		msg.ToolCalls = append(msg.ToolCalls, w)
 	}
+	noteUsage(s, sessionID, usage)
 	return marshalOut(msg, usage)
 }
 

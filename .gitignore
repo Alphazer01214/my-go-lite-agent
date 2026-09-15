@@ -2,6 +2,8 @@ dist/
 *.exe
 .idea/
 sessions/
+.DS_Store
+/agent
 
 # Local secrets — never commit real keys (keep *.example.json)
 plugins/**/config.json

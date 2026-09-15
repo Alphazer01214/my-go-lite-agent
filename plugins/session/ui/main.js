@@ -806,8 +806,10 @@ class SessionView extends HTMLElement {
   // Mid-run refresh: resume live Thinking from rebuilt facts.
   maybeResumeLiveThinking() {
     // Host turn status is still medium-level (running/idle); facts rebuild from Log.
+    // Ignore status from a different session (parallel turns are allowed).
     fetch('/api/session').then(r => r.json()).then(b => {
       if (b.status !== 'running' || this._thinkingEl || this._liveEl) return;
+      if (b.sessionId !== undefined && b.sessionId !== null && !this.isCurrent(b.sessionId)) return;
       const thinks = this._root.querySelectorAll('details.think:not(.live) .disc-body');
       if (thinks.length) this._reasoningBuf = thinks[thinks.length - 1].textContent || '';
     }).catch(() => { });

@@ -7,15 +7,32 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 
 # ── clean ────────────────────────────────────────────────────────────────────
-# Preserve the user's llm-openai config (API key) across the dist wipe below.
+# Preserve user data across the dist wipe: llm-openai config (API key) and
+# session logs (dist/plugins/session/sessions). Build never injects or rewrites
+# either — only re-seeds missing llm config from example.
+STASH="$(mktemp -d)"
+restore_stash() {
+    # llm-openai config.json
+    if [[ -f "$STASH/llm-config.json" ]]; then
+        mkdir -p "$DIST/plugins/llm-openai"
+        cp "$STASH/llm-config.json" "$LLM_DIST_CFG"
+        rm -f "$STASH/llm-config.json"
+        echo "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+    fi
+    # session JSONL logs
+    if [[ -d "$STASH/sessions" ]]; then
+        mkdir -p "$DIST/plugins/session"
+        cp -R "$STASH/sessions" "$DIST/plugins/session/"
+        echo "sessions: preserved $(find "$DIST/plugins/session/sessions" -name '*.jsonl' | wc -l | tr -d ' ') file(s)"
+    fi
+    rmdir "$STASH" 2>/dev/null || true
+}
 LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
-LLM_STASH=""
-if [[ -f "$LLM_DIST_CFG" ]]; then
-    LLM_STASH="$(mktemp)"
-    cp "$LLM_DIST_CFG" "$LLM_STASH"
-fi
+SESS_DIST_DIR="$DIST/plugins/session/sessions"
+[[ -f "$LLM_DIST_CFG" ]] && cp "$LLM_DIST_CFG" "$STASH/llm-config.json"
+[[ -d "$SESS_DIST_DIR" ]] && cp -R "$SESS_DIST_DIR" "$STASH/sessions"
 if [[ -d "$DIST" ]]; then
-    echo "removing previous dist/"
+    echo "removing previous dist/ (llm config + sessions stashed)"
     rm -rf "$DIST"
 fi
 mkdir -p "$DIST/plugins" "$DIST/examples"
@@ -120,13 +137,14 @@ rm -f "$DIST/plugins/uidemo/plugin.json.bak"
 cp "$ROOT/plugins/context-manager/segments.json" "$DIST/plugins/context-manager/"
 cp "$ROOT/plugins/llm-openai/config.example.json" "$DIST/plugins/llm-openai/"
 
-# llm-openai config priority: keep what the user already runs (dist), then a
-# repo-local config.json (gitignored), else seed the empty example template.
+# Restore user data first (llm config + sessions), then seed llm if still missing.
+restore_stash
+# llm-openai config priority: stashed dist config (above), then a repo-local
+# config.json (gitignored), else seed the empty example template.
 # The build never injects or rewrites an API key.
 REPO_CFG="$ROOT/plugins/llm-openai/config.json"
-if [[ -n "$LLM_STASH" ]]; then
-    cp "$LLM_STASH" "$LLM_DIST_CFG" && rm -f "$LLM_STASH"
-    echo "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+if [[ -f "$LLM_DIST_CFG" ]]; then
+    : # already restored by restore_stash
 elif [[ -f "$REPO_CFG" ]]; then
     cp "$REPO_CFG" "$LLM_DIST_CFG"
     echo "llm-openai config: seeded from repo plugins/llm-openai/config.json (kept as-is)"

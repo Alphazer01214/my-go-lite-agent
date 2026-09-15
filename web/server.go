@@ -71,18 +71,17 @@ type Server struct {
 
 // currentSession resolves the Current Session from the session Capability
 // (ADR-0012), falling back to the medium cache when the Capability is absent.
+// CallByCap returns the plugin's raw payload ({sessionId}), not the /api/call
+// {ok,result} envelope.
 func (s *Server) currentSession() string {
 	if s.opts.Srv != nil {
 		out, err := s.opts.Srv.CallByCap("session", "current", json.RawMessage(`{}`))
 		if err == nil && out != nil {
 			var res struct {
-				OK     bool `json:"ok"`
-				Result struct {
-					SessionID string `json:"sessionId"`
-				} `json:"result"`
+				SessionID string `json:"sessionId"`
 			}
-			if json.Unmarshal(out, &res) == nil && res.OK {
-				return res.Result.SessionID
+			if json.Unmarshal(out, &res) == nil && res.SessionID != "" {
+				return res.SessionID
 			}
 		}
 	}

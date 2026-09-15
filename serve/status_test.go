@@ -89,22 +89,22 @@ func TestCancelTurnOnOnlyTargetSession(t *testing.T) {
 }
 
 func TestExtractStreamDeltaReasoningChannel(t *testing.T) {
-	payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": "hi", "channel": "reasoning"})
+	payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": "hi", "channel": "reasoning", "sessionId": "s1"})
 	f := &protocol.Frame{
 		Cap:     PresentationCap,
 		Method:  PresentationStreamMethod,
 		Payload: payload,
 	}
-	delta, ch, ok := extractStreamDelta(f)
-	if !ok || delta != "hi" || ch != "reasoning" {
-		t.Fatalf("got ok=%v delta=%q channel=%q", ok, delta, ch)
+	delta, ch, sid, ok := extractStreamDelta(f)
+	if !ok || delta != "hi" || ch != "reasoning" || sid != "s1" {
+		t.Fatalf("got ok=%v delta=%q channel=%q session=%q", ok, delta, ch, sid)
 	}
 	// llm.chunk without channel defaults to content.
 	payload2, _ := json.Marshal(map[string]string{"delta": "yo"})
 	f2 := &protocol.Frame{Method: LLMChunkMethod, Payload: payload2}
-	delta2, ch2, ok2 := extractStreamDelta(f2)
-	if !ok2 || delta2 != "yo" || ch2 != "content" {
-		t.Fatalf("got ok=%v delta=%q channel=%q", ok2, delta2, ch2)
+	delta2, ch2, sid2, ok2 := extractStreamDelta(f2)
+	if !ok2 || delta2 != "yo" || ch2 != "content" || sid2 != "" {
+		t.Fatalf("got ok=%v delta=%q channel=%q session=%q", ok2, delta2, ch2, sid2)
 	}
 }
 
