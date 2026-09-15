@@ -95,7 +95,7 @@ install_plugin "permission"     "./plugins/permission"     '["policy"]' "[]" 0 \
     "Permission rules: policy.decide allow/ask/deny"
 
 install_plugin "skill-manager"  "./plugins/skill-manager"  '["tools","skills"]' "[]" 0 \
-    "Workspace skills: discovery, $skill expand, load_skill"
+    'Workspace skills: discovery, $skill expand, load_skill'
 
 install_plugin "project-context" "./plugins/project-context" '["project-context"]' "[]" 0 \
     "Load AGENTS.md / CLAUDE.md from Workspace"
