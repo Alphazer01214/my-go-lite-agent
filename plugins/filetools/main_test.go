@@ -17,7 +17,7 @@ func callTool(t *testing.T, name string, args any) (string, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dispatchTool(name, raw)
+	return dispatchTool(name, raw, "")
 }
 
 // assertFrameError checks that err is a FrameError with the given code.
@@ -461,5 +461,25 @@ func TestToolListCount(t *testing.T) {
 		if !names[want] {
 			t.Fatalf("missing tool schema: %s", want)
 		}
+	}
+}
+
+func TestResolvePathWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	p, err := resolvePath(ws, "a/b.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(ws, "a", "b.txt")
+	if p != want {
+		t.Fatalf("got %s want %s", p, want)
+	}
+	_, err = resolvePath(ws, "../escape.txt")
+	if err == nil {
+		t.Fatal("want path_escape")
+	}
+	fe, ok := err.(*protocol.FrameError)
+	if !ok || fe.Code != "path_escape" {
+		t.Fatalf("want path_escape, got %v", err)
 	}
 }

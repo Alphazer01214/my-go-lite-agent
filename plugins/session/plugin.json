@@ -1,6 +1,6 @@
 {
   "name": "session",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocol": 3,
   "provides": ["session"],
   "consumes": [],
@@ -14,7 +14,7 @@
     },
     {
       "name": "list",
-      "description": "List sessions (id, title, last seq)",
+      "description": "List sessions (id, title, last seq, workspace)",
       "usage": "/session list"
     },
     {
@@ -26,6 +26,11 @@
       "name": "current",
       "description": "Show Current Session id",
       "usage": "/session current"
+    },
+    {
+      "name": "info",
+      "description": "Show Session metadata including Workspace",
+      "usage": "/session info [sessionId]"
     }
   ],
   "ui": {

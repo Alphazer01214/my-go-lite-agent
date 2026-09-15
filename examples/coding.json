@@ -1,0 +1,3 @@
+{
+  "plugins": ["agent", "session", "llm-openai", "context-manager", "filetools", "shelltools", "permission", "skill-manager", "project-context"]
+}

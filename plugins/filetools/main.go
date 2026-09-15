@@ -2,10 +2,11 @@
 //
 // Capability: tools
 //   - list: → {"tools":[...]}  (read_file, write_file, edit_file, grep, glob)
-//   - call: {"name","arguments"} → {"content", "additionalContexts"}
+//   - call: {"name","arguments","workspace"} → {"content", "additionalContexts"}
 //
-// This plugin is stateless and performs no safety gating.
-// Path sandboxing and other constraints are future work (sandbox model TBD).
+// Paths resolve against the Session Workspace (ADR-0020). Hard path-escape
+// rejection is defense-in-depth; product policy lives in the policy plugin
+// (ADR-0019).
 package main
 
 import (
@@ -33,14 +34,12 @@ const maxGrepResults = 200
 // maxLineSize is the maximum byte size for a single scanner line.
 const maxLineSize = 1024 * 1024 // 1MB
 
-// newScanner returns a bufio.Scanner configured for large lines.
 func newScanner(f *os.File) *bufio.Scanner {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	return scanner
 }
 
-// requireField returns a FrameError if val is empty.
 func requireField(name, val string) error {
 	if val == "" {
 		return &protocol.FrameError{Code: "bad_arguments", Message: name + " is required"}
@@ -48,11 +47,42 @@ func requireField(name, val string) error {
 	return nil
 }
 
+// resolvePath joins a relative path onto Workspace and rejects escapes (ADR-0020).
+func resolvePath(workspace, p string) (string, error) {
+	if err := requireField("path", p); err != nil {
+		return "", err
+	}
+	if workspace == "" {
+		// No Session Workspace: only absolute paths are safe (do not guess cwd).
+		if !filepath.IsAbs(p) {
+			return "", &protocol.FrameError{Code: "no_workspace", Message: "relative path requires workspace"}
+		}
+		return filepath.Clean(p), nil
+	}
+	base, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", &protocol.FrameError{Code: "bad_arguments", Message: err.Error()}
+	}
+	var abs string
+	if filepath.IsAbs(p) {
+		abs = filepath.Clean(p)
+	} else {
+		abs = filepath.Clean(filepath.Join(base, filepath.FromSlash(p)))
+	}
+	rel, err := filepath.Rel(base, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", &protocol.FrameError{Code: "path_escape", Message: "path escapes workspace: " + p}
+	}
+	return abs, nil
+}
+
 // toolSchemas is the static tool list returned by tools.list.
+// Read-only tools carry readOnly:true for parallel scheduling (ADR/spec).
 var toolSchemas = []map[string]any{
 	{
 		"name":        "read_file",
 		"description": "Read a file and return its contents with line numbers (cat -n style). Supports offset and limit for pagination.",
+		"readOnly":    true,
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -91,6 +121,7 @@ var toolSchemas = []map[string]any{
 	{
 		"name":        "grep",
 		"description": "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
+		"readOnly":    true,
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -104,6 +135,7 @@ var toolSchemas = []map[string]any{
 	{
 		"name":        "glob",
 		"description": "Find files matching a glob pattern. Returns matching file paths.",
+		"readOnly":    true,
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -115,19 +147,18 @@ var toolSchemas = []map[string]any{
 	},
 }
 
-// dispatchTool routes a tool call to the matching handler. Exported for test use.
-func dispatchTool(name string, args json.RawMessage) (string, error) {
+func dispatchTool(name string, args json.RawMessage, workspace string) (string, error) {
 	switch name {
 	case "read_file":
-		return handleReadFile(args)
+		return handleReadFile(args, workspace)
 	case "write_file":
-		return handleWriteFile(args)
+		return handleWriteFile(args, workspace)
 	case "edit_file":
-		return handleEditFile(args)
+		return handleEditFile(args, workspace)
 	case "grep":
-		return handleGrep(args)
+		return handleGrep(args, workspace)
 	case "glob":
-		return handleGlob(args)
+		return handleGlob(args, workspace)
 	default:
 		return "", &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + name}
 	}
@@ -144,11 +175,12 @@ func main() {
 		var in struct {
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
+			Workspace string          `json:"workspace"`
 		}
 		if err := json.Unmarshal(req.Payload, &in); err != nil {
 			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 		}
-		content, err := dispatchTool(in.Name, in.Arguments)
+		content, err := dispatchTool(in.Name, in.Arguments, in.Workspace)
 		if err != nil {
 			return nil, err
 		}
@@ -158,11 +190,7 @@ func main() {
 	_ = s.Serve()
 }
 
-// ---------------------------------------------------------------------------
-// read_file
-// ---------------------------------------------------------------------------
-
-func handleReadFile(args json.RawMessage) (string, error) {
+func handleReadFile(args json.RawMessage, workspace string) (string, error) {
 	var in struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -171,7 +199,8 @@ func handleReadFile(args json.RawMessage) (string, error) {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", &protocol.FrameError{Code: "bad_arguments", Message: err.Error()}
 	}
-	if err := requireField("path", in.Path); err != nil {
+	path, err := resolvePath(workspace, in.Path)
+	if err != nil {
 		return "", err
 	}
 	if in.Limit <= 0 {
@@ -184,7 +213,7 @@ func handleReadFile(args json.RawMessage) (string, error) {
 		in.Offset = 0
 	}
 
-	f, err := os.Open(in.Path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 	}
@@ -212,9 +241,7 @@ func handleReadFile(args json.RawMessage) (string, error) {
 		b.WriteByte('\n')
 	}
 
-	// If we stopped early, tell the caller.
 	if lineNo >= in.Offset+in.Limit {
-		// Count remaining lines.
 		for scanner.Scan() {
 			lineNo++
 		}
@@ -227,11 +254,7 @@ func handleReadFile(args json.RawMessage) (string, error) {
 	return b.String(), nil
 }
 
-// ---------------------------------------------------------------------------
-// write_file
-// ---------------------------------------------------------------------------
-
-func handleWriteFile(args json.RawMessage) (string, error) {
+func handleWriteFile(args json.RawMessage, workspace string) (string, error) {
 	var in struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -239,25 +262,22 @@ func handleWriteFile(args json.RawMessage) (string, error) {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", &protocol.FrameError{Code: "bad_arguments", Message: err.Error()}
 	}
-	if err := requireField("path", in.Path); err != nil {
+	path, err := resolvePath(workspace, in.Path)
+	if err != nil {
 		return "", err
 	}
 
-	dir := filepath.Dir(in.Path)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 	}
-	if err := os.WriteFile(in.Path, []byte(in.Content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(in.Content), 0o644); err != nil {
 		return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), in.Path), nil
+	return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), path), nil
 }
 
-// ---------------------------------------------------------------------------
-// edit_file
-// ---------------------------------------------------------------------------
-
-func handleEditFile(args json.RawMessage) (string, error) {
+func handleEditFile(args json.RawMessage, workspace string) (string, error) {
 	var in struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
@@ -266,14 +286,15 @@ func handleEditFile(args json.RawMessage) (string, error) {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", &protocol.FrameError{Code: "bad_arguments", Message: err.Error()}
 	}
-	if err := requireField("path", in.Path); err != nil {
+	path, err := resolvePath(workspace, in.Path)
+	if err != nil {
 		return "", err
 	}
 	if err := requireField("old_string", in.OldString); err != nil {
 		return "", err
 	}
 
-	data, err := os.ReadFile(in.Path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 	}
@@ -281,24 +302,20 @@ func handleEditFile(args json.RawMessage) (string, error) {
 	content := string(data)
 	count := strings.Count(content, in.OldString)
 	if count == 0 {
-		return "", &protocol.FrameError{Code: "edit_failed", Message: "old_string not found in " + in.Path}
+		return "", &protocol.FrameError{Code: "edit_failed", Message: "old_string not found in " + path}
 	}
 	if count > 1 {
-		return "", &protocol.FrameError{Code: "edit_failed", Message: fmt.Sprintf("old_string found %d times in %s; must be unique", count, in.Path)}
+		return "", &protocol.FrameError{Code: "edit_failed", Message: fmt.Sprintf("old_string found %d times in %s; must be unique", count, path)}
 	}
 
 	newContent := strings.Replace(content, in.OldString, in.NewString, 1)
-	if err := os.WriteFile(in.Path, []byte(newContent), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(newContent), 0o644); err != nil {
 		return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 	}
-	return fmt.Sprintf("edited %s", in.Path), nil
+	return fmt.Sprintf("edited %s", path), nil
 }
 
-// ---------------------------------------------------------------------------
-// grep
-// ---------------------------------------------------------------------------
-
-func handleGrep(args json.RawMessage) (string, error) {
+func handleGrep(args json.RawMessage, workspace string) (string, error) {
 	var in struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -310,8 +327,13 @@ func handleGrep(args json.RawMessage) (string, error) {
 	if err := requireField("pattern", in.Pattern); err != nil {
 		return "", err
 	}
-	if in.Path == "" {
-		in.Path = "."
+	root := in.Path
+	if root == "" {
+		root = "."
+	}
+	rootPath, err := resolvePath(workspace, root)
+	if err != nil {
+		return "", err
 	}
 
 	re, err := regexp.Compile(in.Pattern)
@@ -322,12 +344,11 @@ func handleGrep(args json.RawMessage) (string, error) {
 	var results []string
 	truncated := false
 
-	err = filepath.WalkDir(in.Path, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip inaccessible entries
+			return nil
 		}
 		name := d.Name()
-		// Skip hidden files and directories.
 		if strings.HasPrefix(name, ".") {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -337,14 +358,12 @@ func handleGrep(args json.RawMessage) (string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		// Apply glob filter.
 		if in.Glob != "" {
 			matched, err := filepath.Match(in.Glob, name)
 			if err != nil || !matched {
 				return nil
 			}
 		}
-		// Search file contents.
 		f, err := os.Open(p)
 		if err != nil {
 			return nil
@@ -383,11 +402,7 @@ func handleGrep(args json.RawMessage) (string, error) {
 	return b.String(), nil
 }
 
-// ---------------------------------------------------------------------------
-// glob
-// ---------------------------------------------------------------------------
-
-func handleGlob(args json.RawMessage) (string, error) {
+func handleGlob(args json.RawMessage, workspace string) (string, error) {
 	var in struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -398,21 +413,24 @@ func handleGlob(args json.RawMessage) (string, error) {
 	if err := requireField("pattern", in.Pattern); err != nil {
 		return "", err
 	}
-	if in.Path == "" {
-		in.Path = "."
+	root := in.Path
+	if root == "" {
+		root = "."
+	}
+	rootPath, err := resolvePath(workspace, root)
+	if err != nil {
+		return "", err
 	}
 
-	// Support ** by walking the tree ourselves when pattern contains **.
 	var matches []string
 	if strings.Contains(in.Pattern, "**") {
-		// Split pattern into prefix before ** and suffix after **.
 		parts := strings.SplitN(in.Pattern, "**", 2)
 		suffix := strings.TrimPrefix(parts[1], "/")
 		if suffix == "" {
 			suffix = "*"
 		}
 
-		err := filepath.WalkDir(in.Path, func(p string, d os.DirEntry, err error) error {
+		err := filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -436,8 +454,7 @@ func handleGlob(args json.RawMessage) (string, error) {
 			return "", &protocol.FrameError{Code: "file_error", Message: err.Error()}
 		}
 	} else {
-		pattern := filepath.Join(in.Path, in.Pattern)
-		var err error
+		pattern := filepath.Join(rootPath, in.Pattern)
 		matches, err = filepath.Glob(pattern)
 		if err != nil {
 			return "", &protocol.FrameError{Code: "bad_arguments", Message: "invalid glob: " + err.Error()}

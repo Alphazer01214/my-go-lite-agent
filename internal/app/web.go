@@ -64,6 +64,12 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 	}
 	defer func() { _ = srv.Close() }()
 
+	defaultWS := ""
+	if cwd, err := os.Getwd(); err == nil {
+		defaultWS = cwd
+	}
+	_ = srv.SetSessionWorkspace("default", defaultWS)
+
 	probeCommandFaces(srv, plan.Mounted)
 	cp := newCommandPlane(srv, pluginsDir, plan)
 
@@ -76,13 +82,14 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 		return fmt.Errorf("listen %s: %w", bind, err)
 	}
 	hs := web.New(web.Options{
-		Addr:         bind,
-		PluginsDir:   pluginsDir,
-		Plan:         plan,
-		Srv:          srv,
-		CommandPlane: webCommandPlane{cp: cp},
-		Layout:       merged,
-		UIMounts:     uiMounts,
+		Addr:             bind,
+		PluginsDir:       pluginsDir,
+		Plan:             plan,
+		Srv:              srv,
+		CommandPlane:     webCommandPlane{cp: cp},
+		Layout:           merged,
+		UIMounts:         uiMounts,
+		DefaultWorkspace: defaultWS,
 	})
 	go func() {
 		if err := hs.Serve(ln); err != nil {

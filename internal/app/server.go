@@ -3,6 +3,8 @@ package app
 import (
 	"flag"
 	"fmt"
+
+	"github.com/tomori/my-go-lite-agent/serve"
 )
 
 // Server runs the liteagent-server entry: the Web Render Medium over the
@@ -16,7 +18,11 @@ func Server() {
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL alongside the Web Medium")
 	serveAddr := flag.String("serve", "", "start Web Medium on this address (e.g. 127.0.0.1:7788); combine with -repl")
 	layoutPath := flag.String("layout", "", "layout.json path (default: layout.json beside cwd); required (ADR-0012)")
+	debug := flag.Bool("debug", false, "print host Frame debug log to stderr")
 	flag.Parse()
+	if *debug {
+		serve.SetDebug(true)
+	}
 
 	if *assemblyPath == "" {
 		fatal(fmt.Errorf("-assembly is required"))

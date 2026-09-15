@@ -64,13 +64,17 @@ type Server struct {
 	mu       sync.Mutex
 	plugins  map[string]*proc
 	provides map[string]string
-	pending  map[string]*wait
-	closed   bool
-	seq      int
-	gen      map[string]int
-	cards    []PresentationCard
-	panels   []PanelOp
-	subs     []*Subscriber
+	// toolsProviders lists Plugins that provide the multi-owner tools Capability (ADR-0018).
+	toolsProviders []string
+	// toolOwners maps a tool name to the Plugin that registered it via tools.list.
+	toolOwners map[string]string
+	pending    map[string]*wait
+	closed     bool
+	seq        int
+	gen        map[string]int
+	cards      []PresentationCard
+	panels     []PanelOp
+	subs       []*Subscriber
 	// turnStates serializes turns per Session id (parallel across sessions).
 	turnStatesMu sync.Mutex
 	turnStates   map[string]*sessionTurn
@@ -83,6 +87,9 @@ type Server struct {
 	OnToolCall func(name string, arguments json.RawMessage)
 	// OnRender is the live Render Medium hook for presentation.render intents.
 	OnRender func(ri RenderIntent)
+	// OnToolApproval is the live Render Medium hook for policy.ask (agent.confirm).
+	// Return true to allow the tool call. Nil means deny (safe default).
+	OnToolApproval func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
 }
 
 // PanelOp is one Web Medium panel mutation (ADR-0010): mount (set) or remove
@@ -159,10 +166,11 @@ func (s *Server) recordCard(f *protocol.Frame) {
 // Start launches every mounted Plugin, checks consumes, and builds the Capability registry.
 func Start(mounted []discovery.Found) (*Server, error) {
 	s := &Server{
-		plugins:  make(map[string]*proc, len(mounted)),
-		provides: make(map[string]string),
-		pending:  make(map[string]*wait),
-		gen:      make(map[string]int),
+		plugins:    make(map[string]*proc, len(mounted)),
+		provides:   make(map[string]string),
+		toolOwners: make(map[string]string),
+		pending:    make(map[string]*wait),
+		gen:        make(map[string]int),
 	}
 	job, err := newJob()
 	if err != nil {
@@ -177,6 +185,14 @@ func Start(mounted []discovery.Found) (*Server, error) {
 			continue
 		}
 		for _, capName := range p.Manifest.Provides {
+			if capName == ToolsCap {
+				// Multi-provider Capability (ADR-0018): collect owners; name conflicts fail later.
+				s.toolsProviders = append(s.toolsProviders, p.Manifest.Name)
+				if _, ok := s.provides[ToolsCap]; !ok {
+					s.provides[ToolsCap] = p.Manifest.Name
+				}
+				continue
+			}
 			if owner, ok := s.provides[capName]; ok {
 				_ = s.Close()
 				return nil, fmt.Errorf("capability %q provided by both %s and %s", capName, owner, p.Manifest.Name)
@@ -190,6 +206,7 @@ func Start(mounted []discovery.Found) (*Server, error) {
 			continue
 		}
 		if err := s.launch(p); err != nil {
+			debugf("launch failed plugin=%s err=%v", p.Manifest.Name, err)
 			_ = s.Close()
 			return nil, err
 		}
@@ -198,7 +215,112 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	if err := s.discoverTools(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+// discoverTools asks every tools Provider for its schema list and builds the
+// tool-name → plugin map (ADR-0018). Duplicate tool names fail Assembly.
+func (s *Server) discoverTools() error {
+	s.mu.Lock()
+	providers := append([]string(nil), s.toolsProviders...)
+	s.toolOwners = make(map[string]string)
+	s.mu.Unlock()
+	for _, name := range providers {
+		payload, err := s.CallByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
+		if err != nil {
+			return fmt.Errorf("tools.list from %s: %w", name, err)
+		}
+		var out struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if len(payload) > 0 {
+			_ = json.Unmarshal(payload, &out)
+		}
+		s.mu.Lock()
+		for _, t := range out.Tools {
+			if t.Name == "" {
+				continue
+			}
+			if prev, ok := s.toolOwners[t.Name]; ok && prev != name {
+				s.mu.Unlock()
+				return fmt.Errorf("tool %q provided by both %s and %s", t.Name, prev, name)
+			}
+			s.toolOwners[t.Name] = name
+		}
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// CallByPlugin is Host-initiated cap.method to a named Plugin (bypasses unique-owner lookup).
+func (s *Server) CallByPlugin(pluginName, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	out, err := s.Call(pluginName, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     cap,
+		Method:  method,
+		Payload: payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != nil {
+		return nil, out.Error
+	}
+	return out.Payload, nil
+}
+
+// toolsListMerged fans out tools.list and merges schemas (ADR-0018).
+func (s *Server) toolsListMerged() (json.RawMessage, error) {
+	s.mu.Lock()
+	providers := append([]string(nil), s.toolsProviders...)
+	s.mu.Unlock()
+	if len(providers) == 0 {
+		return nil, &protocol.FrameError{Code: "capability_unavailable", Message: "no plugin provides tools"}
+	}
+	merged := []any{}
+	seen := map[string]bool{}
+	for _, name := range providers {
+		payload, err := s.CallByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		var out struct {
+			Tools []json.RawMessage `json:"tools"`
+		}
+		if len(payload) > 0 {
+			_ = json.Unmarshal(payload, &out)
+		}
+		for _, t := range out.Tools {
+			var meta struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(t, &meta)
+			if meta.Name == "" || seen[meta.Name] {
+				continue
+			}
+			seen[meta.Name] = true
+			merged = append(merged, json.RawMessage(t))
+		}
+	}
+	return MarshalPayload(map[string]any{"tools": merged}), nil
+}
+
+// toolsOwnerFor routes a tools.call by tool name (ADR-0018).
+func (s *Server) toolsOwnerFor(toolName string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner, ok := s.toolOwners[toolName]
+	return owner, ok
 }
 
 func (s *Server) checkConsumes(mounted []discovery.Found) error {
@@ -241,6 +363,7 @@ func (s *Server) launch(found discovery.Found) error {
 	if found.Manifest.TimeoutMs > 0 {
 		to = time.Duration(found.Manifest.TimeoutMs) * time.Millisecond
 	}
+	debugf("launch start plugin=%s", name)
 	s.mu.Lock()
 	s.gen[name]++
 	g := s.gen[name]
@@ -258,6 +381,7 @@ func (s *Server) launch(found discovery.Found) error {
 		gen:     g,
 	}
 	s.mu.Unlock()
+	debugf("launch plugin=%s gen=%d entry=%s", name, g, entry)
 	go s.readLoop(name, g, stdout)
 	return nil
 }
@@ -266,9 +390,11 @@ func (s *Server) readLoop(pluginName string, gen int, stdout io.Reader) {
 	for {
 		f, err := protocol.ReadFrame(stdout)
 		if err != nil {
+			debugf("<- plugin=%s read_loop_exit err=%v", pluginName, err)
 			s.markUnhealthy(pluginName, gen)
 			return
 		}
+		debugFrame("<-", pluginName, f)
 		s.handleFromPlugin(pluginName, f)
 	}
 }
@@ -285,6 +411,7 @@ func (s *Server) markUnhealthy(pluginName string, gen int) {
 		return
 	}
 	p.healthy = false
+	debugf("unhealthy plugin=%s gen=%d", pluginName, gen)
 	var hostFail []*wait
 	var pluginFail []struct{ caller, origID string }
 	for id, w := range s.pending {
@@ -371,13 +498,14 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	}
 	// Live stream chunks are a Presentation signal (ADR-0016): fan out even when
 	// the LLM Plugin was called by an external Agent via the star, not by Host.
-	if delta, channel, ok := extractStreamDelta(f); ok {
+	if delta, channel, sessionID, ok := extractStreamDelta(f); ok {
 		if s.OnStreamDelta != nil {
 			s.OnStreamDelta(delta)
 		}
 		s.publish(Event{Topic: "stream", Data: map[string]string{
-			"delta":   delta,
-			"channel": channel,
+			"delta":     delta,
+			"channel":   channel,
+			"sessionId": sessionID,
 		}})
 	}
 	if f.ID == "" {
@@ -503,8 +631,14 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	}
 
 	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
-	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject") {
+	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
 		s.handleAgentFromPlugin(from, f)
+		return
+	}
+
+	// Multi-provider tools (ADR-0018): merge list / route call by tool name.
+	if f.Cap == ToolsCap {
+		s.routeToolsFromPlugin(from, f)
 		return
 	}
 
@@ -583,7 +717,123 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	_ = timer
 }
 
+// routeToolsFromPlugin handles star-routed tools.list/call with multi-provider merge (ADR-0018).
+func (s *Server) routeToolsFromPlugin(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+	}
+	switch f.Method {
+	case "list":
+		payload, err := s.toolsListMerged()
+		if err != nil {
+			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
+		} else {
+			res.Payload = payload
+		}
+		_ = s.writeTo(from, res)
+	case "call":
+		var in struct {
+			Name string `json:"name"`
+		}
+		if len(f.Payload) > 0 {
+			_ = json.Unmarshal(f.Payload, &in)
+		}
+		owner, ok := s.toolsOwnerFor(in.Name)
+		if !ok {
+			// Fallback: try every provider (tool list may be stale after crash-restart).
+			s.mu.Lock()
+			providers := append([]string(nil), s.toolsProviders...)
+			s.mu.Unlock()
+			for _, name := range providers {
+				if name == from {
+					continue
+				}
+				if payload, err := s.CallByPlugin(name, ToolsCap, "call", f.Payload); err == nil {
+					res.Payload = payload
+					_ = s.writeTo(from, res)
+					return
+				}
+			}
+			res.Error = &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
+			_ = s.writeTo(from, res)
+			return
+		}
+		if owner == from {
+			// Self-call of an owned tool: execute via Call (bypass star self-block).
+			payload, err := s.CallByPlugin(owner, ToolsCap, "call", f.Payload)
+			if err != nil {
+				res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
+			} else {
+				res.Payload = payload
+			}
+			_ = s.writeTo(from, res)
+			return
+		}
+		// Forward like a normal star call to the owning tools Plugin.
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		to := DefaultCallTimeout
+		if p := s.plugins[owner]; p != nil {
+			to = p.timeout
+		}
+		s.seq++
+		fwdID := fmt.Sprintf("fwd-%d", s.seq)
+		s.pending[fwdID] = &wait{
+			kind:       waitPlugin,
+			caller:     from,
+			target:     owner,
+			origID:     f.ID,
+			cap:        f.Cap,
+			method:     f.Method,
+			reqPayload: append(json.RawMessage(nil), f.Payload...),
+		}
+		s.mu.Unlock()
+		if err := s.ensureAlive(owner); err != nil {
+			s.mu.Lock()
+			delete(s.pending, fwdID)
+			s.mu.Unlock()
+			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
+			_ = s.writeTo(from, res)
+			return
+		}
+		fwd := *f
+		fwd.ID = fwdID
+		if err := s.writeTo(owner, &fwd); err != nil {
+			s.mu.Lock()
+			delete(s.pending, fwdID)
+			s.mu.Unlock()
+			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
+			_ = s.writeTo(from, res)
+			return
+		}
+		timer := time.AfterFunc(to, func() {
+			s.mu.Lock()
+			w, ok := s.pending[fwdID]
+			if ok {
+				delete(s.pending, fwdID)
+			}
+			s.mu.Unlock()
+			if !ok {
+				return
+			}
+			_ = s.writeTo(from, &protocol.Frame{
+				Type: protocol.TypeRes, ID: f.ID, Cap: f.Cap,
+				Error: &protocol.FrameError{Code: "timeout", Message: fmt.Sprintf("call to %s timed out after %s", owner, to)},
+			})
+			_ = w
+		})
+		_ = timer
+	default:
+		res.Error = &protocol.FrameError{Code: "method_not_found", Message: "unknown tools." + f.Method}
+		_ = s.writeTo(from, res)
+	}
+}
+
 func (s *Server) complete(f *protocol.Frame) {
+	debugf("complete id=%s type=%s cap=%s method=%s", f.ID, f.Type, f.Cap, f.Method)
 	s.mu.Lock()
 	w, ok := s.pending[f.ID]
 	if ok {
@@ -609,9 +859,37 @@ func (s *Server) complete(f *protocol.Frame) {
 	if f.Error == nil && w.cap == SessionCap && w.method == "append" {
 		s.publishPluginSessionAppend(w.reqPayload, f)
 	}
+	// Host policy: every llm.complete that reports usage is mirrored into
+	// Context Manager so tokens stay accurate even if a custom Loop forgets.
+	// Async: must not block the LLM Plugin's readLoop on another star call.
+	if f.Error == nil && w.cap == LLMCap && w.method == "complete" {
+		reqPayload, resPayload := w.reqPayload, f.Payload
+		go s.noteLLMUsage(reqPayload, resPayload)
+	}
 	out := *f
 	out.ID = w.origID
 	_ = s.writeTo(w.caller, &out)
+}
+
+// noteLLMUsage forwards provider usage from an llm.complete res into Context
+// Manager. sessionId comes from the original request payload.
+func (s *Server) noteLLMUsage(reqPayload, resPayload json.RawMessage) {
+	var req struct {
+		SessionID string `json:"sessionId"`
+	}
+	if len(reqPayload) > 0 {
+		_ = json.Unmarshal(reqPayload, &req)
+	}
+	var out struct {
+		Usage map[string]any `json:"usage"`
+	}
+	if len(resPayload) > 0 {
+		_ = json.Unmarshal(resPayload, &out)
+	}
+	if req.SessionID == "" || len(out.Usage) == 0 {
+		return
+	}
+	_ = s.NoteContextUsage(req.SessionID, out.Usage)
 }
 
 // publishPluginSessionAppend mirrors AppendSessionFacts' live topic=session event
@@ -648,6 +926,7 @@ func (s *Server) writeTo(plugin string, f *protocol.Frame) error {
 	}
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
+	debugFrame("->", plugin, f)
 	return protocol.WriteFrame(p.stdin, f)
 }
 
@@ -705,7 +984,26 @@ func (s *Server) CallUIAction(pluginName string, payload json.RawMessage) (json.
 }
 
 // CallByCap routes cap.method to the Plugin that provides cap.
+// For tools (multi-provider, ADR-0018), list merges and call routes by tool name.
 func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	if cap == ToolsCap {
+		if method == "list" {
+			return s.toolsListMerged()
+		}
+		if method == "call" {
+			var in struct {
+				Name string `json:"name"`
+			}
+			if len(payload) > 0 {
+				_ = json.Unmarshal(payload, &in)
+			}
+			owner, ok := s.toolsOwnerFor(in.Name)
+			if !ok {
+				return nil, &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
+			}
+			return s.CallByPlugin(owner, ToolsCap, method, payload)
+		}
+	}
 	s.mu.Lock()
 	owner, ok := s.provides[cap]
 	s.mu.Unlock()
@@ -807,6 +1105,7 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closed = true
+	debugf("close host plugins=%d", len(s.plugins))
 	plugins := make([]*proc, 0, len(s.plugins))
 	for _, p := range s.plugins {
 		plugins = append(plugins, p)
@@ -1267,13 +1566,14 @@ func (s *Server) emitRenderIntent(ri RenderIntent) {
 	s.publish(Event{Topic: "presentation", Data: ri})
 }
 
-// extractStreamDelta returns text delta and channel (content|reasoning) from
-// llm.chunk or presentation.stream chunk frames.
-func extractStreamDelta(f *protocol.Frame) (delta, channel string, ok bool) {
+// extractStreamDelta returns text delta, channel (content|reasoning), and
+// sessionId from llm.chunk or presentation.stream chunk frames.
+func extractStreamDelta(f *protocol.Frame) (delta, channel, sessionID string, ok bool) {
 	var c struct {
-		Op      string `json:"op"`
-		Delta   string `json:"delta"`
-		Channel string `json:"channel"`
+		Op        string `json:"op"`
+		Delta     string `json:"delta"`
+		Channel   string `json:"channel"`
+		SessionID string `json:"sessionId"`
 	}
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &c)
@@ -1282,12 +1582,12 @@ func extractStreamDelta(f *protocol.Frame) (delta, channel string, ok bool) {
 		c.Channel = "content"
 	}
 	if f.Method == LLMChunkMethod {
-		return c.Delta, c.Channel, c.Delta != ""
+		return c.Delta, c.Channel, c.SessionID, c.Delta != ""
 	}
 	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod && c.Op == "chunk" {
-		return c.Delta, c.Channel, c.Delta != ""
+		return c.Delta, c.Channel, c.SessionID, c.Delta != ""
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // RunTurn is the Host entry for one chat turn: lock + status + loop.turn (ADR-0016).
@@ -1401,6 +1701,11 @@ func (s *Server) ListSessions() ([]map[string]any, error) {
 
 // CreateSession creates a Session by id via the mounted Session Plugin (idempotent).
 func (s *Server) CreateSession(sessionID, parentSession, origin string, delegationDepth int) error {
+	return s.CreateSessionWithWorkspace(sessionID, parentSession, origin, delegationDepth, "")
+}
+
+// CreateSessionWithWorkspace creates/updates a Session, optionally setting Workspace (ADR-0020).
+func (s *Server) CreateSessionWithWorkspace(sessionID, parentSession, origin string, delegationDepth int, workspace string) error {
 	s.mu.Lock()
 	owner, ok := s.provides[SessionCap]
 	s.mu.Unlock()
@@ -1417,6 +1722,7 @@ func (s *Server) CreateSession(sessionID, parentSession, origin string, delegati
 			"parentSession":   parentSession,
 			"origin":          origin,
 			"delegationDepth": delegationDepth,
+			"workspace":       workspace,
 		}),
 	})
 	if err != nil {
@@ -1428,12 +1734,35 @@ func (s *Server) CreateSession(sessionID, parentSession, origin string, delegati
 	return nil
 }
 
+// SessionWorkspace returns the Workspace bound to a Session (empty when unset).
+func (s *Server) SessionWorkspace(sessionID string) string {
+	payload, err := s.CallByCap(SessionCap, "info", MarshalPayload(map[string]any{"sessionId": sessionID}))
+	if err != nil {
+		return ""
+	}
+	var out struct {
+		Workspace string `json:"workspace"`
+	}
+	_ = json.Unmarshal(payload, &out)
+	return out.Workspace
+}
+
+// SetSessionWorkspace upserts Workspace on an existing Session (ADR-0020).
+func (s *Server) SetSessionWorkspace(sessionID, workspace string) error {
+	return s.CreateSessionWithWorkspace(sessionID, "", "", 0, workspace)
+}
+
 // NewSessionID creates a Session (auto id when empty) and returns the id.
 func (s *Server) NewSessionID(id string) (string, error) {
+	return s.NewSessionIDWithWorkspace(id, "")
+}
+
+// NewSessionIDWithWorkspace creates a Session with an optional Workspace root.
+func (s *Server) NewSessionIDWithWorkspace(id, workspace string) (string, error) {
 	if id == "" {
 		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
 	}
-	if err := s.CreateSession(id, "", "web", 0); err != nil {
+	if err := s.CreateSessionWithWorkspace(id, "", "web", 0, workspace); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -1592,6 +1921,27 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 			return
 		}
 		res.Payload = MarshalPayload(out)
+		_ = s.writeTo(from, res)
+	case "confirm":
+		var in struct {
+			Tool        string          `json:"tool"`
+			Arguments   json.RawMessage `json:"arguments"`
+			Workspace   string          `json:"workspace"`
+			SessionID   string          `json:"sessionId"`
+			Description string          `json:"description"`
+		}
+		if len(f.Payload) > 0 {
+			if err := json.Unmarshal(f.Payload, &in); err != nil {
+				res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+				_ = s.writeTo(from, res)
+				return
+			}
+		}
+		approved := false
+		if s.OnToolApproval != nil {
+			approved = s.OnToolApproval(in.Tool, in.Arguments, in.Workspace, in.SessionID)
+		}
+		res.Payload = MarshalPayload(map[string]any{"approved": approved})
 		_ = s.writeTo(from, res)
 	default:
 		res.Error = &protocol.FrameError{

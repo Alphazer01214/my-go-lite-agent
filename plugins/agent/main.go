@@ -20,15 +20,26 @@ import (
 // MaxSteps bounds model hops (Steps) inside one Turn.
 const MaxSteps = 128
 
+// MaxSubagentsPerTurn caps run_subagent spawns inside one parent Turn.
+// Subagent turns re-run the full Loop (system/tools/prepare/llm) on a child
+// Session — each spawn is roughly another complete conversation, so the
+// default is deliberately tight.
+const MaxSubagentsPerTurn = 1
+
 const subagentToolName = "run_subagent"
+const todoToolName = "todo"
+
+// subagentToolDescription steers the model away from last-resort spawns.
+// Keep this conservative: vague copy is what made the tool look free.
+const subagentToolDescription = "LAST RESORT: spawn one focused subagent on a child session (full isolated Loop) and return its final reply. Prefer answering directly or using existing tools (read/edit/search). Use only for a self-contained subtask that benefits from a clean context — e.g. broad multi-file survey that would pollute the parent chat. Do NOT use for simple questions, single file reads, or tasks you can finish in this turn. Budget: at most once per turn."
 
 var subagentSchema = map[string]any{
 	"name":        subagentToolName,
-	"description": "Run a focused subagent on a child session linked to this session and return its final reply.",
+	"description": subagentToolDescription,
 	"input_schema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"input":        map[string]any{"type": "string"},
+			"input":        map[string]any{"type": "string", "description": "Self-contained subtask prompt for the child agent. Must not require parent chat context."},
 			"text":         map[string]any{"type": "string"},
 			"systemPrompt": map[string]any{"type": "string"},
 			"tools":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -36,6 +47,64 @@ var subagentSchema = map[string]any{
 		},
 		"required": []string{"input"},
 	},
+}
+
+var todoSchema = map[string]any{
+	"name":        todoToolName,
+	"description": "Update the visible work plan. Provide items with status pending|in_progress|done.",
+	"input_schema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"items": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"status":  map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done"}},
+						"content": map[string]any{"type": "string"},
+					},
+					"required": []string{"status", "content"},
+				},
+			},
+		},
+		"required": []string{"items"},
+	},
+}
+
+// subagentSystemNote is appended to the system prompt when the tool is offered.
+const subagentSystemNote = "Subagent policy: run_subagent is a last-resort tool (max once per turn). Prefer direct answers and ordinary tools. Never spawn a subagent for greetings, simple Q&A, or a single tool call. Only spawn when the subtask is independent and would otherwise bloat this conversation. Subagents cannot spawn further subagents."
+
+func subagentToolSchema() toolSchema {
+	return toolSchema{
+		Name:        subagentToolName,
+		Description: subagentToolDescription,
+		InputSchema: marshal(subagentSchema["input_schema"]),
+	}
+}
+
+func todoToolSchema() toolSchema {
+	return toolSchema{
+		Name:        todoToolName,
+		Description: "Update the visible work plan. Provide items with status pending|in_progress|done.",
+		InputSchema: marshal(todoSchema["input_schema"]),
+	}
+}
+
+func hasExternalTools(schemas []toolSchema) bool {
+	for _, s := range schemas {
+		if s.Name != subagentToolName && s.Name != todoToolName && s.Name != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func mapToToolSchema(m map[string]any) toolSchema {
+	return toolSchema{
+		Name:        fmt.Sprint(m["name"]),
+		Description: fmt.Sprint(m["description"]),
+		InputSchema: marshal(m["input_schema"]),
+	}
 }
 
 type message struct {
@@ -55,6 +124,8 @@ type toolSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	// ReadOnly marks non-mutating tools for parallel scheduling (spec).
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 type turnResult struct {
@@ -199,9 +270,10 @@ func (a *agent) collectToolSchemas() ([]toolSchema, bool) {
 	}
 	if len(raw) > 0 && raw[0] == '[' {
 		_ = json.Unmarshal(raw, &out.Tools)
-		return out.Tools, true
+	} else {
+		_ = json.Unmarshal(raw, &out)
 	}
-	_ = json.Unmarshal(raw, &out)
+	// toolsOK means a tools Provider is mounted (even if it registered zero tools).
 	return out.Tools, true
 }
 
@@ -264,14 +336,158 @@ func (a *agent) nextTurnNumber(sessionID string) int {
 	return maxTurn + 1
 }
 
+func (a *agent) sessionWorkspace(sessionID string) string {
+	raw, err := callJSON(a.s, "session", "info", map[string]any{"sessionId": sessionID})
+	if err != nil {
+		return ""
+	}
+	var out struct {
+		Workspace string `json:"workspace"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.Workspace
+}
+
+// policyDecide asks the policy Capability (ADR-0019). Missing provider → allow.
+func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace string) (string, string) {
+	raw, err := callJSON(a.s, "policy", "decide", map[string]any{
+		"tool":      tool,
+		"arguments": args,
+		"workspace": workspace,
+		"sessionId": sessionID,
+	})
+	if err != nil {
+		return "allow", "no policy provider"
+	}
+	var out struct {
+		Action string `json:"action"`
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Action == "" {
+		return "allow", "empty policy action"
+	}
+	return out.Action, out.Reason
+}
+
+func (a *agent) confirmTool(sessionID, tool string, args json.RawMessage, workspace string) bool {
+	raw, err := callJSON(a.s, "agent", "confirm", map[string]any{
+		"tool":      tool,
+		"arguments": args,
+		"workspace": workspace,
+		"sessionId": sessionID,
+	})
+	if err != nil {
+		return false
+	}
+	var out struct {
+		Approved bool `json:"approved"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.Approved
+}
+
+func (a *agent) expandSkillTriggers(sessionID, workspace, input string) string {
+	raw, err := callJSON(a.s, "skills", "expand", map[string]any{
+		"workspace": workspace,
+		"text":      input,
+	})
+	if err != nil {
+		return input
+	}
+	var out struct {
+		Text     string   `json:"text"`
+		Injected []string `json:"injected"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Text == "" {
+		return input
+	}
+	return out.Text
+}
+
+func (a *agent) loadProjectContext(workspace, extra string) string {
+	if workspace == "" {
+		return extra
+	}
+	raw, err := callJSON(a.s, "project-context", "load", map[string]any{"workspace": workspace})
+	if err != nil {
+		return extra
+	}
+	var out struct {
+		Text   string `json:"text"`
+		Source string `json:"source"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Text == "" {
+		return extra
+	}
+	block := "Project context (" + out.Source + "):\n" + out.Text
+	if extra == "" {
+		return block
+	}
+	return extra + "\n\n" + block
+}
+
+func (a *agent) refreshSkillCatalog(workspace string) {
+	_, _ = callJSON(a.s, "skills", "refreshCatalog", map[string]any{"workspace": workspace})
+}
+
+func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
+	var in struct {
+		Items []struct {
+			Status  string `json:"status"`
+			Content string `json:"content"`
+		} `json:"items"`
+	}
+	if len(tc.Arguments) > 0 {
+		if err := json.Unmarshal(tc.Arguments, &in); err != nil {
+			return "", err
+		}
+	}
+	var b strings.Builder
+	b.WriteString("Todo updated:\n")
+	for _, it := range in.Items {
+		mark := " "
+		switch it.Status {
+		case "done":
+			mark = "x"
+		case "in_progress":
+			mark = "-"
+		}
+		fmt.Fprintf(&b, "- [%s] (%s) %s\n", mark, it.Status, it.Content)
+	}
+	body := strings.TrimSpace(b.String())
+	if err := a.appendOne(sessionID, map[string]any{
+		"type":    "todo",
+		"role":    "tool",
+		"content": body,
+		"meta":    map[string]any{"tool_call_id": tc.ID},
+	}); err != nil {
+		return "", err
+	}
+	return body, nil
+}
+
 func (a *agent) callTool(sessionID string, tc toolCall) (string, []message, error) {
 	args := tc.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
+	workspace := a.sessionWorkspace(sessionID)
+	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace)
+	if action == "deny" {
+		return "error: denied by policy: " + reason, nil, nil
+	}
+	if action == "ask" {
+		if !a.confirmTool(sessionID, tc.Name, args, workspace) {
+			return "error: denied by user approval: " + reason, nil, nil
+		}
+	}
 	payload := map[string]any{
 		"name":      tc.Name,
 		"arguments": json.RawMessage(args),
+		"workspace": workspace,
 	}
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
@@ -286,6 +502,15 @@ func (a *agent) callTool(sessionID string, tc toolCall) (string, []message, erro
 	}
 	_ = json.Unmarshal(raw, &out)
 	return out.Content, out.AdditionalContexts, nil
+}
+
+func isReadOnlySchema(s map[string]any) bool {
+	v, ok := s["readOnly"]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
 }
 
 func messagesEqual(a, b []message) bool {
@@ -377,8 +602,13 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		return nil, &protocol.FrameError{Code: "bad_payload", Message: "user input is required"}
 	}
 	sessionID = normalizeID(sessionID)
+	// Resolve Workspace once per Turn (ADR-0020); tools.call injects this value.
+	workspace := a.sessionWorkspace(sessionID)
+	// Skill Trigger ($name) expands before the fact is written (spec).
+	userInput = a.expandSkillTriggers(sessionID, workspace, userInput)
 	// Entry turns clear any stale cancel from a previous turn on this Session.
 	// Nested subagent turns share the parent's cancel only via Host.
+	a.refreshSkillCatalog(workspace)
 
 	turnN := a.nextTurnNumber(sessionID)
 	if err := a.appendOne(sessionID, map[string]any{
@@ -403,6 +633,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	}()
 
 	sysText := a.assembleSystemPrompt()
+	extraSystem = a.loadProjectContext(workspace, extraSystem)
 	if extraSystem != "" {
 		if sysText != "" {
 			sysText += "\n\n"
@@ -418,6 +649,23 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			sysText += "\n\n"
 		}
 		sysText += note
+	} else {
+		// Plan Constraint (lite): prompt-only; no tool-mode gate (spec Q17).
+		planNote := "Plan Constraint: Prefer to outline a short plan and track items with the todo tool before editing files or running commands. There is no separate plan mode; tools remain available."
+		if sysText != "" {
+			sysText += "\n\n"
+		}
+		sysText += planNote
+	}
+
+	// Soft policy when the tool is offered this turn: models overuse
+	// under-specified "spawn helper" tools unless told when not to.
+	offerSubagent := allowSubagent && hasTools
+	if offerSubagent {
+		if sysText != "" {
+			sysText += "\n\n"
+		}
+		sysText += subagentSystemNote
 	}
 
 	if sysText != "" {
@@ -471,18 +719,19 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
-	if allowSubagent && hasTools {
-		schemas = append(schemas, toolSchema{
-			Name:        subagentToolName,
-			Description: "Run a focused subagent on a child session linked to this session and return its final reply.",
-			InputSchema: marshal(subagentSchema["input_schema"]),
-		})
+	if offerSubagent {
+		schemas = append(schemas, subagentToolSchema())
+	}
+	// Todo only when real external tools exist (not emptytools/subagent-only).
+	if hasExternalTools(schemas) {
+		schemas = append(schemas, todoToolSchema())
 	}
 
 	contextWindow := a.llmInfoContextWindow()
 	var allChunks []string
 	var toolNames []string
 	var assistant string
+	subagentUsed := 0
 
 	for step := 0; step < MaxSteps; step++ {
 		if a.cancel.take(sessionID) {
@@ -519,12 +768,13 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 				}
 				if len(prepTools) > 0 {
 					schemas = prepTools
-					if allowSubagent && hasTools {
-						schemas = append(schemas, toolSchema{
-							Name:        subagentToolName,
-							Description: "Run a focused subagent on a child session linked to this session and return its final reply.",
-							InputSchema: marshal(subagentSchema["input_schema"]),
-						})
+					// Drop the tool once the turn budget is spent so the model
+					// stops seeing it as an available next step.
+					if offerSubagent && subagentUsed < MaxSubagentsPerTurn {
+						schemas = append(schemas, subagentToolSchema())
+					}
+					if hasExternalTools(prepTools) {
+						schemas = append(schemas, todoToolSchema())
 					}
 				}
 			}
@@ -643,49 +893,38 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
 
-		for _, tc := range llmOut.ToolCalls {
-			var resultContent string
-			var additionalContexts []message
+		// Partition: read-only tools may run in parallel; writes stay serial.
+		readOnlyTools := map[string]bool{}
+		if raw, err := callJSON(a.s, "tools", "list", map[string]any{}); err == nil {
+			var listed struct {
+				Tools []struct {
+					Name     string `json:"name"`
+					ReadOnly bool   `json:"readOnly"`
+				} `json:"tools"`
+			}
+			_ = json.Unmarshal(raw, &listed)
+			for _, t := range listed.Tools {
+				if t.ReadOnly {
+					readOnlyTools[t.Name] = true
+				}
+			}
+		}
 
-			if tc.Name == subagentToolName {
-				var in struct {
-					Input        string   `json:"input"`
-					Text         string   `json:"text"`
-					SystemPrompt string   `json:"systemPrompt"`
-					Mode         string   `json:"mode"`
-					Tools        []string `json:"tools"`
-				}
-				if len(tc.Arguments) > 0 {
-					_ = json.Unmarshal(tc.Arguments, &in)
-				}
-				input := in.Input
-				if input == "" {
-					input = in.Text
-				}
-				if in.Mode == "async" {
-					resultContent = "error: async subagent is not supported in v1"
-				} else if strings.TrimSpace(input) == "" {
-					resultContent = "error: subagent input is required"
-				} else {
-					childID := a.nextSubagentID()
-					if _, err := callJSON(a.s, "session", "create", map[string]any{
-						"sessionId":     childID,
-						"parentSession": sessionID,
-						"origin":        "subagent",
-					}); err != nil {
-						resultContent = "error: " + err.Error()
-					} else {
-						// Nested turn: in-process (same loop policy), no run_subagent.
-						// Host entry lock already covers the parent Session.
-						childRes, cerr := a.runTurn(childID, input, false, in.SystemPrompt)
-						if cerr != nil {
-							resultContent = "error: " + cerr.Error()
-						} else {
-							resultContent = childRes.Assistant
-						}
-					}
-				}
-			} else {
+		type toolOutcome struct {
+			content    string
+			additional []message
+		}
+		outcomes := make([]toolOutcome, len(llmOut.ToolCalls))
+
+		// Pass 1: parallel read-only.
+		var wg sync.WaitGroup
+		for i, tc := range llmOut.ToolCalls {
+			if !readOnlyTools[tc.Name] || tc.Name == subagentToolName || tc.Name == todoToolName {
+				continue
+			}
+			wg.Add(1)
+			go func(i int, tc toolCall) {
+				defer wg.Done()
 				_ = a.s.Emit("presentation", "render", marshal(map[string]any{
 					"kind": "message_text", "level": "info",
 					"text":      "Running " + tc.Name + "…",
@@ -693,12 +932,91 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 				}))
 				out, addCtx, callErr := a.callTool(sessionID, tc)
 				if callErr != nil {
-					resultContent = "error: " + callErr.Error()
+					outcomes[i].content = "error: " + callErr.Error()
 				} else {
-					resultContent = out
-					additionalContexts = addCtx
+					outcomes[i].content = out
+					outcomes[i].additional = addCtx
 				}
+			}(i, tc)
+		}
+		wg.Wait()
+
+		// Pass 2: serial for everything not already finished in parallel.
+		for i, tc := range llmOut.ToolCalls {
+			parallelDone := readOnlyTools[tc.Name] && tc.Name != subagentToolName && tc.Name != todoToolName
+			if !parallelDone {
+				var resultContent string
+				var additionalContexts []message
+
+				if tc.Name == todoToolName {
+					out, err := a.handleTodo(sessionID, tc)
+					if err != nil {
+						resultContent = "error: " + err.Error()
+					} else {
+						resultContent = out
+					}
+				} else if tc.Name == subagentToolName {
+					var in struct {
+						Input        string   `json:"input"`
+						Text         string   `json:"text"`
+						SystemPrompt string   `json:"systemPrompt"`
+						Mode         string   `json:"mode"`
+						Tools        []string `json:"tools"`
+					}
+					if len(tc.Arguments) > 0 {
+						_ = json.Unmarshal(tc.Arguments, &in)
+					}
+					input := in.Input
+					if input == "" {
+						input = in.Text
+					}
+					if subagentUsed >= MaxSubagentsPerTurn {
+						resultContent = fmt.Sprintf("error: subagent budget exhausted (max %d per turn). Finish with ordinary tools or a direct answer.", MaxSubagentsPerTurn)
+					} else if in.Mode == "async" {
+						resultContent = "error: async subagent is not supported in v1"
+					} else if strings.TrimSpace(input) == "" {
+						resultContent = "error: subagent input is required"
+					} else {
+						childID := a.nextSubagentID()
+						createPayload := map[string]any{
+							"sessionId":     childID,
+							"parentSession": sessionID,
+							"origin":        "subagent",
+						}
+						if ws := a.sessionWorkspace(sessionID); ws != "" {
+							createPayload["workspace"] = ws
+						}
+						if _, err := callJSON(a.s, "session", "create", createPayload); err != nil {
+							resultContent = "error: " + err.Error()
+						} else {
+							childRes, cerr := a.runTurn(childID, input, false, in.SystemPrompt)
+							subagentUsed++
+							if cerr != nil {
+								resultContent = "error: " + cerr.Error()
+							} else {
+								resultContent = childRes.Assistant
+							}
+						}
+					}
+				} else {
+					_ = a.s.Emit("presentation", "render", marshal(map[string]any{
+						"kind": "message_text", "level": "info",
+						"text":      "Running " + tc.Name + "…",
+						"sessionId": sessionID,
+					}))
+					out, addCtx, callErr := a.callTool(sessionID, tc)
+					if callErr != nil {
+						resultContent = "error: " + callErr.Error()
+					} else {
+						resultContent = out
+						additionalContexts = addCtx
+					}
+				}
+				outcomes[i] = toolOutcome{content: resultContent, additional: additionalContexts}
 			}
+
+			resultContent := outcomes[i].content
+			additionalContexts := outcomes[i].additional
 
 			_ = a.s.Emit("presentation", "render", marshal(map[string]any{
 				"kind": "summary_text", "title": tc.Name,

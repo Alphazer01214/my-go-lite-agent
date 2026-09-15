@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/tomori/my-go-lite-agent/serve"
 )
 
 // CLI runs the liteagent-cli entry: the CLI Render Medium over the shared
@@ -26,12 +28,23 @@ func CLI() {
 	agentInject := flag.String("agent-inject", "", "JSON array of messages to append via agent.inject (does not start a turn)")
 	turnInput := flag.String("turn", "", "run one default-Loop turn with this user input (requires session + llm)")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or /exit to quit)")
+	workspace := flag.String("workspace", "", "Workspace root for the default Session (default: process cwd)")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
 	frameCap := flag.String("frame-cap", "", "Frame Capability for -invoke (default demo)")
 	frameMethod := flag.String("frame-method", "", "Frame method for -invoke (default invoke)")
 	contextList := flag.Int("context-list", 0, "print last N Model Context messages from Context Manager (0=off)")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
+	debug := flag.Bool("debug", false, "print host Frame debug log to stderr")
 	flag.Parse()
+	if *debug {
+		serve.SetDebug(true)
+	}
+	ws := *workspace
+	if ws == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			ws = cwd
+		}
+	}
 
 	switch {
 	case *discoverDir != "":
@@ -43,7 +56,7 @@ func CLI() {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
 		if *repl {
-			if err := runREPL(*pluginsDir, *assemblyPath, dump); err != nil {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump, ws); err != nil {
 				fatal(err)
 			}
 			return
@@ -66,6 +79,7 @@ func CLI() {
 				frameMethod:   frameMethod,
 				contextList:   contextList,
 				cards:         cards,
+				workspace:     ws,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)

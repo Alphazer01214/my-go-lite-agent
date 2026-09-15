@@ -28,6 +28,7 @@ type sessionAgentOpts struct {
 	frameMethod   *string
 	contextList   *int
 	cards         *bool
+	workspace     string
 }
 
 // turnRenderer is the CLI Render Medium (CONTEXT.md).
@@ -68,13 +69,21 @@ func (r *turnRenderer) onStream(delta string) {
 		return
 	}
 	r.streamBuf.WriteString(delta)
-	// Dim one-line progress; durable body is painted as markdown_text at settle.
+	// Dim live tokens; durable body is still painted as markdown_text at settle.
 	if !r.streamedLive {
 		r.clearThinking()
 		r.streamedLive = true
 	}
-	n := len([]rune(r.streamBuf.String()))
-	fmt.Printf("\r\x1b[2K\x1b[2mGenerating… %d chars\x1b[0m", n)
+	text := r.streamBuf.String()
+	n := len([]rune(text))
+	const maxLive = 120
+	live := text
+	if n > maxLive {
+		runes := []rune(text)
+		live = "…" + string(runes[n-maxLive:])
+	}
+	// Single-line live preview; settle erases this row.
+	fmt.Printf("\r\x1b[2K\x1b[2m%s  (%d chars)\x1b[0m", strings.ReplaceAll(live, "\n", " "), n)
 	r.gotContent = true
 }
 
@@ -163,6 +172,22 @@ func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
 	}
 }
 
+// cliToolApproval prompts on the CLI Medium for policy.ask (ADR-0019).
+func cliToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
+	fmt.Printf("⚠ permission: allow tool %s?\n", tool)
+	if len(arguments) > 0 {
+		fmt.Printf("  arguments: %s\n", string(arguments))
+	}
+	if workspace != "" {
+		fmt.Printf("  workspace: %s\n", workspace)
+	}
+	fmt.Print("  [y/N] ")
+	var line string
+	_, _ = fmt.Scanln(&line)
+	line = strings.ToLower(strings.TrimSpace(line))
+	return line == "y" || line == "yes"
+}
+
 // runSessionAgent mounts Plugins then runs session ops, optional Agent Loop turn, and optional invoke.
 func runSessionAgent(opts sessionAgentOpts) error {
 	plan, _, err := resolveAssembly(*opts.pluginsDir, *opts.assemblyPath, opts.dump != nil && *opts.dump)
@@ -179,6 +204,16 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 		_ = srv.Close()
 	}()
+
+	// Bind Workspace only when a Turn will run (ADR-0020). Session-only
+	// diagnostics must not insert session_meta facts that shift seq coverage.
+	if opts.workspace != "" && opts.turnInput != nil && *opts.turnInput != "" {
+		if err := srv.SetSessionWorkspace("default", opts.workspace); err != nil {
+			// Soft: session plugin may be absent in bare assemblies.
+			_ = err
+		}
+	}
+	srv.OnToolApproval = cliToolApproval
 
 	if *opts.appendJSON != "" {
 		var facts []map[string]any

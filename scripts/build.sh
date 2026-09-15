@@ -88,6 +88,18 @@ install_plugin "echotool"       "./plugins/echotool"       '["tools"]' "[]" 0 \
 install_plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 \
     "Read/write workspace files"
 
+install_plugin "shelltools"     "./plugins/shelltools"     '["tools"]' "[]" 60000 \
+    "Cross-platform shell tool (no PTY)"
+
+install_plugin "permission"     "./plugins/permission"     '["policy"]' "[]" 0 \
+    "Permission rules: policy.decide allow/ask/deny"
+
+install_plugin "skill-manager"  "./plugins/skill-manager"  '["tools","skills"]' "[]" 0 \
+    "Workspace skills: discovery, $skill expand, load_skill"
+
+install_plugin "project-context" "./plugins/project-context" '["project-context"]' "[]" 0 \
+    "Load AGENTS.md / CLAUDE.md from Workspace"
+
 install_plugin "context-manager" "./plugins/context-manager" '["system-prompt","context"]' "[]" 0 \
     "Context Manager: system prompt + prepare/compact/usage" \
     '[{"name":"usage","description":"Last prepare Context Usage","usage":"/context-manager usage [sessionId]"},{"name":"list","description":"Model Context messages from last prepare","usage":"/context-manager list [sessionId]"},{"name":"skills","description":"List registered skills","usage":"/context-manager skills"}]'
@@ -128,6 +140,16 @@ cp "$ROOT/examples/assembly.json"           "$DIST/examples/"
 cp "$ROOT/examples/assembly-with-tools.json" "$DIST/examples/"
 cp "$ROOT/examples/chat.json"               "$DIST/examples/"
 cp "$ROOT/examples/agent.json"              "$DIST/examples/"
+cp "$ROOT/examples/coding.json"             "$DIST/examples/"
+mkdir -p "$DIST/config"
+if [[ ! -f "$DIST/config/permissions.json" ]]; then
+    cat > "$DIST/config/permissions.json" <<'EOF'
+{
+  "defaultAction": "allow",
+  "rules": []
+}
+EOF
+fi
 # Layout is required at runtime (ADR-0012); ship the base layout with dist.
 cp "$ROOT/layout.json" "$DIST/"
 # Author SDK single source (dual export: repo copy + /sdk/ HTTP).

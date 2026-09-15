@@ -1,0 +1,9 @@
+{
+  "name": "project-context",
+  "version": "0.1.0",
+  "protocol": 3,
+  "provides": ["project-context"],
+  "consumes": [],
+  "entry": "project-context.exe",
+  "description": "Load AGENTS.md / CLAUDE.md from Workspace as project context"
+}

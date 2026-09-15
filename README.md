@@ -37,6 +37,9 @@
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
 - CLI REPL / 一轮 `-turn`；Web Shell（聊天 + Session Trace）
+- **Workspace**：Session 级项目根（CLI 默认 cwd，Web 会话可选）
+- **coding 装配**：filetools + shelltools + permission + skill-manager + project-context
+- 多 `tools` 插件共存；`$skill` 输入触发；Todo / Plan Constraint（提示约束）
 - 跨平台：Windows / macOS / Linux
 
 ## 快速开始
@@ -95,10 +98,23 @@ export OPENAI_MODEL=deepseek-chat
 ./dist/liteagent-server -plugins dist/plugins -assembly dist/examples/chat.json -serve 127.0.0.1:8080
 ```
 
+Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件 / id / cap / method / payload）与插件启停会打到 **stderr**，不污染 stdout 的对话输出。
+
 带文件工具：
 
 ```powershell
 .\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\agent.json -turn "读一下 README.md"
+```
+
+Coding 装配（Workspace + shell + permission + skills）：
+
+```bash
+./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/coding.json -workspace "$PWD" -turn "读一下 README 并总结"
+# 工作区可放 .liteagent/permissions.json、.liteagent/skills/<name>/SKILL.md、AGENTS.md
+```
+
+```powershell
+.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\coding.json -workspace (Get-Location) -turn "读一下 README 并总结"
 ```
 
 ## 常用命令
@@ -122,6 +138,7 @@ export OPENAI_MODEL=deepseek-chat
 -context-list N      打印最近 prepare 的 N 条消息
 -session-derive      打印 Model Context
 -session-query       打印 Session Log 事实
+-debug               Host Frame 调试日志（stderr）
 ```
 
 ## 装配示例

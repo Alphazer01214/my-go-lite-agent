@@ -11,7 +11,7 @@ import (
 )
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
-func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
+func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string) error {
 	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
@@ -21,6 +21,11 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool) error {
 		return err
 	}
 	defer func() { _ = srv.Close() }()
+
+	if workspace != "" {
+		_ = srv.SetSessionWorkspace("default", workspace)
+	}
+	srv.OnToolApproval = cliToolApproval
 
 	probeCommandFaces(srv, plan.Mounted)
 

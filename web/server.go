@@ -34,6 +34,8 @@ type Options struct {
 	Layout any
 	// UIMounts are Assembly-adjudicated mounts served on /api/plugins.
 	UIMounts []assembly.EffectiveMount
+	// DefaultWorkspace is applied to new Sessions when the client omits one (ADR-0020).
+	DefaultWorkspace string
 }
 
 // CommandPlane is the slash-command surface the Shell uses (implemented by
@@ -59,6 +61,8 @@ type Server struct {
 	// current default session for the Web Shell ("" = Host default).
 	sessMu sync.Mutex
 	sessID string
+	// defaultWorkspace is applied to new Sessions when the client omits one.
+	defaultWorkspace string
 }
 
 // currentSession resolves the Current Session from the session Capability
@@ -110,9 +114,10 @@ func New(opts Options) *Server {
 		opts.ReplaySize = DefaultReplay
 	}
 	s := &Server{
-		opts:   opts,
-		hub:    make(map[chan Event]struct{}),
-		uiDirs: map[string]string{},
+		opts:             opts,
+		hub:              make(map[chan Event]struct{}),
+		uiDirs:           map[string]string{},
+		defaultWorkspace: opts.DefaultWorkspace,
 	}
 	for _, p := range opts.Plan.Mounted {
 		if p.Manifest.UI != nil && p.Manifest.UI.Entry != "" {
@@ -145,6 +150,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/session", s.handleSessionGet)
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
 	mux.HandleFunc("/api/session/select", s.handleSessionSelect)
+	mux.HandleFunc("/api/session/workspace", s.handleSessionWorkspace)
 	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
@@ -363,14 +369,51 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no agent server", http.StatusServiceUnavailable)
 		return
 	}
-	id, err := s.opts.Srv.NewSessionID("")
+	var in struct {
+		Workspace string `json:"workspace"`
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	workspace := strings.TrimSpace(in.Workspace)
+	if workspace == "" {
+		workspace = s.defaultWorkspace
+	}
+	id, err := s.opts.Srv.NewSessionIDWithWorkspace(in.SessionID, workspace)
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	s.setCurrentSession(id)
 	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + id, "sessionId": id}})
-	writeJSON(w, map[string]any{"ok": true, "sessionId": id, "status": "idle"})
+	writeJSON(w, map[string]any{"ok": true, "sessionId": id, "status": "idle", "workspace": workspace})
+}
+
+func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.Srv == nil {
+		http.Error(w, "no agent server", http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		SessionID string `json:"sessionId"`
+		Workspace string `json:"workspace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Workspace) == "" {
+		http.Error(w, "workspace required", http.StatusBadRequest)
+		return
+	}
+	sid := in.SessionID
+	if sid == "" {
+		sid = s.currentSession()
+	}
+	if err := s.opts.Srv.SetSessionWorkspace(sid, in.Workspace); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "sessionId": sid, "workspace": in.Workspace})
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {

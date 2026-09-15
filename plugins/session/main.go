@@ -91,6 +91,7 @@ type sessionItem struct {
 	ParentSession   string `json:"parentSession,omitempty"`
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegationDepth,omitempty"`
+	Workspace       string `json:"workspace,omitempty"`
 }
 
 type Fact struct {
@@ -122,6 +123,7 @@ type SessionMeta struct {
 	ParentSession   string `json:"parentSession,omitempty"`
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegationDepth,omitempty"`
+	Workspace       string `json:"workspace,omitempty"`
 }
 
 type store struct {
@@ -209,6 +211,9 @@ func (r *registry) openStore(id string) *store {
 			m.ParentSession = pm.ParentSession
 			m.Origin = pm.Origin
 			m.DelegationDepth = pm.DelegationDepth
+			if m.Workspace == "" {
+				m.Workspace = pm.Workspace
+			}
 			r.meta[id] = m
 		}
 	}
@@ -244,6 +249,10 @@ func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 		}
 		if m.Origin != "" && ex.Origin != m.Origin {
 			ex.Origin = m.Origin
+			changed = true
+		}
+		if m.Workspace != "" && ex.Workspace != m.Workspace {
+			ex.Workspace = m.Workspace
 			changed = true
 		}
 		if m.DelegationDepth > 0 && ex.DelegationDepth != m.DelegationDepth {
@@ -405,6 +414,7 @@ func (st *store) derive() []Message {
 
 	var out []Message
 	lastSystemIdx := -1
+	lastTodo := ""
 	for _, f := range st.facts {
 		if f.Type == "context_summary" {
 			// Summary is placed after the walk via summaryContent (kept as the
@@ -461,7 +471,13 @@ func (st *store) derive() []Message {
 				_ = json.Unmarshal(f.Meta, &meta)
 			}
 			out = append(out, Message{Role: f.Role, Content: f.Content, ToolCallID: meta.ToolCallID})
+		case "todo":
+			// Handled after the walk: only the latest todo is model-visible.
+			lastTodo = f.Content
 		}
+	}
+	if lastTodo != "" {
+		out = append(out, Message{Role: "system", Content: lastTodo})
 	}
 	if summaryContent != "" {
 		// Compacted history sits before post-cover messages; if a System Prompt
@@ -519,6 +535,7 @@ func main() {
 				ParentSession:   m.ParentSession,
 				Origin:          m.Origin,
 				DelegationDepth: m.DelegationDepth,
+				Workspace:       m.Workspace,
 			})
 		}
 		if list == nil {
@@ -533,6 +550,7 @@ func main() {
 			ParentSession   string `json:"parentSession"`
 			Origin          string `json:"origin"`
 			DelegationDepth int    `json:"delegationDepth"`
+			Workspace       string `json:"workspace"`
 		}
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &in); err != nil {
@@ -547,6 +565,7 @@ func main() {
 			ParentSession:   in.ParentSession,
 			Origin:          in.Origin,
 			DelegationDepth: in.DelegationDepth,
+			Workspace:       in.Workspace,
 		})
 		if err != nil {
 			return nil, err
@@ -609,6 +628,33 @@ func main() {
 
 	s.Handle("session", "list", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(map[string]any{"sessions": listSessions()})
+	})
+
+	s.Handle("session", "info", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		id := in.SessionID
+		if id == "" {
+			currentMu.Lock()
+			id = currentID
+			currentMu.Unlock()
+		}
+		id = normalizeID(id)
+		reg.openStore(id)
+		m := reg.metaOf(id)
+		return json.Marshal(map[string]any{
+			"sessionId":       id,
+			"workspace":       m.Workspace,
+			"parentSession":   m.ParentSession,
+			"origin":          m.Origin,
+			"delegationDepth": m.DelegationDepth,
+			"createdAt":       m.CreatedAt,
+			"meta":            m,
+		})
 	})
 
 	s.Handle("session", "current", func(req *pluginsdk.Request) (json.RawMessage, error) {
@@ -744,10 +790,18 @@ func main() {
 			id := currentID
 			currentMu.Unlock()
 			return json.Marshal(map[string]string{"text": "sessionId=" + id})
+		case "info":
+			m := reg.metaOf(sid)
+			raw, _ := json.MarshalIndent(map[string]any{
+				"sessionId": sid,
+				"workspace": m.Workspace,
+				"meta":      m,
+			}, "", "  ")
+			return json.Marshal(map[string]string{"text": string(raw)})
 		default:
 			return nil, &protocol.FrameError{
 				Code:    "unknown_command",
-				Message: fmt.Sprintf("unknown command %q (try dump-trace|list|derive|current)", in.Command),
+				Message: fmt.Sprintf("unknown command %q (try dump-trace|list|derive|current|info)", in.Command),
 			}
 		}
 	})

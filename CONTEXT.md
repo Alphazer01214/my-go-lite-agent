@@ -179,3 +179,39 @@ _Avoid_: 工具结果截断（可作口语）、placeholder
 **Config Capability**:
 插件运行时配置面：get / set / schema / reload。与 Manifest（元数据）分离；`/refresh` 可广播 reload，不热插拔进程。
 _Avoid_: 插件配置文件（磁盘 config.json 只是持久化）、Manifest 参数
+
+**Workspace**:
+一次运行中项目文件与工具操作的根目录。CLI 默认启动时 cwd；Web 由会话选择。作为 Session 元数据携带，filetools / shelltools / permission / skill 等只认此根，不认全局 cwd。
+_Avoid_: 工作目录、项目路径、repo root（口语可用，规范名词是 Workspace）
+
+**Permission**:
+对一次工具调用的 allow / ask / deny 裁决及规则集合。由 provides `policy` 的插件持有规则；Agent Loop 在执行工具前查询。不是路由中间件。
+_Avoid_: 审批流、ACL、Interceptor（已废弃）、权限系统（过泛）
+
+**Policy Capability**:
+Permission 的可调用面：decide（对一次 tool call 给出裁决）与必要的规则观测。消费方是 Agent Loop；Host 不内建策略引擎。
+_Avoid_: 审批 Capability、guard、gate
+
+**Read-only Tool**:
+工具 schema 上的只读标志（`readOnly`）：声明该工具不修改 Workspace 外状态。并行调度与默认策略可依赖该标志；与 Permission 规则正交。
+_Avoid_: 安全工具、只读能力（泛称）
+
+**Skill**:
+工作区内可被模型或用户触发装载的一份说明性能力包（约定目录下的文档）。目录名进 System Prompt；全文在触发时注入。
+_Avoid_: 技能文件、prompt pack（可作别名）、插件技能（Skill 不是 Plugin）
+
+**Skill Manager**:
+发现与装载 Skill 的插件：扫描 Workspace 约定目录、向 Context Manager 注册目录段、提供模型可调用的 load 工具，并在用户输入阶段展开 `$skill` 触发。不改写 Session Log 旧事实。
+_Avoid_: 技能加载器、skills 插件（规范名词是 Skill Manager）
+
+**Skill Trigger**:
+用户输入中以 `$` + Skill 名书写的显式触发记号（如 `$review`）。在 Turn 开始、进入模型之前由 Agent 展开为 Skill 全文注入；与模型主动 load 工具并存。
+_Avoid_: 斜杠技能、宏、快捷指令
+
+**Todo**:
+Turn 内可见的工作计划事实：经工具写入 Session Log，由 Context Prepare 投影进 Model Context。不是独立第二真源。
+_Avoid_: 任务列表 UI、待办存储、task tracker
+
+**Plan Constraint**:
+对 Agent 在「先计划再动手」阶段的行为约束：仅由 System Prompt 与 Todo 可见性约定，不裁剪 tools 列表、不切换工具门禁。有意相对完整 Plan Mode 的 lite 取舍。
+_Avoid_: Plan Mode（若指工具子集门禁）、只读模式（语义不同）

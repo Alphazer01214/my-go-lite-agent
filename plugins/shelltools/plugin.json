@@ -1,0 +1,9 @@
+{
+  "name": "shelltools",
+  "version": "0.1.0",
+  "protocol": 3,
+  "provides": ["tools"],
+  "consumes": [],
+  "entry": "shelltools.exe",
+  "description": "Cross-platform shell tool (no PTY)"
+}
