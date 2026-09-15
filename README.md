@@ -131,6 +131,8 @@ Coding 装配（Workspace + shell + permission + skills）：
 
 原生 slash 仅 `/help` `/lp` `/refresh` `/exit`；其余能力在对应插件名下。
 
+**Web 设置界面**：聊天栏 **Settings** 打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
+
 **CLI 一次成型**
 
 ```powershell

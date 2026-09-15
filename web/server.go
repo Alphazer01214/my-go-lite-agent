@@ -588,6 +588,7 @@ func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCall is LiteAgent.call: route cap.method to the plugin that provides cap.
+// Optional "plugin" targets a named Plugin directly (config settings per plugin).
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -601,12 +602,22 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		Cap     string          `json:"cap"`
 		Method  string          `json:"method"`
 		Payload json.RawMessage `json:"payload"`
+		Plugin  string          `json:"plugin"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Cap == "" || in.Method == "" {
 		http.Error(w, "cap and method required", http.StatusBadRequest)
 		return
 	}
-	out, err := s.opts.Srv.CallByCap(in.Cap, in.Method, in.Payload)
+	if len(in.Payload) == 0 {
+		in.Payload = json.RawMessage(`{}`)
+	}
+	var out json.RawMessage
+	var err error
+	if in.Plugin != "" {
+		out, err = s.opts.Srv.CallByPlugin(in.Plugin, in.Cap, in.Method, in.Payload)
+	} else {
+		out, err = s.opts.Srv.CallByCap(in.Cap, in.Method, in.Payload)
+	}
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
