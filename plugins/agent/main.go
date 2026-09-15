@@ -51,10 +51,11 @@ var subagentSchema = map[string]any{
 
 var todoSchema = map[string]any{
 	"name":        todoToolName,
-	"description": "Update the visible work plan. Provide items with status pending|in_progress|done.",
+	"description": "Update or list the visible work plan. Provide items with status pending|in_progress|done, or action=list.",
 	"input_schema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"action": map[string]any{"type": "string", "enum": []string{"update", "list"}, "description": "default update"},
 			"items": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -67,7 +68,6 @@ var todoSchema = map[string]any{
 				},
 			},
 		},
-		"required": []string{"items"},
 	},
 }
 
@@ -289,7 +289,7 @@ func (a *agent) llmInfoContextWindow() int {
 	return out.ContextWindow
 }
 
-func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow int) ([]message, []toolSchema, error) {
+func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow int) ([]message, []toolSchema, map[string]any, error) {
 	payload := map[string]any{"messages": msgs}
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
@@ -299,14 +299,67 @@ func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow i
 	}
 	raw, err := callJSON(a.s, "context", "prepare", payload)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var out struct {
-		Messages []message    `json:"messages"`
-		Tools    []toolSchema `json:"tools"`
+		Messages    []message    `json:"messages"`
+		Tools       []toolSchema `json:"tools"`
+		CompactHint map[string]any `json:"compactHint"`
 	}
 	_ = json.Unmarshal(raw, &out)
-	return out.Messages, out.Tools, nil
+	return out.Messages, out.Tools, out.CompactHint, nil
+}
+
+// maybeAutoCompact appends a Context Summary when prepare suggests compact (Phase 2).
+func (a *agent) maybeAutoCompact(sessionID string, msgs []message, hint map[string]any) {
+	if hint == nil {
+		return
+	}
+	suggest, _ := hint["suggestCompact"].(bool)
+	if !suggest {
+		return
+	}
+	covers := 0
+	if raw, err := callJSON(a.s, "session", "query", map[string]any{
+		"sessionId": sessionID, "afterSeq": 0, "limit": 0,
+	}); err == nil {
+		var q struct {
+			Facts []struct {
+				Seq int `json:"seq"`
+			} `json:"facts"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		if n := len(q.Facts); n > 0 {
+			// Cover everything currently projected (pre-summary history).
+			covers = q.Facts[n-1].Seq
+		}
+	}
+	raw, err := callJSON(a.s, "context", "compact", map[string]any{
+		"sessionId":        sessionID,
+		"messages":         msgs,
+		"coversThroughSeq": covers,
+	})
+	if err != nil {
+		return
+	}
+	var out struct {
+		Summary          string `json:"summary"`
+		CoversThroughSeq int    `json:"coversThroughSeq"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Summary == "" {
+		return
+	}
+	_ = a.appendOne(sessionID, map[string]any{
+		"type":    "context_summary",
+		"role":    "system",
+		"content": out.Summary,
+		"meta": map[string]any{
+			"active":           true,
+			"coversThroughSeq": out.CoversThroughSeq,
+			"auto":             true,
+		},
+	})
 }
 
 func (a *agent) nextTurnNumber(sessionID string) int {
@@ -423,10 +476,19 @@ func (a *agent) loadProjectContext(workspace, extra string) string {
 		return extra
 	}
 	block := "Project context (" + out.Source + "):\n" + out.Text
-	if extra == "" {
-		return block
+	// Prefer CM Prompt Segment (assemble includes it). Fallback: extraSystem.
+	seg, _ := json.Marshal(map[string]any{
+		"name":  "project-context",
+		"order": 30,
+		"text":  block,
+	})
+	if _, err := callJSON(a.s, "system-prompt", "registerSegment", json.RawMessage(seg)); err != nil {
+		if extra == "" {
+			return block
+		}
+		return extra + "\n\n" + block
 	}
-	return extra + "\n\n" + block
+	return extra
 }
 
 func (a *agent) refreshSkillCatalog(workspace string) {
@@ -435,7 +497,8 @@ func (a *agent) refreshSkillCatalog(workspace string) {
 
 func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 	var in struct {
-		Items []struct {
+		Action string `json:"action"`
+		Items  []struct {
 			Status  string `json:"status"`
 			Content string `json:"content"`
 		} `json:"items"`
@@ -444,6 +507,26 @@ func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 		if err := json.Unmarshal(tc.Arguments, &in); err != nil {
 			return "", err
 		}
+	}
+	if in.Action == "list" || (in.Action == "" && len(in.Items) == 0) {
+		raw, err := callJSON(a.s, "session", "query", map[string]any{"sessionId": sessionID, "afterSeq": 0, "limit": 0})
+		if err != nil {
+			return "", err
+		}
+		var q struct {
+			Facts []struct {
+				Type string `json:"type"`
+				Body string `json:"content"`
+			} `json:"facts"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		last := "(no todo yet — call with items to create one)"
+		for _, f := range q.Facts {
+			if f.Type == "todo" {
+				last = f.Body
+			}
+		}
+		return last, nil
 	}
 	var b strings.Builder
 	b.WriteString("Todo updated:\n")
@@ -469,6 +552,15 @@ func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 	return body, nil
 }
 
+func (a *agent) logPolicyDecision(sessionID, tool, action, reason string) {
+	_ = a.appendOne(sessionID, map[string]any{
+		"type":    "policy_decision",
+		"role":    "host",
+		"content": tool + " → " + action,
+		"meta":    map[string]any{"tool": tool, "action": action, "reason": reason},
+	})
+}
+
 func (a *agent) callTool(sessionID string, tc toolCall) (string, []message, error) {
 	args := tc.Arguments
 	if len(args) == 0 {
@@ -477,12 +569,16 @@ func (a *agent) callTool(sessionID string, tc toolCall) (string, []message, erro
 	workspace := a.sessionWorkspace(sessionID)
 	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace)
 	if action == "deny" {
+		a.logPolicyDecision(sessionID, tc.Name, "deny", reason)
 		return "error: denied by policy: " + reason, nil, nil
 	}
 	if action == "ask" {
-		if !a.confirmTool(sessionID, tc.Name, args, workspace) {
+		ok := a.confirmTool(sessionID, tc.Name, args, workspace)
+		if !ok {
+			a.logPolicyDecision(sessionID, tc.Name, "ask-denied", reason)
 			return "error: denied by user approval: " + reason, nil, nil
 		}
+		a.logPolicyDecision(sessionID, tc.Name, "ask-allowed", reason)
 	}
 	payload := map[string]any{
 		"name":      tc.Name,
@@ -649,7 +745,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			sysText += "\n\n"
 		}
 		sysText += note
-	} else {
+	} else if hasExternalTools(schemas) {
 		// Plan Constraint (lite): prompt-only; no tool-mode gate (spec Q17).
 		planNote := "Plan Constraint: Prefer to outline a short plan and track items with the todo tool before editing files or running commands. There is no separate plan mode; tools remain available."
 		if sysText != "" {
@@ -732,6 +828,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	var toolNames []string
 	var assistant string
 	subagentUsed := 0
+	autoCompacted := false
 
 	for step := 0; step < MaxSteps; step++ {
 		if a.cancel.take(sessionID) {
@@ -758,9 +855,22 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		modelMessages := arMsgs
 
 		if a.contextProbe {
-			prepMsgs, prepTools, perr := a.prepareContext(sessionID, arMsgs, contextWindow)
+			prepMsgs, prepTools, hint, perr := a.prepareContext(sessionID, arMsgs, contextWindow)
 			if perr == nil {
-				if len(prepMsgs) > 0 && !messagesEqual(prepMsgs, arMsgs) {
+				compacted := false
+				if !autoCompacted && hint != nil {
+					if suggest, _ := hint["suggestCompact"].(bool); suggest {
+						a.maybeAutoCompact(sessionID, arMsgs, hint)
+						compacted = true
+						autoCompacted = true
+					}
+				}
+				if compacted {
+					if ar2, err := a.agentRequest(sessionID); err == nil && len(ar2) > 0 {
+						arMsgs = ar2
+						modelMessages = ar2
+					}
+				} else if len(prepMsgs) > 0 && !messagesEqual(prepMsgs, arMsgs) {
 					return nil, &protocol.FrameError{
 						Code:    "session_invariant_violation",
 						Message: "context.prepare messages are not reconstructable from session log",
@@ -780,7 +890,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			}
 		} else {
 			// First successful prepare marks the provider present.
-			if _, _, perr := a.prepareContext(sessionID, arMsgs, contextWindow); perr == nil {
+			if _, _, _, perr := a.prepareContext(sessionID, arMsgs, contextWindow); perr == nil {
 				a.contextProbe = true
 			}
 		}
@@ -973,7 +1083,36 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 					if subagentUsed >= MaxSubagentsPerTurn {
 						resultContent = fmt.Sprintf("error: subagent budget exhausted (max %d per turn). Finish with ordinary tools or a direct answer.", MaxSubagentsPerTurn)
 					} else if in.Mode == "async" {
-						resultContent = "error: async subagent is not supported in v1"
+						// Async subagent: child Session runs in the background; result is injected.
+						childID := a.nextSubagentID()
+						createPayload := map[string]any{
+							"sessionId":     childID,
+							"parentSession": sessionID,
+							"origin":        "subagent",
+						}
+						if ws := a.sessionWorkspace(sessionID); ws != "" {
+							createPayload["workspace"] = ws
+						}
+						if _, err := callJSON(a.s, "session", "create", createPayload); err != nil {
+							resultContent = "error: " + err.Error()
+						} else {
+							go func(childID, input, sys string, parent string) {
+								childRes, cerr := a.runTurn(childID, input, false, sys)
+								text := ""
+								if cerr != nil {
+									text = "error: " + cerr.Error()
+								} else if childRes != nil {
+									text = childRes.Assistant
+								}
+								_, _ = callJSON(a.s, "agent", "inject", map[string]any{
+									"sessionId": parent,
+									"role":      "system",
+									"content":   "Async subagent " + childID + " finished:\n" + text,
+								})
+							}(childID, input, in.SystemPrompt, sessionID)
+							subagentUsed++
+							resultContent = "async subagent started: " + childID + " (result will be injected when ready)"
+						}
 					} else if strings.TrimSpace(input) == "" {
 						resultContent = "error: subagent input is required"
 					} else {

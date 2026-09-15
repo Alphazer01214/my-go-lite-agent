@@ -116,30 +116,46 @@ class SessionTrace extends HTMLElement {
     // Never tear down the DOM while the user is selecting text in this panel.
     if (!force && this.hasTextSelection()) return;
     try {
-      // Current Session is a session Capability fact (ADR-0012).
-      const cur = await LiteAgent.call('session', 'current', {});
-      const curId = (cur && cur.ok !== false && cur.result && cur.result.sessionId) || '';
-      const sid = curId !== '' ? curId : (window.__liteSessionId || '');
+      // Prefer the shell's live Current Session; only poll the capability on
+      // force/first boot. Idle polls then cost one incremental query, not two
+      // full round-trips (session.current + full session.query).
+      const shellSid = window.__liteSessionId || '';
+      let sid = this._viewSid;
+      if (shellSid && String(shellSid) !== String(sid || '')) {
+        sid = shellSid;
+        force = true;
+      } else if (force || !sid) {
+        const cur = await LiteAgent.call('session', 'current', {});
+        const curId = (cur && cur.ok !== false && cur.result && cur.result.sessionId) || '';
+        sid = curId !== '' ? curId : shellSid;
+      }
       const prevSid = this._viewSid;
       const switched = sid !== '' && String(prevSid || '') !== String(sid);
       if (switched) force = true;
       this._viewSid = sid;
-      const res = await LiteAgent.call('session', 'query', { sessionId: this._viewSid, afterSeq: 0, limit: 0 });
+      // Incremental backstop: pull only facts after lastSeq unless rebuilding.
+      const afterSeq = (!force && this._booted) ? this._lastSeq : 0;
+      const res = await LiteAgent.call('session', 'query', {
+        sessionId: this._viewSid,
+        afterSeq: afterSeq,
+        limit: 0
+      });
       if (!res || res.ok === false) throw new Error(res && res.error || 'session.query failed');
       const facts = mergeReasoningFacts((res.result && res.result.facts) || []);
-      const lastSeq = facts.length ? Number(facts[facts.length - 1].seq || 0) : -1;
-      // Incremental backstop: same session, nothing new → leave the DOM (and selection) alone.
-      if (!force && this._booted && !switched && facts.length === this._lastCount && lastSeq === this._lastSeq) {
+      // Nothing new → leave the DOM (and selection) alone.
+      if (!force && this._booted && !switched && facts.length === 0) {
         return;
       }
       if (force || switched || !this._booted) {
         this.render(facts);
+        this._lastCount = facts.length;
       } else {
         // Append only facts the live path may have missed.
         const fresh = facts.filter(f => Number(f.seq || 0) > this._lastSeq);
         fresh.forEach(f => this.appendFact(f));
+        this._lastCount += fresh.length;
       }
-      this._lastCount = facts.length;
+      const lastSeq = facts.length ? Number(facts[facts.length - 1].seq || 0) : -1;
       this._lastSeq = Math.max(this._lastSeq, lastSeq);
       this._booted = true;
     } catch (e) {
@@ -346,7 +362,7 @@ class SessionRail extends HTMLElement {
         item.appendChild(badge);
       }
       item.appendChild(document.createTextNode(title));
-      item.title = id + (s.parentSession ? '\nparent: ' + s.parentSession : '');
+      item.title = id + (s.parentSession ? '\nparent: ' + s.parentSession : '') + (s.workspace ? '\nws: ' + s.workspace : '');
       item.onclick = () => this.select(id);
       el.appendChild(item);
     });
@@ -367,13 +383,26 @@ class SessionRail extends HTMLElement {
     this.loadSessions();
   }
   async newSession() {
+    // Workspace is Session metadata (ADR-0020); prompt keeps multi-project Web sessions honest.
+    const prev = await this._currentWorkspace();
+    const workspace = window.prompt('Workspace path for this session', prev || '');
+    if (workspace === null) return;
     // create mints a fresh id and selects it as Current Session (ADR-0012).
-    const b = await LiteAgent.call('session', 'create', {});
+    const b = await LiteAgent.call('session', 'create', {
+      workspace: (workspace || '').trim()
+    });
     if (!b || b.ok === false) return;
     const id = (b.result && b.result.sessionId) || '';
     window.__liteSessionId = id;
     LiteAgent.emit('__session', id);
     this.loadSessions();
+  }
+  async _currentWorkspace() {
+    try {
+      const b = await LiteAgent.call('session', 'info', {});
+      if (b && b.ok !== false && b.result && b.result.workspace) return b.result.workspace;
+    } catch (e) { /* optional */ }
+    return '';
   }
 }
 
@@ -527,8 +556,23 @@ class SessionView extends HTMLElement {
     this._offs.push(LiteAgent.on('status', d => this.onStatusEvent(d)));
     this._offs.push(LiteAgent.on('session', d => this.onSessionFact(d)));
     this._offs.push(LiteAgent.on('__notice', d => this.onNotice(d)));
+    this._offs.push(LiteAgent.on('tool_approval', d => this.onToolApproval(d)));
     this._offs.push(LiteAgent.onSessionChange(sid => this.onSessionChange(sid)));
     this.reload();
+  }
+  async onToolApproval(d) {
+    if (!d || !d.id) return;
+    if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) return;
+    const args = d.arguments ? JSON.stringify(d.arguments) : '';
+    const ok = window.confirm('Allow tool ' + d.tool + '?\n' + args.slice(0, 400));
+    try {
+      await fetch('/api/tool-approval', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: d.id, approved: !!ok })
+      });
+    } catch (e) { /* deny by timeout on host */ }
+    this.appendPre(ok ? ('allowed ' + d.tool) : ('denied ' + d.tool), ok ? 'message' : 'message error');
   }
   disconnectedCallback() {
     this._offs.forEach(off => off());
@@ -821,7 +865,11 @@ class SessionView extends HTMLElement {
     this.reload();
   }
   onStreamEvent(d) {
-    if (!this.isCurrent(d.sessionId)) return;
+    // Streams without sessionId (older LLM plugins / host) are treated as the
+    // current view — dropping them is what made live tokens invisible.
+    if (d && d.sessionId !== undefined && d.sessionId !== null && d.sessionId !== '') {
+      if (!this.isCurrent(d.sessionId)) return;
+    }
     this.queueOr(() => {
       if (d.channel === 'reasoning') {
         this._reasoningBuf += d.delta || '';

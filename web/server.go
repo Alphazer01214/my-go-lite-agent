@@ -63,6 +63,10 @@ type Server struct {
 	sessID string
 	// defaultWorkspace is applied to new Sessions when the client omits one.
 	defaultWorkspace string
+	// pending tool approvals (policy.ask → Render Medium).
+	apprMu     sync.Mutex
+	apprNext   int
+	apprWait   map[string]chan bool
 }
 
 // currentSession resolves the Current Session from the session Capability
@@ -118,6 +122,7 @@ func New(opts Options) *Server {
 		hub:              make(map[chan Event]struct{}),
 		uiDirs:           map[string]string{},
 		defaultWorkspace: opts.DefaultWorkspace,
+		apprWait:         make(map[string]chan bool),
 	}
 	for _, p := range opts.Plan.Mounted {
 		if p.Manifest.UI != nil && p.Manifest.UI.Entry != "" {
@@ -131,6 +136,8 @@ func New(opts Options) *Server {
 				s.broadcast(Event{Topic: e.Topic, Data: e.Data})
 			},
 		})
+		// policy.ask → Web Medium (ADR-0019): broadcast and wait for /api/tool-approval.
+		opts.Srv.OnToolApproval = s.requestToolApproval
 		// Seed replay with panels emitted during mount (before Subscribe).
 		for _, p := range opts.Srv.Panels() {
 			s.broadcast(Event{Topic: "panel", Data: p})
@@ -151,6 +158,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
 	mux.HandleFunc("/api/session/select", s.handleSessionSelect)
 	mux.HandleFunc("/api/session/workspace", s.handleSessionWorkspace)
+	mux.HandleFunc("/api/tool-approval", s.handleToolApproval)
 	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
 	mux.HandleFunc("/sdk/lite-agent.js", s.handleSDK)
@@ -414,6 +422,62 @@ func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "sessionId": sid, "workspace": in.Workspace})
+}
+
+// requestToolApproval implements Host OnToolApproval for the Web Medium (ADR-0019).
+// Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
+func (s *Server) requestToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
+	s.apprMu.Lock()
+	s.apprNext++
+	id := fmt.Sprintf("appr-%d", s.apprNext)
+	ch := make(chan bool, 1)
+	s.apprWait[id] = ch
+	s.apprMu.Unlock()
+	defer func() {
+		s.apprMu.Lock()
+		delete(s.apprWait, id)
+		s.apprMu.Unlock()
+	}()
+	s.broadcast(Event{Topic: "tool_approval", Data: map[string]any{
+		"id":        id,
+		"tool":      tool,
+		"arguments": json.RawMessage(arguments),
+		"workspace": workspace,
+		"sessionId": sessionID,
+	}})
+	select {
+	case ok := <-ch:
+		return ok
+	case <-time.After(2 * time.Minute):
+		return false
+	}
+}
+
+func (s *Server) handleToolApproval(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID       string `json:"id"`
+		Approved bool   `json:"approved"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	s.apprMu.Lock()
+	ch, ok := s.apprWait[in.ID]
+	s.apprMu.Unlock()
+	if !ok {
+		writeJSON(w, map[string]any{"ok": false, "error": "unknown approval id"})
+		return
+	}
+	select {
+	case ch <- in.Approved:
+	default:
+	}
+	writeJSON(w, map[string]any{"ok": true, "approved": in.Approved})
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {

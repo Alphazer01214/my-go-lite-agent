@@ -145,7 +145,7 @@ _Avoid_: 系统提示、system message（可作别名，规范名词是 System P
 _Avoid_: 请求头、调用配置（规范名词是 Request Header）
 
 **Subagent**:
-由父 Agent 经 tool call 触发的独立 Agent 实例：拥有自己的 Session 与 Agent Loop，产出以 tool result 回传父 Agent。子 Session 元数据记录 `parentSession` / `origin=subagent` / `delegationDepth`；父 Session 可经 list/family 进入查看子 Session，子不抢占 Current Session。
+由父 Agent 经 tool call 触发的独立 Agent 实例：拥有自己的 Session 与 Agent Loop，产出以 tool result 回传父 Agent。子 Session 元数据记录 `parentSession` / `origin=subagent` / `delegationDepth`；父 Session 可经 list/family 进入查看子 Session，子不抢占 Current Session。`mode=async` 时立即返回子 Session id，完成后经 `agent.inject` 回注结果。
 _Avoid_: 子智能体、nested agent、child agent（规范名词是 Subagent）
 
 **Context Manager**:
