@@ -16,8 +16,9 @@ func TestPresentationCardEmittedFromTool(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -58,8 +59,9 @@ func TestPresentationCardReplayDeterministic(t *testing.T) {
 		buildSessionPluginDir(t, root, pluginsDir, "session")
 		buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 		buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
+		buildAgentPluginDir(t, root, pluginsDir, "agent")
 		cfg := filepath.Join(t.TempDir(), "assembly.json")
-		writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
+		writeFile(t, cfg, `{"plugins":["session","stubllm","echotool","agent"]}`)
 		cmd := exec.Command(hostBin,
 			"-plugins", pluginsDir,
 			"-assembly", cfg,
@@ -93,8 +95,9 @@ func TestFunctionWithoutPresentationStillWorks(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","agent"]}`)
 
 	// No tools plugin: Function/LLM path without Presentation face.
 	cmd := exec.Command(hostBin,

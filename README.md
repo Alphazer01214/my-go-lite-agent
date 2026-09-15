@@ -9,16 +9,20 @@
 ┌──────────── Host（薄内核）────────────┐
 │  Discovery · Assembly · 生命周期       │
 │  Frame 路由（星型） · Session 不变量   │
-│  默认 Agent Loop                      │
+│  agent.request / agent.inject          │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
- session    llm     context-manager  tools
+ session     llm      context-manager tools
 （插件）  （插件）    （插件）      （插件）
+    ▲          ▲          ▲          ▲
+    └──────────┴────┬─────┴──────────┘
+                    │
+                 agent（插件，provides loop）
 ```
 
 ## 理念
 
-- **一切皆插件**：Session、LLM、工具、上下文观测都是可发现、可组装、可替换的进程。
+- **一切皆插件**：Session、LLM、Agent、工具、上下文观测都是可发现、可组装、可替换的进程。
 - **日志是真源**：会话事实只追加；模型能看到的内容必须能从 Session Log 重建。
 - **轻**：进程隔离换崩溃边界与独立分发；不绑重框架，不堆臃肿 harness。
 
@@ -29,7 +33,7 @@
 - 进程外插件（stdin/stdout JSON Frame），崩溃隔离
 - Discovery ≠ Assembly：看见 ≠ 挂载
 - 星型路由：插件不直连，策略平面唯一
-- Session Log 不变量 + 默认 Agent Loop（可外置 `loop` 替换）
+- Session Log 不变量 + Agent 插件（提供 `loop`，经星型组合 llm/session/tools）
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
 - CLI REPL / 一轮 `-turn`；Web Shell（聊天 + Session Trace）

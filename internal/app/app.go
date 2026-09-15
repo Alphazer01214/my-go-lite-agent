@@ -64,20 +64,23 @@ func plural(n int) string {
 // resolveAssembly loads the assembly config, discovers plugins, resolves the
 // mount plan, and reports rejections/missing entries — the shared preamble
 // before callers mount or probe. dump prints the resolved tree.
+//
+// Soft-fail (ADR-0017): discovery errors and missing names are printed but do
+// not abort; Mount proceeds with whatever resolved. Callers that need a
+// Capability fail later at use time.
 func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan, assembly.Config, error) {
 	cfg, err := assembly.Load(assemblyPath)
 	if err != nil {
 		return assembly.Plan{}, assembly.Config{}, err
 	}
 	res := discovery.Scan(pluginsDir)
-	if len(res.Errors) > 0 {
-		printDiscovery(res)
-		return assembly.Plan{}, assembly.Config{}, fmt.Errorf("discovery failed before assembly")
+	for _, e := range res.Errors {
+		fmt.Fprintf(os.Stderr, "discover error: %v\n", e)
 	}
 	plan := assembly.Resolve(cfg, res)
 	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
-		return assembly.Plan{}, assembly.Config{}, fmt.Errorf("assembly references unknown plugins: %s", strings.Join(plan.Missing, ", "))
+		fmt.Fprintf(os.Stderr, "assembly references unknown plugins (continuing): %s\n", strings.Join(plan.Missing, ", "))
 	}
 	if dump {
 		dumpAssembly(plan)

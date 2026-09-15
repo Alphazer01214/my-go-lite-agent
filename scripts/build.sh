@@ -65,6 +65,9 @@ build_pkg "./cmd/liteagent-cli"   "$DIST/liteagent-cli"
 build_pkg "./cmd/liteagent-server" "$DIST/liteagent-server"
 
 # ── plugins ──────────────────────────────────────────────────────────────────
+install_plugin "agent"          "./plugins/agent"          '["loop"]' "[]" 180000 \
+    "Default Agent Plugin: composes llm/session/tools via the star (ADR-0016)"
+
 install_plugin "session"        "./plugins/session"        '["session"]' "[]" 0 \
     "File-backed session log plugin (JSONL) with the session trace Web view" \
     '[{"name":"dump-trace","description":"Export Session Log facts as JSON","usage":"/session dump-trace [sessionId]"},{"name":"list","description":"List sessions","usage":"/session list"},{"name":"derive","description":"Print Model Context from Session Log","usage":"/session derive [sessionId]"},{"name":"current","description":"Show Current Session id","usage":"/session current"}]'

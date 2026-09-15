@@ -18,9 +18,10 @@ func TestREPLTwoTurnsSameSession(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

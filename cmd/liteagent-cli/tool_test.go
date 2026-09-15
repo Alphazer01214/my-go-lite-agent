@@ -16,8 +16,9 @@ func TestToolCallPathOneTurn(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -81,8 +82,9 @@ func TestToolCallWithoutToolPluginStillAnswers(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","agent"]}`)
 
 	// No tools plugin: fake-llm must still answer without tool_calls.
 	cmd := exec.Command(hostBin,
@@ -117,8 +119,9 @@ func TestToolCallErrorStillCompletesTurn(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool","agent"]}`)
 
 	// "boom" makes echotool fail; Loop must log error tool_result and continue.
 	cmd := exec.Command(hostBin,

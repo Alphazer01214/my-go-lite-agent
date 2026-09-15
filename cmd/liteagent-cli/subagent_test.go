@@ -40,8 +40,9 @@ func TestSubagentSyncToolResult(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEmptyToolsPluginDir(t, root, pluginsDir, "emptytools")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","emptytools"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","emptytools","agent"]}`)
 
 	// Fake LLM: first hop with tools 鈫?tool_call to first tool (run_subagent injected).
 	// Input "SUBAGENT_TASK" becomes the subagent prompt.
@@ -116,6 +117,7 @@ func TestSubagentAsyncRejected(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildEmptyToolsPluginDir(t, root, pluginsDir, "emptytools")
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	bin := buildPkg(t, root, "./plugins/asyncsubllm")
 	dst := filepath.Join(pluginsDir, "asyncsubllm", "asyncsubllm.exe")
 	writeFile(t, filepath.Join(pluginsDir, "asyncsubllm", "plugin.json"), `{
@@ -135,7 +137,7 @@ func TestSubagentAsyncRejected(t *testing.T) {
 	}
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","asyncsubllm","emptytools"]}`)
+	writeFile(t, cfg, `{"plugins":["session","asyncsubllm","emptytools","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

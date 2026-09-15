@@ -20,8 +20,9 @@ func TestFileToolsIntegration(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildFileToolsPluginDir(t, root, pluginsDir, "filetools")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","filetools"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","filetools","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

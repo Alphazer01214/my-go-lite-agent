@@ -66,6 +66,7 @@ try {
     Build-Pkg "./cmd/liteagent-cli" (Join-Path $dist "liteagent-cli.exe")
     Build-Pkg "./cmd/liteagent-server" (Join-Path $dist "liteagent-server.exe")
 
+    Install-Plugin "agent"          "./plugins/agent"          '["loop"]' "[]" 180000 "Default Agent Plugin: composes llm/session/tools via the star (ADR-0016)"
     Install-Plugin "session"        "./plugins/session"        '["session"]' "[]" 0 "File-backed session log plugin (JSONL) with the session trace Web view" '[{"name":"dump-trace","description":"Export Session Log facts as JSON","usage":"/session dump-trace [sessionId]"},{"name":"list","description":"List sessions","usage":"/session list"},{"name":"derive","description":"Print Model Context from Session Log","usage":"/session derive [sessionId]"},{"name":"current","description":"Show Current Session id","usage":"/session current"}]'
     # session ships its own manifest (ui mounts: session-trace) and its UI Entry.
     Copy-Item (Join-Path $root "plugins\session\plugin.json") (Join-Path $dist "plugins\session\") -Force

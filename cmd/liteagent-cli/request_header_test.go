@@ -17,8 +17,9 @@ func TestRequestHeaderSnapshot(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

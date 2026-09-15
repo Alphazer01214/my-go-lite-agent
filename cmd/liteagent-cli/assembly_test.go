@@ -74,7 +74,7 @@ func TestAssemblyMountsOnlyNamedPlugins(t *testing.T) {
 	}
 }
 
-func TestAssemblyMissingPluginFails(t *testing.T) {
+func TestAssemblyMissingPluginSoftFails(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
@@ -83,13 +83,18 @@ func TestAssemblyMissingPluginFails(t *testing.T) {
 
 	cfg := filepath.Join(t.TempDir(), "bad.json")
 	writeFile(t, cfg, `{"plugins":["alpha","ghost"]}`)
-	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg)
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-dump")
 	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("want fail-loud, got: %s", out)
+	// Soft-fail (ADR-0017): missing plugin is reported but the process continues.
+	if err != nil {
+		t.Fatalf("want soft-fail continue, got: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "ghost") {
-		t.Fatalf("want missing plugin name in error: %s", out)
+	s := string(out)
+	if !strings.Contains(s, "ghost") {
+		t.Fatalf("want missing plugin name in warning: %s", s)
+	}
+	if !strings.Contains(s, "mount name=alpha") {
+		t.Fatalf("want alpha still mounted: %s", s)
 	}
 }

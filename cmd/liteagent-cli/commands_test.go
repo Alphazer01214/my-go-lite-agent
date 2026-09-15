@@ -111,8 +111,9 @@ func TestREPLSessionDumpTracePluginCommand(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"CMD_HELP_SYS"}]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
 		"/session dump-trace",
@@ -139,8 +140,9 @@ func TestContextManagerListModelContext(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"LIST_MC_SYS"}]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 
 	out := runREPLLines(t, hostBin, pluginsDir, cfg, []string{
 		"hello list mc",

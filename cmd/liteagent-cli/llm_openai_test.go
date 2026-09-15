@@ -115,8 +115,9 @@ func TestLLMOpenAIRealTurn(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildLLMOpenAIPluginDir(t, root, pluginsDir, "llm-openai", srv.URL, "deepseek-flash")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","llm-openai"]}`)
+	writeFile(t, cfg, `{"plugins":["session","llm-openai","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -153,8 +154,9 @@ func TestLLMOpenAIForwardsTools(t *testing.T) {
 	buildLLMOpenAIPluginDir(t, root, pluginsDir, "llm-openai", srv.URL, "deepseek-flash")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","llm-openai","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","llm-openai","echotool","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -179,11 +181,12 @@ func TestLLMOpenAIMissingKey(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildLLMOpenAIPluginDir(t, root, pluginsDir, "llm-openai", "http://127.0.0.1:1", "deepseek-flash")
 	// Remove apiKey from config by rewriting empty key.
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	writeFile(t, filepath.Join(pluginsDir, "llm-openai", "config.json"),
 		`{"baseURL":"http://127.0.0.1:1","apiKey":"","model":"deepseek-flash"}`)
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","llm-openai"]}`)
+	writeFile(t, cfg, `{"plugins":["session","llm-openai","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

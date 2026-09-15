@@ -19,9 +19,10 @@ func TestLoopSkipsDuplicateSystemAppend(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"CM_STABLE_SYSTEM"}]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 	env := hostEnv(t)
 
 	cmd1 := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-turn", "first")
@@ -72,9 +73,10 @@ func TestCLIContextUsageAndList(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments": [{"name":"identity","order":-1000,"text":"CLI_USAGE_SYSTEM"}]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

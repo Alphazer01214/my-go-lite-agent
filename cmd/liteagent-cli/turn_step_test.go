@@ -18,8 +18,9 @@ func TestTurnStepBoundaryEvents(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","echotool","agent"]}`)
 
 	// "hello" with tools 鈫?fake-llm issues one tool call 鈫?second step final reply.
 	cmd := exec.Command(hostBin,

@@ -2,7 +2,9 @@
 //
 // Capability: llm
 //   - complete: Call Payload {"messages":[...]}; streams presentation.stream chunk evt;
-//     res {"content"} or {"content":"","tool_calls":[...]}
+//     res {"content"} or {"content":"","tool_calls":[...]} plus OpenAI-format
+//     usage {"prompt_tokens","completion_tokens","total_tokens"} when the
+//     provider reports it (Host records llm_usage / Context Usage).
 //
 // Config: env OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL override config.json
 // beside the executable. Defaults target DeepSeek's OpenAI-compatible API.
@@ -11,9 +13,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,7 +34,27 @@ const (
 	defaultModel   = "deepseek-chat"
 	// defaultContextWindow is used when config/env leave contextWindow unset.
 	defaultContextWindow = 65536
+	// streamDeadline caps total generation time; header stall is cut earlier below.
+	streamDeadline = 10 * time.Minute
 )
+
+// sharedHTTPClient reuses TLS connections and fails header stalls quickly.
+// A per-request Client.Timeout would abort long streams mid-body.
+var sharedHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 type config struct {
 	BaseURL       string `json:"baseURL"`
@@ -97,17 +121,31 @@ type chatTool struct {
 	} `json:"function"`
 }
 
+// streamOptions asks OpenAI-compatible APIs to emit a final usage chunk
+// (empty choices + usage object). Providers that ignore it still stream fine.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []chatTool    `json:"tools,omitempty"`
-	Stream   bool          `json:"stream,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []chatMessage  `json:"messages"`
+	Tools         []chatTool     `json:"tools,omitempty"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
+	Usage Usage `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -129,6 +167,8 @@ type streamDelta struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	// Usage arrives on the final chunk when stream_options.include_usage is set.
+	Usage *Usage `json:"usage"`
 }
 
 func toWireMessages(in []struct {
@@ -213,25 +253,29 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		}
 	}
 	body := chatRequest{
-		Model:    cfg.Model,
-		Messages: messages,
-		Tools:    tools,
-		Stream:   true,
+		Model:         cfg.Model,
+		Messages:      messages,
+		Tools:         tools,
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	url := cfg.BaseURL + "/chat/completions"
-	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
+	// ResponseHeaderTimeout fails dead endpoints fast; body/stream may run long
+	// (no Client.Timeout — that would cancel mid-generation).
+	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := sharedHTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, &protocol.FrameError{Code: "llm_http_error", Message: err.Error()}
 	}
@@ -263,7 +307,8 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 			payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": msg.Content, "channel": "content"})
 			_ = s.EmitTo(reqID, "presentation", "stream", payload)
 		}
-		return marshalOut(msg)
+		usage := cr.Usage
+		return marshalOut(msg, usageOrNil(usage))
 	}
 
 	var content strings.Builder
@@ -272,6 +317,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 	}
 	var calls []accCall
 	callIdx := map[int]int{}
+	var usage *Usage
 
 	// Plugin-owned Session Log: one reasoning fact per model hop.
 	// Live Thinking is presentation stream only; durable log is a single append
@@ -293,6 +339,10 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		var d streamDelta
 		if err := json.Unmarshal([]byte(data), &d); err != nil {
 			continue
+		}
+		// Final usage chunk has empty choices (stream_options.include_usage).
+		if d.Usage != nil {
+			usage = d.Usage
 		}
 		if len(d.Choices) == 0 {
 			continue
@@ -329,9 +379,10 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 			calls[i].args += tc.Function.Arguments
 		}
 	}
-	// Persist the whole hop's thinking as one Session Log fact.
+	// Persist the whole hop's thinking as one Session Log fact (off the return path).
 	if reasonAcc.Len() > 0 {
-		appendReasoningFact(s, sessionID, reasonAcc.String())
+		text := reasonAcc.String()
+		go appendReasoningFact(s, sessionID, text)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, &protocol.FrameError{Code: "llm_stream_error", Message: err.Error()}
@@ -353,10 +404,18 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		}
 		msg.ToolCalls = append(msg.ToolCalls, w)
 	}
-	return marshalOut(msg)
+	return marshalOut(msg, usage)
 }
 
-func marshalOut(msg chatMessage) (json.RawMessage, error) {
+// usageOrNil returns nil when the provider reported no tokens (omit usage key).
+func usageOrNil(u Usage) *Usage {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	return &u
+}
+
+func marshalOut(msg chatMessage, usage *Usage) (json.RawMessage, error) {
 	type outCall struct {
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
@@ -373,6 +432,10 @@ func marshalOut(msg chatMessage) (json.RawMessage, error) {
 			list = append(list, outCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args})
 		}
 		out["tool_calls"] = list
+	}
+	// OpenAI-format usage: Host appends llm_usage fact and Context Manager prefers it.
+	if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0) {
+		out["usage"] = usage
 	}
 	return json.Marshal(out)
 }

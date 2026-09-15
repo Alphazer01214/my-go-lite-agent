@@ -17,8 +17,9 @@ func TestSessionDeriveKeepsToolCallID(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session"]}`)
+	writeFile(t, cfg, `{"plugins":["session","agent"]}`)
 
 	appendJSON := `[{"type":"tool_call","role":"assistant","content":"","meta":{"tool_calls":[{"tool_call_id":"call_abc","name":"read_file","arguments":{"path":"a.txt"}}]}},{"type":"tool_result","role":"tool","content":"ok","meta":{"tool_call_id":"call_abc"}}]`
 
@@ -85,9 +86,10 @@ func TestChatAssemblyInjectsNoToolsNote(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
 		"segments":[{"name":"identity","order":-1000,"text":"You are a lite agent."}]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

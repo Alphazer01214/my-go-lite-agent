@@ -24,6 +24,14 @@ import { mergeReasoningFacts } from '/app/facts.js';
 
 const POLL_MS = 2000;
 
+function fmtTs(ts) {
+  const n = Number(ts);
+  if (!n || !isFinite(n)) return '';
+  const d = new Date(n);
+  const pad = (x) => String(x).padStart(2, '0');
+  return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
 function summary(f) {
   const t = f.type || '';
   const role = f.role || '';
@@ -163,11 +171,14 @@ class SessionTrace extends HTMLElement {
     const kind = t === 'message' ? (role || 'msg') : t;
     const sid = f.sessionId !== undefined && f.sessionId !== null ? String(f.sessionId) : '';
     const short = sid ? (sid.length > 8 ? sid.slice(0, 8) : sid) : '·';
+    const ts = f.ts ? fmtTs(f.ts) : '';
     row.innerHTML = '<span class="t-kind">' + esc(kind) + '</span><span class="t-sum">' + esc(summary(f)) + '</span>'
+      + (ts ? '<span class="t-ts">' + esc(ts) + '</span>' : '')
       + '<span class="t-seq">' + esc(short) + ' #' + (f.seq || '') + '</span>';
     const det = document.createElement('div');
     det.className = 'trace-detail';
     let detail = f.content || '';
+    if (f.ts) detail = 'ts: ' + new Date(Number(f.ts)).toISOString() + '\n\n' + detail;
     if (f.sessionId !== undefined) detail = 'sessionId: ' + (f.sessionId || '(default)') + '\n\n' + detail;
     if (f.meta) detail += (detail ? '\n\n' : '') + JSON.stringify(f.meta, null, 2);
     det.textContent = detail || '(empty)';
@@ -196,6 +207,7 @@ const CSS = `
   .trace-row:hover { background:#1a1f2a; }
   .trace-row .t-kind { flex:0 0 72px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }
   .trace-row .t-sum { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--la-ink,#e8eaed); }
+  .trace-row .t-ts { flex:0 0 auto; font-size:10px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }
   .trace-row .t-seq { flex:0 0 auto; font-size:10px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }
   .trace-row.user .t-kind { color:#7aa2f7; }
   .trace-row.assistant .t-kind { color:var(--la-ok,#9ece6a); }

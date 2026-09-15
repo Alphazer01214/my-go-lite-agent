@@ -99,6 +99,9 @@ type Fact struct {
 	Role    string          `json:"role"`
 	Content string          `json:"content"`
 	Meta    json.RawMessage `json:"meta,omitempty"`
+	// Ts is append time (UnixMilli). Loaded facts keep their original ts;
+	// facts written before this field existed have ts=0.
+	Ts int64 `json:"ts,omitempty"`
 }
 
 type Message struct {
@@ -347,6 +350,7 @@ func (st *store) append(in struct {
 		Role:    in.Role,
 		Content: in.Content,
 		Meta:    in.Meta,
+		Ts:      time.Now().UnixMilli(),
 	}
 	st.facts = append(st.facts, f)
 	if st.file != nil {
@@ -719,7 +723,7 @@ func main() {
 				facts = []Fact{}
 			}
 			raw, err := json.MarshalIndent(map[string]any{
-				"sessionId": sid,
+				"sessionId":  sid,
 				"exportedAt": time.Now().UTC().Format(time.RFC3339),
 				"facts":      facts,
 			}, "", "  ")

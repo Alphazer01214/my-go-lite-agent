@@ -54,9 +54,10 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 			{"name": "rules", "order": 100, "text": "Be brief."}
 		]
 	}`)
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -122,8 +123,9 @@ func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
 	buildPromptRegPluginDir(t, root, pluginsDir, "promptreg")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","promptreg"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","promptreg","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,
@@ -156,8 +158,9 @@ func TestTurnWorksWithoutContextManager(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm"]}`)
+	writeFile(t, cfg, `{"plugins":["session","stubllm","agent"]}`)
 
 	cmd := exec.Command(hostBin,
 		"-plugins", pluginsDir,

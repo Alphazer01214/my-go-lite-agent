@@ -28,6 +28,28 @@ func buildSlowPluginDir(t *testing.T, root, pluginsDir, name string) {
 	}
 }
 
+func buildAgentPluginDir(t *testing.T, root, pluginsDir, name string) {
+	t.Helper()
+	bin := buildPkg(t, root, "./plugins/agent")
+	dst := filepath.Join(pluginsDir, name, name+".exe")
+	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
+		"name": "`+name+`",
+		"version": "0.1.0",
+		"protocol": 2,
+		"provides": ["loop"],
+		"consumes": [],
+		"entry": "`+name+`.exe",
+		"timeoutMs": 180000
+	}`)
+	b, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
 	bin := buildPkg(t, root, "./plugins/session")

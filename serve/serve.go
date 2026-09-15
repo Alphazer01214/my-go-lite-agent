@@ -369,6 +369,17 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	if f.Cap == PresentationCap && f.Method == PresentationPanelMethod {
 		s.dispatchPanel(from, f)
 	}
+	// Live stream chunks are a Presentation signal (ADR-0016): fan out even when
+	// the LLM Plugin was called by an external Agent via the star, not by Host.
+	if delta, channel, ok := extractStreamDelta(f); ok {
+		if s.OnStreamDelta != nil {
+			s.OnStreamDelta(delta)
+		}
+		s.publish(Event{Topic: "stream", Data: map[string]string{
+			"delta":   delta,
+			"channel": channel,
+		}})
+	}
 	if f.ID == "" {
 		return
 	}
@@ -1113,12 +1124,12 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 
 // ContextPrepareResult is one context.prepare outcome (ADR-0013).
 type ContextPrepareResult struct {
-	Messages     []Message      `json:"messages"`
-	Tools        []ToolSchema   `json:"tools"`
-	SystemText   string         `json:"systemText"`
-	Usage        map[string]any `json:"usage,omitempty"`
-	CompactHint  map[string]any `json:"compactHint,omitempty"`
-	ContextWindow int           `json:"contextWindow,omitempty"`
+	Messages      []Message      `json:"messages"`
+	Tools         []ToolSchema   `json:"tools"`
+	SystemText    string         `json:"systemText"`
+	Usage         map[string]any `json:"usage,omitempty"`
+	CompactHint   map[string]any `json:"compactHint,omitempty"`
+	ContextWindow int            `json:"contextWindow,omitempty"`
 }
 
 // LLMInfo is the llm.info payload (Context Window observation, ADR-0015).
@@ -1527,6 +1538,7 @@ func (s *Server) RunTurnOn(sessionID, userInput string) (*TurnResult, error) {
 }
 
 // CancelTurnOn requests the in-flight Loop on sessionID to stop at the next safe boundary.
+// Also notifies the mounted Agent Plugin so an external Loop can observe cancel (ADR-0016).
 func (s *Server) CancelTurnOn(sessionID string) {
 	sessionID = normalizeSessionID(sessionID)
 	s.turnStatesMu.Lock()
@@ -1534,6 +1546,19 @@ func (s *Server) CancelTurnOn(sessionID string) {
 	s.turnStatesMu.Unlock()
 	if st != nil {
 		st.cancel.Store(true)
+	}
+	s.mu.Lock()
+	loopOwner, ok := s.provides[LoopCap]
+	s.mu.Unlock()
+	if ok {
+		payload := MarshalPayload(map[string]any{"sessionId": sessionID})
+		_ = s.writeTo(loopOwner, &protocol.Frame{
+			V:       protocol.Version,
+			Type:    protocol.TypeReq,
+			Cap:     LoopCap,
+			Method:  "cancel",
+			Payload: payload,
+		})
 	}
 }
 
@@ -1615,15 +1640,13 @@ func (s *Server) NewSessionID(id string) (string, error) {
 	return id, nil
 }
 
-// runTurn executes one Turn on sessionID (empty = default).
-// allowSubagent controls whether Host injects the run_subagent tool schema.
-// extraSystem is an additional System Prompt fragment logged inside the Turn.
+// runTurn executes one Turn on sessionID via the mounted Agent Plugin (ADR-0016).
+// Host owns the per-session lock, Cancel/running status; Loop policy lives in the agent.
 func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraSystem string) (result *TurnResult, err error) {
 	if strings.TrimSpace(userInput) == "" {
 		return nil, fmt.Errorf("agent loop: user input is required")
 	}
 
-	// Per-Session lock: same Session serial, different Sessions parallel.
 	st := s.acquireTurn(sessionID)
 	if st == nil {
 		return nil, fmt.Errorf("session already has a running turn")
@@ -1633,390 +1656,31 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	s.mu.Lock()
 	loopOwner, hasExternalLoop := s.provides[LoopCap]
 	s.mu.Unlock()
-	if hasExternalLoop {
-		s.beginRunning(sessionID)
-		s.emitStatus(sessionID, "running")
-		res, err := s.runExternalTurn(loopOwner, sessionID, userInput)
-		s.endRunning(sessionID)
-		s.emitStatus(sessionID, "idle")
-		return res, err
+	if !hasExternalLoop {
+		return nil, fmt.Errorf("agent loop: no plugin provides %q (mount an Agent plugin)", LoopCap)
 	}
 
-	// Turn ordinal derives from the Session Log (see nextTurnNumber); the log
-	// is written before any numbering is used, so rebuildability holds.
-	turnN, err := s.nextTurnNumber(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
-	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-		"type": "turn_start",
-		"role": "host",
-		"meta": map[string]any{"turn": turnN},
-	}}); err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
 	s.beginRunning(sessionID)
 	s.emitStatus(sessionID, "running")
-	turnFailed := true
+	status := "idle"
 	defer func() {
-		meta := map[string]any{"turn": turnN, "reason": "completed"}
-		status := "idle"
-		if turnFailed {
-			meta["reason"] = "error"
-			if err != nil {
-				meta["error"] = err.Error()
-				status = "error: " + err.Error()
-			} else {
-				status = "error"
-			}
-		}
-		_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type": "turn_end",
-			"role": "host",
-			"meta": meta,
-		}})
 		s.endRunning(sessionID)
 		s.emitStatus(sessionID, status)
 	}()
 
-	// System Prompt is assembled then logged before any model-visible user input (ADR-0005/0006).
-	sysText, err := s.AssembleSystemPrompt()
+	res, err := s.runExternalTurn(loopOwner, sessionID, userInput, allowSubagent, extraSystem)
 	if err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
-	if extraSystem != "" {
-		if sysText != "" {
-			sysText += "\n\n"
-		}
-		sysText += extraSystem
-	}
-	s.mu.Lock()
-	_, hasToolsProvider := s.provides[ToolsCap]
-	s.mu.Unlock()
-	if !hasToolsProvider {
-		note := "No tools are mounted in this assembly. Do not claim to use tools, browse the workspace, or run commands. Answer from the conversation only, or ask the user to use the agent assembly if they need file tools."
-		if sysText != "" {
-			sysText += "\n\n"
-		}
-		sysText += note
-	}
-
-	if sysText != "" {
-		// Skip re-append when the same System Prompt is already the active one
-		// after any Context Summary (Q13 / ADR-0013).
-		lastSys, _ := s.lastSystemAfterSummary(sessionID)
-		if lastSys != sysText {
-			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type":    "message",
-				"role":    "system",
-				"content": sysText,
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
-		}
-	}
-
-	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-		"type":    "message",
-		"role":    "user",
-		"content": userInput,
-	}}); err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
-
-	schemas, err := s.CollectToolSchemas()
-	if err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
-	// Inject Subagent tool only when a Tools Plugin is mounted (avoids forcing
-	// tool-calls on minimal session+llm assemblies).
-	s.mu.Lock()
-	_, hasTools := s.provides[ToolsCap]
-	s.mu.Unlock()
-	if allowSubagent && hasTools {
-		schemas = append(schemas, subagentSchema)
-	}
-
-	// Context Window observation (ADR-0015): best-effort; 0 means unknown.
-	contextWindow := 0
-	if info, ierr := s.LLMInfo(); ierr == nil && info != nil {
-		contextWindow = info.ContextWindow
-	}
-
-	var allChunks []string
-	var toolNames []string
-	var assistant string
-
-	for step := 0; step < MaxSteps; step++ {
 		if st.cancel.Load() {
-			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type": "step_end",
-				"role": "host",
-				"meta": map[string]any{"turn": turnN, "step": max(step, 1), "reason": "cancelled"},
-			}})
+			status = "idle"
 			return nil, fmt.Errorf("turn cancelled")
 		}
-		stepN := step + 1
-		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type": "step_start",
-			"role": "host",
-			"meta": map[string]any{"turn": turnN, "step": stepN},
-		}}); err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
+		status = "error"
+		if err.Error() != "" {
+			status = "error: " + err.Error()
 		}
-
-		// Invariant: Model Context must be rebuildable from Session Log (ADR-0002).
-		ar, err := s.AgentRequest(sessionID, nil)
-		if err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
-		}
-
-		modelMessages := ar.Messages
-		if s.HasContextProvider() {
-			prep, perr := s.PrepareContext(sessionID, ar.Messages, contextWindow)
-			if perr != nil {
-				return nil, fmt.Errorf("agent loop: %w", perr)
-			}
-			// ADR-0002: prepare must not invent history. Prefer derive; reject drift.
-			if len(prep.Messages) > 0 && !messagesEqual(prep.Messages, ar.Messages) {
-				return nil, &protocol.FrameError{
-					Code:    "session_invariant_violation",
-					Message: "context.prepare messages are not reconstructable from session log",
-				}
-			}
-			// Prefer CM-collected tools; re-merge Host Subagent schema (prepare only sees tools.list).
-			if len(prep.Tools) > 0 {
-				schemas = prep.Tools
-				if allowSubagent {
-					schemas = append(schemas, subagentSchema)
-				}
-			}
-		}
-
-		s.mu.Lock()
-		llmOwner, ok := s.provides[LLMCap]
-		s.mu.Unlock()
-		if !ok {
-			return nil, fmt.Errorf("agent loop: no plugin provides %q", LLMCap)
-		}
-
-		// sessionId lets the LLM Plugin persist its own non-content streams
-		// (e.g. reasoning) via session.append without Host special-casing channels.
-		reqBody := map[string]any{"messages": modelMessages, "sessionId": sessionID}
-		if len(schemas) > 0 {
-			reqBody["tools"] = schemas
-		}
-
-		// Request Header snapshot for audit/replay (CONTEXT.md Request Header).
-		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type": "request_header",
-			"role": "host",
-			"meta": map[string]any{
-				"provider": "default",
-				"model":    "default",
-				"step":     stepN,
-				"turn":     turnN,
-			},
-		}}); err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
-		}
-
-		out, err := s.CallStreamOn(llmOwner, &protocol.Frame{
-			V:       protocol.Version,
-			Type:    protocol.TypeReq,
-			Cap:     LLMCap,
-			Method:  LLMCompleteMethod,
-			Payload: MarshalPayload(reqBody),
-		}, func(ev *protocol.Frame) {
-			if st.cancel.Load() {
-				return
-			}
-			if delta, channel, ok := extractStreamDelta(ev); ok {
-				if s.OnStreamDelta != nil {
-					s.OnStreamDelta(delta)
-				}
-				// Fan-out only: Host does not interpret channel semantics.
-				s.publish(Event{Topic: "stream", Data: map[string]string{
-					"delta":     delta,
-					"channel":   channel,
-					"sessionId": sessionID,
-				}})
-			}
-		})
-		if err != nil {
-			return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, err)
-		}
-		if out.Frame.Error != nil {
-			return nil, fmt.Errorf("agent loop: llm.%s: %w", LLMCompleteMethod, out.Frame.Error)
-		}
-
-		var llmOut struct {
-			Content   string         `json:"content"`
-			ToolCalls []ToolCall     `json:"tool_calls"`
-			Usage     map[string]any `json:"usage"`
-		}
-		if len(out.Frame.Payload) > 0 {
-			if err := json.Unmarshal(out.Frame.Payload, &llmOut); err != nil {
-				return nil, fmt.Errorf("agent loop: llm.%s: bad payload: %w", LLMCompleteMethod, err)
-			}
-		}
-
-		for _, ev := range out.Events {
-			if delta, _, ok := extractStreamDelta(ev); ok {
-				allChunks = append(allChunks, delta)
-			}
-		}
-
-		// Context Usage: prefer provider usage; keep for audit (CONTEXT.md Context Usage).
-		if len(llmOut.Usage) > 0 {
-			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type": "llm_usage",
-				"role": "host",
-				"meta": map[string]any{
-					"step":  stepN,
-					"turn":  turnN,
-					"usage": llmOut.Usage,
-				},
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
-			// Surface provider usage to Context Manager so CLI/Web prefer it over chars.
-			s.NoteContextUsage(sessionID, llmOut.Usage)
-		}
-
-		// Final assistant reply (no tool calls).
-		if len(llmOut.ToolCalls) == 0 {
-			assistant = llmOut.Content
-			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type":    "message",
-				"role":    "assistant",
-				"content": llmOut.Content,
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
-			// Settle: durable assistant body as markdown_text for every Render Medium.
-			if llmOut.Content != "" {
-				s.emitRenderIntent(RenderIntent{Kind: KindMarkdownText, Text: llmOut.Content, SessionID: sessionID})
-			}
-			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type": "step_end",
-				"role": "host",
-				"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "completed"},
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
-			break
-		}
-
-		// Last allowed model hop: do not execute tools we cannot feed back.
-		if step == MaxSteps-1 {
-			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type": "step_end",
-				"role": "host",
-				"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "max_steps"},
-			}})
-			return nil, fmt.Errorf("agent loop: exceeded %d steps", MaxSteps)
-		}
-
-		// Normalize tool-call ids: OpenAI/DeepSeek reject empty or duplicate tool_call_id.
-		seenIDs := map[string]bool{}
-		for i := range llmOut.ToolCalls {
-			if llmOut.ToolCalls[i].ID == "" || seenIDs[llmOut.ToolCalls[i].ID] {
-				llmOut.ToolCalls[i].ID = fmt.Sprintf("call_%d_%d", stepN, i+1)
-			}
-			seenIDs[llmOut.ToolCalls[i].ID] = true
-		}
-
-		// One assistant fact carries content (if any) + all tool_calls, then execute.
-		callMeta := make([]map[string]any, 0, len(llmOut.ToolCalls))
-		for _, tc := range llmOut.ToolCalls {
-			toolNames = append(toolNames, tc.Name)
-			item := map[string]any{
-				"id":           tc.ID,
-				"tool_call_id": tc.ID,
-				"name":         tc.Name,
-			}
-			if len(tc.Arguments) > 0 {
-				item["arguments"] = json.RawMessage(tc.Arguments)
-			}
-			callMeta = append(callMeta, item)
-		}
-		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type":    "tool_call",
-			"role":    "assistant",
-			"content": llmOut.Content,
-			"meta":    map[string]any{"tool_calls": callMeta},
-		}}); err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
-		}
-
-		for _, tc := range llmOut.ToolCalls {
-			toolOut, callErr := s.CallTool(sessionID, tc)
-			resultContent := ""
-			var additionalContexts []Message
-			if callErr != nil {
-				resultContent = "error: " + callErr.Error()
-			} else {
-				resultContent = toolOut.Content
-				additionalContexts = toolOut.AdditionalContexts
-			}
-			// Render Medium: summary_text card (pairs from args, detail = result + overflow).
-			pairs, overflow := JSONToPairs(tc.Arguments, MaxSummaryPairs)
-			detail := resultContent
-			if overflow != "" {
-				if detail != "" {
-					detail += "\n"
-				}
-				detail += overflow
-			}
-			s.emitRenderIntent(RenderIntent{
-				Kind:      KindSummaryText,
-				Title:     tc.Name,
-				Pairs:     pairs,
-				Detail:    TruncateRunes(detail, MaxSummaryDetail),
-				SessionID: sessionID,
-			})
-			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-				"type":    "tool_result",
-				"role":    "tool",
-				"content": resultContent,
-				"meta":    map[string]any{"tool_call_id": tc.ID},
-			}}); err != nil {
-				return nil, fmt.Errorf("agent loop: %w", err)
-			}
-			// Additional Contexts land after the tool result (CONTEXT / US16).
-			for _, ac := range additionalContexts {
-				if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-					"type":    "message",
-					"role":    defaultSystemRole(ac.Role),
-					"content": ac.Content,
-				}}); err != nil {
-					return nil, fmt.Errorf("agent loop: %w", err)
-				}
-			}
-		}
-
-		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
-			"type": "step_end",
-			"role": "host",
-			"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "tools"},
-		}}); err != nil {
-			return nil, fmt.Errorf("agent loop: %w", err)
-		}
+		return nil, err
 	}
-
-	msgs, err := s.DeriveMessages(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("agent loop: %w", err)
-	}
-	turnFailed = false
-	return &TurnResult{
-		User:      userInput,
-		Assistant: assistant,
-		Chunks:    allChunks,
-		ToolCalls: toolNames,
-		Messages:  msgs,
-	}, nil
+	return res, nil
 }
 
 // CollectToolSchemas asks the mounted Tools Plugin for model-facing tool registrations.
@@ -2193,10 +1857,13 @@ func (s *Server) CallTool(sessionID string, tc ToolCall) (*CallToolResult, error
 	return &out, nil
 }
 
-func (s *Server) runExternalTurn(owner, sessionID, userInput string) (*TurnResult, error) {
-	payload := map[string]string{"input": userInput}
+func (s *Server) runExternalTurn(owner, sessionID, userInput string, allowSubagent bool, extraSystem string) (*TurnResult, error) {
+	payload := map[string]any{"input": userInput, "allowSubagent": allowSubagent}
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
+	}
+	if extraSystem != "" {
+		payload["extraSystem"] = extraSystem
 	}
 	res, err := s.Call(owner, &protocol.Frame{
 		V:       protocol.Version,

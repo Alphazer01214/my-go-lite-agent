@@ -7,6 +7,37 @@ import (
 	"testing"
 )
 
+func TestSessionFactsCarryTimestamp(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session"]}`)
+
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-session-append", `[{"role":"user","content":"ts-check"}]`,
+		"-session-query",
+	)
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("session query: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, "ts-check") {
+		t.Fatalf("want fact content: %s", s)
+	}
+	// query JSON includes ts (UnixMilli) on each fact.
+	if !strings.Contains(s, `"ts"`) {
+		t.Fatalf("want ts field on session facts: %s", s)
+	}
+}
+
 func TestSessionAppendDerive(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
