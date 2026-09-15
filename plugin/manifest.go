@@ -105,8 +105,9 @@ type Manifest struct {
 	UI          *UISpec       `json:"ui,omitempty"`
 }
 
-// CurrentProtocol is the Frame/manifest protocol version this Host speaks.
-// Protocol 3 is the Web UI contract v2 (ADR-0012).
+// CurrentProtocol is the highest plugin.json "protocol" (manifest + UI
+// contract, ADR-0012) this Host accepts. It is not the Frame wire version —
+// Frame.V carries protocol.Version.
 const CurrentProtocol = 3
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)

@@ -40,6 +40,8 @@ const (
 
 // Version is the Frame protocol version carried in Frame.V.
 // v2: presentation render kinds are markdown_text | message_text | summary_text.
+// It versions the wire Frame only; the plugin.json "protocol" field is a
+// separate manifest/UI-contract version (plugin.CurrentProtocol, ADR-0012).
 const Version = 2
 
 // maxFrameSize guards against corrupt length prefixes.
