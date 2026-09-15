@@ -4,7 +4,7 @@
 //   - registerSegment / registerContext / assemble
 //
 // Capability: context
-//   - prepare:  {sessionId, messages} → {messages, tools, systemText, usage}
+//   - prepare:  {sessionId, messages, contextWindow} → {messages, tools, systemText, usage, compactHint}
 //   - compact:  {messages, coversThroughSeq} → {summary, coversThroughSeq} (manual; no auto-trigger)
 //   - usage:    last prepare usage for a session
 //   - listContext: Model Context messages from last prepare
@@ -56,8 +56,10 @@ type usageInfo struct {
 }
 
 type sessionState struct {
-	usage    usageInfo
-	messages []message
+	usage         usageInfo
+	messages      []message
+	contextWindow int
+	compactHint   map[string]any
 }
 
 type store struct {
@@ -107,40 +109,34 @@ func (st *store) loadBaseFile() {
 	}
 }
 
-func (st *store) registerSegment(seg Segment) error {
+// registerAt validates seg and stores it under its name; callers apply any
+// map-specific defaults before calling.
+func (st *store) registerAt(dst map[string]Segment, seg Segment) error {
 	if seg.Name == "" {
 		return &protocol.FrameError{Code: "bad_payload", Message: "name is required"}
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.segments[seg.Name] = seg
+	dst[seg.Name] = seg
 	return nil
+}
+
+func (st *store) registerSegment(seg Segment) error {
+	return st.registerAt(st.segments, seg)
 }
 
 func (st *store) registerContext(seg Segment) error {
-	if seg.Name == "" {
-		return &protocol.FrameError{Code: "bad_payload", Message: "name is required"}
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.contexts[seg.Name] = seg
-	return nil
+	return st.registerAt(st.contexts, seg)
 }
 
 func (st *store) registerSkill(seg Segment) error {
-	if seg.Name == "" {
-		return &protocol.FrameError{Code: "bad_payload", Message: "name is required"}
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if seg.Order == 0 {
 		seg.Order = 200
 	}
 	if seg.Text == "" {
 		seg.Text = seg.Name
 	}
-	st.skills[seg.Name] = seg
-	return nil
+	return st.registerAt(st.skills, seg)
 }
 
 func sortByOrderName(items []Segment) {
@@ -154,7 +150,7 @@ func sortByOrderName(items []Segment) {
 
 func joinParts(parts []string) string {
 	var b strings.Builder
-	for i, p := range parts {
+	for _, p := range parts {
 		if p == "" {
 			continue
 		}
@@ -162,9 +158,25 @@ func joinParts(parts []string) string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(p)
-		_ = i
 	}
 	return b.String()
+}
+
+// softBudgetRatio is the fraction of Context Window that triggers compactHint (ADR-0015).
+const softBudgetRatio = 0.80
+
+func buildCompactHint(tokens, window int) map[string]any {
+	if window <= 0 || tokens <= 0 {
+		return nil
+	}
+	suggest := float64(tokens) > softBudgetRatio*float64(window)
+	return map[string]any{
+		"suggestCompact":   suggest,
+		"estimatedTokens":  tokens,
+		"contextWindow":    window,
+		"threshold":        softBudgetRatio,
+		"thresholdTokens":  int(float64(window) * softBudgetRatio),
+	}
 }
 
 func (st *store) assemble() (text string, segments []Segment) {
@@ -306,8 +318,9 @@ func main() {
 
 	s.Handle("context", "prepare", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
-			SessionID string    `json:"sessionId"`
-			Messages  []message `json:"messages"`
+			SessionID     string    `json:"sessionId"`
+			Messages      []message `json:"messages"`
+			ContextWindow int       `json:"contextWindow"`
 		}
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &in); err != nil {
@@ -327,6 +340,7 @@ func main() {
 			MessageCount:    len(in.Messages),
 			Source:          "chars",
 		}
+		hint := buildCompactHint(u.EstimatedTokens, in.ContextWindow)
 		sid := in.SessionID
 		if sid == "" {
 			sid = "default"
@@ -338,23 +352,34 @@ func main() {
 		if prev := st.session[sid]; prev != nil && prev.usage.Source == "provider" {
 			providerTokens = prev.usage.EstimatedTokens
 		}
-		st.session[sid] = &sessionState{usage: u, messages: in.Messages}
+		st.session[sid] = &sessionState{
+			usage:         u,
+			messages:      in.Messages,
+			contextWindow: in.ContextWindow,
+			compactHint:   hint,
+		}
 		st.mu.Unlock()
 		if providerTokens > 0 {
 			u.Source = "provider"
 			u.EstimatedTokens = providerTokens
+			hint = buildCompactHint(u.EstimatedTokens, in.ContextWindow)
 			st.mu.Lock()
 			st.session[sid].usage = u
+			st.session[sid].compactHint = hint
 			st.mu.Unlock()
 		}
 
-		return json.Marshal(map[string]any{
+		out := map[string]any{
 			"messages":   in.Messages,
 			"tools":      tools,
 			"systemText": systemText,
 			"segments":   segments,
 			"usage":      u,
-		})
+		}
+		if hint != nil {
+			out["compactHint"] = hint
+		}
+		return json.Marshal(out)
 	})
 
 	s.Handle("context", "noteUsage", func(req *pluginsdk.Request) (json.RawMessage, error) {
@@ -429,7 +454,14 @@ func main() {
 		if sess == nil {
 			return json.Marshal(map[string]any{"usage": nil})
 		}
-		return json.Marshal(map[string]any{"usage": sess.usage})
+		out := map[string]any{"usage": sess.usage}
+		if sess.contextWindow > 0 {
+			out["contextWindow"] = sess.contextWindow
+		}
+		if sess.compactHint != nil {
+			out["compactHint"] = sess.compactHint
+		}
+		return json.Marshal(out)
 	})
 
 	s.Handle("context", "listContext", func(req *pluginsdk.Request) (json.RawMessage, error) {
@@ -481,7 +513,11 @@ func main() {
 			if sess == nil {
 				return json.Marshal(map[string]string{"text": "(no usage yet — run a turn first)"})
 			}
-			raw, _ := json.MarshalIndent(sess.usage, "", "  ")
+			raw, _ := json.MarshalIndent(map[string]any{
+				"usage":         sess.usage,
+				"contextWindow": sess.contextWindow,
+				"compactHint":   sess.compactHint,
+			}, "", "  ")
 			return json.Marshal(map[string]string{"text": string(raw)})
 		case "list":
 			st.mu.Lock()

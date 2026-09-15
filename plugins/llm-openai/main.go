@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,18 +28,22 @@ import (
 const (
 	defaultBaseURL = "https://api.deepseek.com/v1"
 	defaultModel   = "deepseek-chat"
+	// defaultContextWindow is used when config/env leave contextWindow unset.
+	defaultContextWindow = 65536
 )
 
 type config struct {
-	BaseURL string `json:"baseURL"`
-	APIKey  string `json:"apiKey"`
-	Model   string `json:"model"`
+	BaseURL       string `json:"baseURL"`
+	APIKey        string `json:"apiKey"`
+	Model         string `json:"model"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
 }
 
 func loadConfig() config {
 	cfg := config{
-		BaseURL: defaultBaseURL,
-		Model:   defaultModel,
+		BaseURL:       defaultBaseURL,
+		Model:         defaultModel,
+		ContextWindow: defaultContextWindow,
 	}
 	if exe, err := os.Executable(); err == nil {
 		raw, err := os.ReadFile(filepath.Join(filepath.Dir(exe), "config.json"))
@@ -55,7 +60,15 @@ func loadConfig() config {
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		cfg.Model = v
 	}
+	if v := os.Getenv("OPENAI_CONTEXT_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ContextWindow = n
+		}
+	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	if cfg.ContextWindow <= 0 {
+		cfg.ContextWindow = defaultContextWindow
+	}
 	return cfg
 }
 
@@ -400,21 +413,49 @@ func saveConfig(cfg config) error {
 	return os.WriteFile(configPath(), raw, 0o600)
 }
 
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) > 8 {
+		return key[:4] + "…" + key[len(key)-4:]
+	}
+	return "…"
+}
+
+func configText(cfg config) string {
+	return fmt.Sprintf("baseURL=%s\nmodel=%s\napiKey=%s\ncontextWindow=%d",
+		cfg.BaseURL, cfg.Model, maskKey(cfg.APIKey), cfg.ContextWindow)
+}
+
+func applyConfigKey(cfg *config, k, v string) error {
+	switch k {
+	case "apiKey":
+		cfg.APIKey = v
+	case "baseURL":
+		cfg.BaseURL = strings.TrimRight(v, "/")
+	case "model":
+		cfg.Model = v
+	case "contextWindow":
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return &protocol.FrameError{Code: "bad_assignment", Message: "contextWindow must be a positive integer"}
+		}
+		cfg.ContextWindow = n
+	default:
+		return &protocol.FrameError{
+			Code:    "unknown_key",
+			Message: fmt.Sprintf("unknown config key %q (apiKey|baseURL|model|contextWindow)", k),
+		}
+	}
+	return nil
+}
+
 func handleConfigCommand(args string) (json.RawMessage, error) {
 	cfg := loadConfig()
 	fields := strings.Fields(args)
 	if len(fields) == 0 || fields[0] == "get" {
-		// Never print the raw API key.
-		key := cfg.APIKey
-		if key != "" {
-			if len(key) > 8 {
-				key = key[:4] + "…" + key[len(key)-4:]
-			} else {
-				key = "…"
-			}
-		}
-		text := fmt.Sprintf("baseURL=%s\nmodel=%s\napiKey=%s", cfg.BaseURL, cfg.Model, key)
-		return json.Marshal(map[string]string{"text": text})
+		return json.Marshal(map[string]string{"text": configText(cfg)})
 	}
 	if fields[0] != "set" {
 		return nil, &protocol.FrameError{
@@ -431,18 +472,8 @@ func handleConfigCommand(args string) (json.RawMessage, error) {
 				Message: fmt.Sprintf("expected key=value, got %q", kv),
 			}
 		}
-		switch k {
-		case "apiKey":
-			cfg.APIKey = v
-		case "baseURL":
-			cfg.BaseURL = strings.TrimRight(v, "/")
-		case "model":
-			cfg.Model = v
-		default:
-			return nil, &protocol.FrameError{
-				Code:    "unknown_key",
-				Message: fmt.Sprintf("unknown config key %q (apiKey|baseURL|model)", k),
-			}
+		if err := applyConfigKey(&cfg, k, v); err != nil {
+			return nil, err
 		}
 		changed = true
 	}
@@ -455,10 +486,59 @@ func handleConfigCommand(args string) (json.RawMessage, error) {
 	return json.Marshal(map[string]string{"text": "config saved to " + configPath()})
 }
 
+func handleConfigCap(method string, payload json.RawMessage) (json.RawMessage, error) {
+	switch method {
+	case "reload":
+		cfg := loadConfig()
+		return json.Marshal(map[string]any{"ok": true, "contextWindow": cfg.ContextWindow, "model": cfg.Model})
+	case "get":
+		cfg := loadConfig()
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "baseURL", "value": cfg.BaseURL, "type": "string"},
+				{"name": "apiKey", "value": maskKey(cfg.APIKey), "secret": true, "type": "string"},
+				{"name": "model", "value": cfg.Model, "type": "string"},
+				{"name": "contextWindow", "value": cfg.ContextWindow, "type": "integer"},
+			},
+		})
+	case "schema":
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "baseURL", "type": "string", "description": "OpenAI-compatible API base URL"},
+				{"name": "apiKey", "type": "string", "secret": true, "description": "API key"},
+				{"name": "model", "type": "string", "description": "Model id"},
+				{"name": "contextWindow", "type": "integer", "default": defaultContextWindow, "description": "Max model context tokens"},
+			},
+		})
+	case "set":
+		var in map[string]any
+		if len(payload) > 0 {
+			if err := json.Unmarshal(payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		cfg := loadConfig()
+		for k, raw := range in {
+			v := fmt.Sprint(raw)
+			if err := applyConfigKey(&cfg, k, v); err != nil {
+				return nil, err
+			}
+		}
+		if err := saveConfig(cfg); err != nil {
+			return nil, &protocol.FrameError{Code: "save_failed", Message: err.Error()}
+		}
+		return json.Marshal(map[string]any{"ok": true})
+	default:
+		return nil, &protocol.FrameError{Code: "unknown_method", Message: "config." + method}
+	}
+}
+
 func main() {
 	s := pluginsdk.New()
-	cfg := loadConfig()
+	// Hot-reload: never capture startup cfg in the complete closure (config set / reload
+	// must take effect on the next model hop without restarting the process).
 	s.Handle("llm", "complete", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		cfg := loadConfig()
 		var in struct {
 			SessionID string `json:"sessionId"`
 			Messages  []struct {
@@ -483,6 +563,26 @@ func main() {
 			}
 		}
 		return complete(cfg, req.ID, s, in.SessionID, toWireMessages(in.Messages), toWireTools(in.Tools))
+	})
+	s.Handle("llm", "info", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		cfg := loadConfig()
+		return json.Marshal(map[string]any{
+			"contextWindow": cfg.ContextWindow,
+			"model":         cfg.Model,
+			"provider":      "openai-compatible",
+		})
+	})
+	s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("get", req.Payload)
+	})
+	s.Handle("config", "set", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("set", req.Payload)
+	})
+	s.Handle("config", "schema", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("schema", req.Payload)
+	})
+	s.Handle("config", "reload", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("reload", req.Payload)
 	})
 	s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {

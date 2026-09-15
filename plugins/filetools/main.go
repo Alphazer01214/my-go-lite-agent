@@ -21,6 +21,9 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
+// defaultReadLines is the limit when the caller omits limit (memory-opt: keep tool results small).
+const defaultReadLines = 500
+
 // maxReadLines bounds how many lines read_file returns per call.
 const maxReadLines = 5000
 
@@ -55,7 +58,7 @@ var toolSchemas = []map[string]any{
 			"properties": map[string]any{
 				"path":   map[string]string{"type": "string", "description": "File path to read"},
 				"offset": map[string]any{"type": "integer", "description": "Starting line number (0-based, default 0)", "default": 0},
-				"limit":  map[string]any{"type": "integer", "description": "Maximum lines to return (default: all, max 5000)", "default": maxReadLines},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum lines to return (default 500, max 5000). Use offset to page.", "default": defaultReadLines},
 			},
 			"required": []string{"path"},
 		},
@@ -172,7 +175,7 @@ func handleReadFile(args json.RawMessage) (string, error) {
 		return "", err
 	}
 	if in.Limit <= 0 {
-		in.Limit = maxReadLines
+		in.Limit = defaultReadLines
 	}
 	if in.Limit > maxReadLines {
 		in.Limit = maxReadLines

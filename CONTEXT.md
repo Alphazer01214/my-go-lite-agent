@@ -49,7 +49,7 @@ Web Medium 暴露给 Panel Component 的作者 SDK 面（LiteAgent 全局与 /ap
 _Avoid_: 公共库、shared utils、Shell 内部模块
 
 **Current Session**:
-session Capability 上的媒介无关「当前会话」状态：get/select/list/create。Web Medium 不再自持专用真源。
+session Capability 上的媒介无关「当前会话」状态：current/select/list/create。id 恒为非空；空值统一映射为 `default`。create 默认铸新 id 并选中，但 `origin=subagent` 的创建不抢占 Current。Web Medium 不再自持专用真源。
 _Avoid_: 默认会话、活动会话 id（口语可用）
 
 **Panel**:
@@ -145,7 +145,7 @@ _Avoid_: 系统提示、system message（可作别名，规范名词是 System P
 _Avoid_: 请求头、调用配置（规范名词是 Request Header）
 
 **Subagent**:
-由父 Agent 经 tool call 触发的独立 Agent 实例：拥有自己的 Session 与 Agent Loop，产出以 tool result 回传父 Agent。
+由父 Agent 经 tool call 触发的独立 Agent 实例：拥有自己的 Session 与 Agent Loop，产出以 tool result 回传父 Agent。子 Session 元数据记录 `parentSession` / `origin=subagent` / `delegationDepth`；父 Session 可经 list/family 进入查看子 Session，子不抢占 Current Session。
 _Avoid_: 子智能体、nested agent、child agent（规范名词是 Subagent）
 
 **Context Manager**:
@@ -167,3 +167,15 @@ _Avoid_: 压缩块、记忆摘要（规范名词是 Context Summary）
 **Context Usage**:
 单次模型请求的 token 占用观测：优先供应商 usage，缺失时字符估算。经 log/接口暴露给 CLI 与 Render Medium，不是第二真源。
 _Avoid_: 配额、计费用量（若语义不同）
+
+**Context Window**:
+模型单次请求可容纳的最大上下文长度（token）。由 LLM 插件声明、用户可覆盖；仅作观测与 soft 阈值比较，不是 Session 真源。
+_Avoid_: 窗口大小、max_tokens（采样参数，语义不同）
+
+**Tool Result Stub**:
+derive 对超出全文保留窗口的历史 `tool_result` 的短投影（说明截断与如何恢复）。Session Log 原文不变；`tool_call` 永不 stub。
+_Avoid_: 工具结果截断（可作口语）、placeholder
+
+**Config Capability**:
+插件运行时配置面：get / set / schema / reload。与 Manifest（元数据）分离；`/refresh` 可广播 reload，不热插拔进程。
+_Avoid_: 插件配置文件（磁盘 config.json 只是持久化）、Manifest 参数

@@ -78,6 +78,30 @@ func TestReadFileOffsetLimit(t *testing.T) {
 	}
 }
 
+func TestReadFileDefaultLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long.txt")
+	var b strings.Builder
+	for i := 0; i < 600; i++ {
+		b.WriteString("row\n")
+	}
+	os.WriteFile(path, []byte(b.String()), 0o644)
+
+	out, err := callTool(t, "read_file", map[string]string{"path": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "501\t") {
+		t.Fatalf("default limit must be 500, got line 501: %s", out)
+	}
+	if !strings.Contains(out, "500\t") {
+		t.Fatalf("want line 500 under default limit: %s", out)
+	}
+	if !strings.Contains(out, "more lines") || !strings.Contains(out, "offset=500") {
+		t.Fatalf("want pagination hint after default cap: %s", out)
+	}
+}
+
 func TestReadFilePaginationHint(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.txt")

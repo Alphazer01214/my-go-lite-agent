@@ -335,9 +335,6 @@ func (s *Server) ensureAlive(name string) error {
 	// Reap old process without hanging the caller. Do not Wait here:
 	// Close owns Wait; a second Wait on the same Cmd panics.
 	if old != nil {
-		s.mu.Lock()
-		// best-effort stdin close if we still hold it
-		s.mu.Unlock()
 		killTree(old)
 	}
 	s.mu.Lock()
@@ -901,6 +898,14 @@ type ToolSchema struct {
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 }
 
+// subagentSchema is the Host-injected run_subagent tool schema (single source;
+// re-appended after Context Prepare replaces the collected tools list).
+var subagentSchema = ToolSchema{
+	Name:        SubagentToolName,
+	Description: "Run a focused subagent on a child session linked to this session and return its final reply.",
+	InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
+}
+
 // ToolCall is a model-requested tool invocation.
 type ToolCall struct {
 	ID        string          `json:"id"`
@@ -1108,10 +1113,49 @@ func (s *Server) AssembleSystemPrompt() (string, error) {
 
 // ContextPrepareResult is one context.prepare outcome (ADR-0013).
 type ContextPrepareResult struct {
-	Messages   []Message      `json:"messages"`
-	Tools      []ToolSchema   `json:"tools"`
-	SystemText string         `json:"systemText"`
-	Usage      map[string]any `json:"usage,omitempty"`
+	Messages     []Message      `json:"messages"`
+	Tools        []ToolSchema   `json:"tools"`
+	SystemText   string         `json:"systemText"`
+	Usage        map[string]any `json:"usage,omitempty"`
+	CompactHint  map[string]any `json:"compactHint,omitempty"`
+	ContextWindow int           `json:"contextWindow,omitempty"`
+}
+
+// LLMInfo is the llm.info payload (Context Window observation, ADR-0015).
+type LLMInfo struct {
+	ContextWindow int    `json:"contextWindow"`
+	Model         string `json:"model"`
+	Provider      string `json:"provider"`
+}
+
+// LLMInfo queries the mounted LLM plugin for model metadata (empty when absent).
+func (s *Server) LLMInfo() (*LLMInfo, error) {
+	s.mu.Lock()
+	owner, ok := s.provides[LLMCap]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no plugin provides %q", LLMCap)
+	}
+	res, err := s.Call(owner, &protocol.Frame{
+		V:       protocol.Version,
+		Type:    protocol.TypeReq,
+		Cap:     LLMCap,
+		Method:  "info",
+		Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm.info: %w", err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("llm.info: %w", res.Error)
+	}
+	var info LLMInfo
+	if len(res.Payload) > 0 {
+		if err := json.Unmarshal(res.Payload, &info); err != nil {
+			return nil, fmt.Errorf("llm.info: bad payload: %w", err)
+		}
+	}
+	return &info, nil
 }
 
 // HasContextProvider reports whether a Context Manager provides `context`.
@@ -1123,7 +1167,8 @@ func (s *Server) HasContextProvider() bool {
 }
 
 // PrepareContext asks Context Manager to assemble messages/tools for one model hop.
-func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextPrepareResult, error) {
+// contextWindow (0 = unknown) enables compactHint without auto-compaction.
+func (s *Server) PrepareContext(sessionID string, messages []Message, contextWindow int) (*ContextPrepareResult, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[ContextCap]
 	s.mu.Unlock()
@@ -1131,8 +1176,9 @@ func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextP
 		return nil, fmt.Errorf("no plugin provides %q", ContextCap)
 	}
 	payload := MarshalPayload(map[string]any{
-		"sessionId": sessionID,
-		"messages":  messages,
+		"sessionId":     sessionID,
+		"messages":      messages,
+		"contextWindow": contextWindow,
 	})
 	res, err := s.Call(owner, &protocol.Frame{
 		V:       protocol.Version,
@@ -1148,10 +1194,12 @@ func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextP
 		return nil, fmt.Errorf("context.prepare: %w", res.Error)
 	}
 	var out struct {
-		Messages   []Message      `json:"messages"`
-		Tools      []ToolSchema   `json:"tools"`
-		SystemText string         `json:"systemText"`
-		Usage      map[string]any `json:"usage"`
+		Messages      []Message      `json:"messages"`
+		Tools         []ToolSchema   `json:"tools"`
+		SystemText    string         `json:"systemText"`
+		Usage         map[string]any `json:"usage"`
+		CompactHint   map[string]any `json:"compactHint"`
+		ContextWindow int            `json:"contextWindow"`
 	}
 	if len(res.Payload) > 0 {
 		if err := json.Unmarshal(res.Payload, &out); err != nil {
@@ -1164,11 +1212,17 @@ func (s *Server) PrepareContext(sessionID string, messages []Message) (*ContextP
 	if out.Tools == nil {
 		out.Tools = []ToolSchema{}
 	}
+	window := out.ContextWindow
+	if window == 0 {
+		window = contextWindow
+	}
 	return &ContextPrepareResult{
-		Messages:   out.Messages,
-		Tools:      out.Tools,
-		SystemText: out.SystemText,
-		Usage:      out.Usage,
+		Messages:      out.Messages,
+		Tools:         out.Tools,
+		SystemText:    out.SystemText,
+		Usage:         out.Usage,
+		CompactHint:   out.CompactHint,
+		ContextWindow: window,
 	}, nil
 }
 
@@ -1214,6 +1268,23 @@ func (s *Server) lastSystemAfterSummary(sessionID string) (content string, hasSu
 		content, _ = f["content"].(string)
 	}
 	return content, hasSummary
+}
+
+// nextTurnNumber derives the next Turn ordinal from the Session Log: one
+// prior turn_start fact per Turn, so numbering survives Host restarts
+// (Session Log is the only truth, CONTEXT.md).
+func (s *Server) nextTurnNumber(sessionID string) (int, error) {
+	facts, err := s.QuerySessionFacts(sessionID, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	n := 1
+	for _, f := range facts {
+		if fmt.Sprint(f["type"]) == "turn_start" {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // ContextUsage returns the Context Manager's last prepare usage for a session.
@@ -1319,7 +1390,17 @@ type sessionTurn struct {
 	running atomic.Bool
 }
 
+// normalizeSessionID maps empty/blank to the default Session id so Host turn
+// state, status, and render tags never split "" vs "default" into two Sessions.
+func normalizeSessionID(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return "default"
+	}
+	return id
+}
+
 func (s *Server) turnFor(sid string) *sessionTurn {
+	sid = normalizeSessionID(sid)
 	s.turnStatesMu.Lock()
 	defer s.turnStatesMu.Unlock()
 	if s.turnStates == nil {
@@ -1358,6 +1439,7 @@ func (s *Server) IsRunning() bool {
 
 // IsRunningOn reports whether sid itself has an in-flight turn.
 func (s *Server) IsRunningOn(sid string) bool {
+	sid = normalizeSessionID(sid)
 	s.turnStatesMu.Lock()
 	defer s.turnStatesMu.Unlock()
 	st := s.turnStates[sid]
@@ -1377,15 +1459,6 @@ func (s *Server) RunningSessions() []string {
 	return out
 }
 
-// RunningSession returns one in-flight Session id ("" if idle). Prefer IsRunningOn.
-func (s *Server) RunningSession() string {
-	list := s.RunningSessions()
-	if len(list) > 0 {
-		return list[0]
-	}
-	return ""
-}
-
 // StatusForSession reports "running" when sid owns an in-flight turn, else "idle".
 func (s *Server) StatusForSession(sid string) string {
 	if s.IsRunningOn(sid) {
@@ -1395,6 +1468,7 @@ func (s *Server) StatusForSession(sid string) string {
 }
 
 func (s *Server) emitStatus(sessionID, status string) {
+	sessionID = normalizeSessionID(sessionID)
 	if s.OnStatus != nil {
 		s.OnStatus(status)
 	}
@@ -1403,6 +1477,9 @@ func (s *Server) emitStatus(sessionID, status string) {
 
 // emitRenderIntent notifies the CLI hook and all Subscribers (Web Medium).
 func (s *Server) emitRenderIntent(ri RenderIntent) {
+	if ri.SessionID == "" {
+		ri.SessionID = "default"
+	}
 	if s.OnRender != nil {
 		s.OnRender(ri)
 	}
@@ -1446,11 +1523,12 @@ func (s *Server) RunTurn(userInput string) (*TurnResult, error) {
 // RunTurnOn is RunTurn bound to a Session id (empty = default).
 // Turns on different Sessions run in parallel; the same Session stays serial.
 func (s *Server) RunTurnOn(sessionID, userInput string) (*TurnResult, error) {
-	return s.runTurn(sessionID, userInput, true, "")
+	return s.runTurn(normalizeSessionID(sessionID), userInput, true, "")
 }
 
 // CancelTurnOn requests the in-flight Loop on sessionID to stop at the next safe boundary.
 func (s *Server) CancelTurnOn(sessionID string) {
+	sessionID = normalizeSessionID(sessionID)
 	s.turnStatesMu.Lock()
 	st := s.turnStates[sessionID]
 	s.turnStatesMu.Unlock()
@@ -1474,6 +1552,7 @@ func (s *Server) CancelTurn() {
 
 // TurnCancelledOn reports whether CancelTurnOn was requested for sessionID.
 func (s *Server) TurnCancelledOn(sessionID string) bool {
+	sessionID = normalizeSessionID(sessionID)
 	s.turnStatesMu.Lock()
 	st := s.turnStates[sessionID]
 	s.turnStatesMu.Unlock()
@@ -1563,10 +1642,16 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		return res, err
 	}
 
+	// Turn ordinal derives from the Session Log (see nextTurnNumber); the log
+	// is written before any numbering is used, so rebuildability holds.
+	turnN, err := s.nextTurnNumber(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
 	if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 		"type": "turn_start",
 		"role": "host",
-		"meta": map[string]any{"turn": 1},
+		"meta": map[string]any{"turn": turnN},
 	}}); err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
@@ -1574,7 +1659,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	s.emitStatus(sessionID, "running")
 	turnFailed := true
 	defer func() {
-		meta := map[string]any{"turn": 1, "reason": "completed"}
+		meta := map[string]any{"turn": turnN, "reason": "completed"}
 		status := "idle"
 		if turnFailed {
 			meta["reason"] = "error"
@@ -1649,11 +1734,13 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 	_, hasTools := s.provides[ToolsCap]
 	s.mu.Unlock()
 	if allowSubagent && hasTools {
-		schemas = append(schemas, ToolSchema{
-			Name:        SubagentToolName,
-			Description: "Run a focused subagent on a new session and return its final reply.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
-		})
+		schemas = append(schemas, subagentSchema)
+	}
+
+	// Context Window observation (ADR-0015): best-effort; 0 means unknown.
+	contextWindow := 0
+	if info, ierr := s.LLMInfo(); ierr == nil && info != nil {
+		contextWindow = info.ContextWindow
 	}
 
 	var allChunks []string
@@ -1665,7 +1752,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
 				"role": "host",
-				"meta": map[string]any{"turn": 1, "step": max(step, 1), "reason": "cancelled"},
+				"meta": map[string]any{"turn": turnN, "step": max(step, 1), "reason": "cancelled"},
 			}})
 			return nil, fmt.Errorf("turn cancelled")
 		}
@@ -1673,7 +1760,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type": "step_start",
 			"role": "host",
-			"meta": map[string]any{"turn": 1, "step": stepN},
+			"meta": map[string]any{"turn": turnN, "step": stepN},
 		}}); err != nil {
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
@@ -1686,7 +1773,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 
 		modelMessages := ar.Messages
 		if s.HasContextProvider() {
-			prep, perr := s.PrepareContext(sessionID, ar.Messages)
+			prep, perr := s.PrepareContext(sessionID, ar.Messages, contextWindow)
 			if perr != nil {
 				return nil, fmt.Errorf("agent loop: %w", perr)
 			}
@@ -1701,11 +1788,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			if len(prep.Tools) > 0 {
 				schemas = prep.Tools
 				if allowSubagent {
-					schemas = append(schemas, ToolSchema{
-						Name:        SubagentToolName,
-						Description: "Run a focused subagent on a new session and return its final reply.",
-						InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"},"text":{"type":"string"},"systemPrompt":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["sync","async"]}},"required":["input"]}`),
-					})
+					schemas = append(schemas, subagentSchema)
 				}
 			}
 		}
@@ -1732,7 +1815,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				"provider": "default",
 				"model":    "default",
 				"step":     stepN,
-				"turn":     1,
+				"turn":     turnN,
 			},
 		}}); err != nil {
 			return nil, fmt.Errorf("agent loop: %w", err)
@@ -1791,7 +1874,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 				"role": "host",
 				"meta": map[string]any{
 					"step":  stepN,
-					"turn":  1,
+					"turn":  turnN,
 					"usage": llmOut.Usage,
 				},
 			}}); err != nil {
@@ -1818,7 +1901,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
 				"role": "host",
-				"meta": map[string]any{"turn": 1, "step": stepN, "reason": "completed"},
+				"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "completed"},
 			}}); err != nil {
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
@@ -1830,7 +1913,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 			_, _ = s.AppendSessionFacts(sessionID, []map[string]any{{
 				"type": "step_end",
 				"role": "host",
-				"meta": map[string]any{"turn": 1, "step": stepN, "reason": "max_steps"},
+				"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "max_steps"},
 			}})
 			return nil, fmt.Errorf("agent loop: exceeded %d steps", MaxSteps)
 		}
@@ -1916,7 +1999,7 @@ func (s *Server) runTurn(sessionID, userInput string, allowSubagent bool, extraS
 		if _, err := s.AppendSessionFacts(sessionID, []map[string]any{{
 			"type": "step_end",
 			"role": "host",
-			"meta": map[string]any{"turn": 1, "step": stepN, "reason": "tools"},
+			"meta": map[string]any{"turn": turnN, "step": stepN, "reason": "tools"},
 		}}); err != nil {
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
@@ -2003,9 +2086,10 @@ func (s *Server) CreateSession(sessionID, parentSession, origin string, delegati
 	return nil
 }
 
-// RunSubagent spawns a Subagent: new Session + default Loop (allowSubagent=false to avoid recursion).
+// RunSubagent spawns a Subagent: new Session linked to parentSessionID + default Loop
+// (allowSubagent=false to avoid recursion). The child does not become Current Session.
 // v1 supports mode=sync only; async returns an error (spec Out of Scope / ticket 06).
-func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []string) (string, error) {
+func (s *Server) RunSubagent(parentSessionID, input, systemPrompt, mode string, toolFilter []string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", &protocol.FrameError{Code: "bad_payload", Message: "subagent input is required"}
 	}
@@ -2017,11 +2101,18 @@ func (s *Server) RunSubagent(input, systemPrompt, mode string, toolFilter []stri
 	}
 	s.mu.Lock()
 	s.seq++
-	childID := fmt.Sprintf("subagent-%d", s.seq)
+	// Unique per spawn: reusing bare "subagent-N" collided with prior runs' files
+	// and made create() a no-op (parent never updated).
+	childID := fmt.Sprintf("subagent-%d-%d", time.Now().UnixNano(), s.seq)
 	s.mu.Unlock()
 
-	// Parent is the default Session when spawned from the default Turn (v1).
-	if err := s.CreateSession(childID, "default", "subagent", 1); err != nil {
+	// Parent is the Session whose Turn invoked run_subagent (empty → default).
+	parent := parentSessionID
+	if strings.TrimSpace(parent) == "" {
+		parent = "default"
+	}
+	// origin=subagent: plugin stores parent/origin/depth and does not switch Current.
+	if err := s.CreateSession(childID, parent, "subagent", 0); err != nil {
 		return "", err
 	}
 	// v1: toolFilter reserved; child does not inherit run_subagent (no recursion).
@@ -2060,7 +2151,7 @@ func (s *Server) CallTool(sessionID string, tc ToolCall) (*CallToolResult, error
 		if input == "" {
 			input = in.Text
 		}
-		out, err := s.RunSubagent(input, in.SystemPrompt, in.Mode, in.Tools)
+		out, err := s.RunSubagent(sessionID, input, in.SystemPrompt, in.Mode, in.Tools)
 		if err != nil {
 			return nil, err
 		}

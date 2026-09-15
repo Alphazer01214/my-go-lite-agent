@@ -23,6 +23,76 @@ import (
 
 const defaultSessionID = "default"
 
+// defaultFullToolResults keeps this many newest tool_result contents full in derive.
+const defaultFullToolResults = 8
+
+type pluginConfig struct {
+	FullToolResults int `json:"fullToolResults"`
+}
+
+func configPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "config.json"
+	}
+	return filepath.Join(filepath.Dir(exe), "config.json")
+}
+
+func loadPluginConfig() pluginConfig {
+	cfg := pluginConfig{FullToolResults: defaultFullToolResults}
+	raw, err := os.ReadFile(configPath())
+	if err != nil {
+		return cfg
+	}
+	var disk pluginConfig
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		return cfg
+	}
+	if disk.FullToolResults > 0 {
+		cfg.FullToolResults = disk.FullToolResults
+	}
+	return cfg
+}
+
+// stubOldToolResults replaces tool_result contents beyond the newest keep count
+// with a short recoverable stub (ADR-0015). Session Log facts are unchanged;
+// the input slice is copied so callers never observe in-place mutation.
+func stubOldToolResults(msgs []Message, keep int) []Message {
+	if keep <= 0 {
+		keep = defaultFullToolResults
+	}
+	var idxs []int
+	for i, m := range msgs {
+		if m.Role == "tool" {
+			idxs = append(idxs, i)
+		}
+	}
+	if len(idxs) <= keep {
+		return msgs
+	}
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	for _, i := range idxs[:len(idxs)-keep] {
+		n := len(out[i].Content)
+		out[i].Content = fmt.Sprintf(
+			"[truncated tool result: %d chars. Re-call the tool or read_file with offset/limit to recover.]",
+			n,
+		)
+	}
+	return out
+}
+
+// sessionItem is one row of the session list (Capability and slash command).
+// Parent/origin make the Subagent tree visible so a parent Session can enter a child.
+type sessionItem struct {
+	ID              string `json:"id"`
+	Title           string `json:"title,omitempty"`
+	Seq             int    `json:"seq,omitempty"`
+	ParentSession   string `json:"parentSession,omitempty"`
+	Origin          string `json:"origin,omitempty"`
+	DelegationDepth int    `json:"delegationDepth,omitempty"`
+}
+
 type Fact struct {
 	Seq     int             `json:"seq"`
 	Type    string          `json:"type"`
@@ -127,33 +197,110 @@ func (r *registry) openStore(id string) *store {
 	if _, ok := r.meta[id]; !ok {
 		r.meta[id] = SessionMeta{CreatedAt: time.Now().UnixMilli()}
 	}
+	// Restart: recover parent/origin/depth from the session_meta fact when in-memory meta is bare.
+	if m := r.meta[id]; m.ParentSession == "" && m.Origin == "" {
+		if pm, ok := metaFromFacts(st.facts); ok && (pm.ParentSession != "" || pm.Origin != "") {
+			if m.CreatedAt == 0 {
+				m.CreatedAt = pm.CreatedAt
+			}
+			m.ParentSession = pm.ParentSession
+			m.Origin = pm.Origin
+			m.DelegationDepth = pm.DelegationDepth
+			r.meta[id] = m
+		}
+	}
 	return st
 }
 
-func (r *registry) getOrCreate(id string) (*store, SessionMeta, bool) {
-	id = normalizeID(id)
-	st := r.openStore(id)
-	r.mu.Lock()
-	m := r.meta[id]
-	_, existed := r.meta[id]
-	r.mu.Unlock()
-	return st, m, !existed
+// metaFromFacts recovers SessionMeta from a session_meta fact (restart-safe parent links).
+func metaFromFacts(facts []Fact) (SessionMeta, bool) {
+	for i := len(facts) - 1; i >= 0; i-- {
+		f := facts[i]
+		if f.Type != "session_meta" || len(f.Meta) == 0 {
+			continue
+		}
+		var m SessionMeta
+		if err := json.Unmarshal(f.Meta, &m); err != nil {
+			continue
+		}
+		return m, true
+	}
+	return SessionMeta{}, false
 }
 
 func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 	id = normalizeID(id)
 	r.mu.Lock()
 	if ex, ok := r.meta[id]; ok {
+		// Upsert parent/origin when the caller supplies linkage (Subagent spawn
+		// must not be a no-op just because a prior openStore/list touched the id).
+		changed := false
+		if m.ParentSession != "" && ex.ParentSession != m.ParentSession {
+			ex.ParentSession = m.ParentSession
+			changed = true
+		}
+		if m.Origin != "" && ex.Origin != m.Origin {
+			ex.Origin = m.Origin
+			changed = true
+		}
+		if m.DelegationDepth > 0 && ex.DelegationDepth != m.DelegationDepth {
+			ex.DelegationDepth = m.DelegationDepth
+			changed = true
+		} else if changed && ex.ParentSession != "" && ex.DelegationDepth == 0 {
+			if pm, ok := r.meta[normalizeID(ex.ParentSession)]; ok {
+				ex.DelegationDepth = pm.DelegationDepth + 1
+			} else {
+				ex.DelegationDepth = 1
+			}
+		}
+		if changed {
+			r.meta[id] = ex
+			r.mu.Unlock()
+			if raw, err := json.Marshal(ex); err == nil {
+				st := r.openStore(id)
+				_, _ = st.append(struct {
+					Type    string          `json:"type"`
+					Role    string          `json:"role"`
+					Content string          `json:"content"`
+					Meta    json.RawMessage `json:"meta"`
+				}{Type: "session_meta", Role: "host", Meta: raw})
+			}
+			return ex, false, nil
+		}
 		r.mu.Unlock()
 		return ex, false, nil
+	}
+	// Inherit delegation depth from the parent Session when the caller left it unset.
+	if m.ParentSession != "" && m.DelegationDepth == 0 {
+		if pm, ok := r.meta[normalizeID(m.ParentSession)]; ok {
+			m.DelegationDepth = pm.DelegationDepth + 1
+		} else {
+			m.DelegationDepth = 1
+		}
 	}
 	if m.CreatedAt == 0 {
 		m.CreatedAt = time.Now().UnixMilli()
 	}
 	r.meta[id] = m
 	r.mu.Unlock()
-	_ = r.openStore(id)
+	st := r.openStore(id)
+	// Persist parent/origin/depth so restart keeps the Subagent tree.
+	if raw, err := json.Marshal(m); err == nil {
+		_, _ = st.append(struct {
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Content string          `json:"content"`
+			Meta    json.RawMessage `json:"meta"`
+		}{Type: "session_meta", Role: "host", Meta: raw})
+	}
 	return m, true, nil
+}
+
+func (r *registry) metaOf(id string) SessionMeta {
+	id = normalizeID(id)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.meta[id]
 }
 
 func (st *store) load() {
@@ -332,8 +479,49 @@ func main() {
 	fmt.Fprintf(os.Stderr, "session: dataDir=%s\n", dir)
 
 	// Current Session (ADR-0012): medium-agnostic current id on the session Capability.
+	// Always a non-empty Session id (the implicit default is "default").
 	var currentMu sync.Mutex
-	currentID := ""
+	currentID := defaultSessionID
+
+	// listSessions walks the Session Log dir; title is the first user message
+	// (truncated), seq the last fact's. Shared by the list Capability and /session list.
+	listSessions := func() []sessionItem {
+		var list []sessionItem
+		entries, _ := os.ReadDir(reg.dataDir)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+				continue
+			}
+			id := strings.TrimSuffix(e.Name(), ".jsonl")
+			st := reg.openStore(id)
+			facts := st.query(0, 0)
+			title := id
+			seq := 0
+			for _, f := range facts {
+				seq = f.Seq
+				if f.Type == "message" && f.Role == "user" && f.Content != "" {
+					title = f.Content
+					if len([]rune(title)) > 40 {
+						title = string([]rune(title)[:40]) + "…"
+					}
+					break
+				}
+			}
+			m := reg.metaOf(id)
+			list = append(list, sessionItem{
+				ID:              id,
+				Title:           title,
+				Seq:             seq,
+				ParentSession:   m.ParentSession,
+				Origin:          m.Origin,
+				DelegationDepth: m.DelegationDepth,
+			})
+		}
+		if list == nil {
+			list = []sessionItem{}
+		}
+		return list
+	}
 
 	s.Handle("session", "create", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
@@ -360,9 +548,13 @@ func main() {
 			return nil, err
 		}
 		id := normalizeID(in.SessionID)
-		currentMu.Lock()
-		currentID = id
-		currentMu.Unlock()
+		// Subagent spawns must not steal Current Session from the parent (CONTEXT.md).
+		// User-facing create (web "new chat") still selects the fresh id.
+		if in.Origin != "subagent" {
+			currentMu.Lock()
+			currentID = id
+			currentMu.Unlock()
+		}
 		return json.Marshal(map[string]any{
 			"sessionId": id,
 			"created":   created,
@@ -412,38 +604,7 @@ func main() {
 	})
 
 	s.Handle("session", "list", func(req *pluginsdk.Request) (json.RawMessage, error) {
-		type item struct {
-			ID    string `json:"id"`
-			Title string `json:"title,omitempty"`
-			Seq   int    `json:"seq,omitempty"`
-		}
-		var list []item
-		entries, _ := os.ReadDir(reg.dataDir)
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-				continue
-			}
-			id := strings.TrimSuffix(e.Name(), ".jsonl")
-			st := reg.openStore(id)
-			facts := st.query(0, 0)
-			title := id
-			seq := 0
-			for _, f := range facts {
-				seq = f.Seq
-				if f.Type == "message" && f.Role == "user" && f.Content != "" {
-					title = f.Content
-					if len([]rune(title)) > 40 {
-						title = string([]rune(title)[:40]) + "…"
-					}
-					break
-				}
-			}
-			list = append(list, item{ID: id, Title: title, Seq: seq})
-		}
-		if list == nil {
-			list = []item{}
-		}
-		return json.Marshal(map[string]any{"sessions": list})
+		return json.Marshal(map[string]any{"sessions": listSessions()})
 	})
 
 	s.Handle("session", "current", func(req *pluginsdk.Request) (json.RawMessage, error) {
@@ -478,11 +639,59 @@ func main() {
 			_ = json.Unmarshal(req.Payload, &in)
 		}
 		st := reg.openStore(in.SessionID)
-		msgs := st.derive()
+		msgs := stubOldToolResults(st.derive(), loadPluginConfig().FullToolResults)
 		return json.Marshal(map[string]any{
 			"messages": msgs,
 			"count":    len(msgs),
 		})
+	})
+
+	s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		cfg := loadPluginConfig()
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "fullToolResults", "value": cfg.FullToolResults, "type": "integer"},
+			},
+		})
+	})
+	s.Handle("config", "set", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in map[string]any
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		cfg := loadPluginConfig()
+		for k, raw := range in {
+			if k != "fullToolResults" {
+				return nil, &protocol.FrameError{Code: "unknown_key", Message: "unknown config key " + k}
+			}
+			n, ok := raw.(float64)
+			if !ok || n <= 0 {
+				return nil, &protocol.FrameError{Code: "bad_arguments", Message: "fullToolResults must be a positive integer"}
+			}
+			cfg.FullToolResults = int(n)
+		}
+		raw, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(configPath(), raw, 0o600); err != nil {
+			return nil, &protocol.FrameError{Code: "save_failed", Message: err.Error()}
+		}
+		return json.Marshal(map[string]any{"ok": true})
+	})
+	s.Handle("config", "schema", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "fullToolResults", "type": "integer", "default": defaultFullToolResults,
+					"description": "Newest tool_result messages kept full in derive"},
+			},
+		})
+	})
+	s.Handle("config", "reload", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		cfg := loadPluginConfig()
+		return json.Marshal(map[string]any{"ok": true, "fullToolResults": cfg.FullToolResults})
 	})
 
 	// Slash commands (ADR-0008): Session Log ops live on the session plugin, not Host natives.
@@ -519,43 +728,11 @@ func main() {
 			}
 			return json.Marshal(map[string]string{"text": string(raw)})
 		case "list":
-			// Reuse list handler shape via store walk.
-			type item struct {
-				ID    string `json:"id"`
-				Title string `json:"title,omitempty"`
-				Seq   int    `json:"seq,omitempty"`
-			}
-			var list []item
-			entries, _ := os.ReadDir(reg.dataDir)
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-					continue
-				}
-				id := strings.TrimSuffix(e.Name(), ".jsonl")
-				st := reg.openStore(id)
-				facts := st.query(0, 0)
-				title := id
-				seq := 0
-				for _, f := range facts {
-					seq = f.Seq
-					if f.Type == "message" && f.Role == "user" && f.Content != "" {
-						title = f.Content
-						if len([]rune(title)) > 40 {
-							title = string([]rune(title)[:40]) + "…"
-						}
-						break
-					}
-				}
-				list = append(list, item{ID: id, Title: title, Seq: seq})
-			}
-			if list == nil {
-				list = []item{}
-			}
-			raw, _ := json.MarshalIndent(list, "", "  ")
+			raw, _ := json.MarshalIndent(listSessions(), "", "  ")
 			return json.Marshal(map[string]string{"text": string(raw)})
 		case "derive":
 			st := reg.openStore(sid)
-			msgs := st.derive()
+			msgs := stubOldToolResults(st.derive(), loadPluginConfig().FullToolResults)
 			raw, _ := json.MarshalIndent(msgs, "", "  ")
 			return json.Marshal(map[string]string{"text": string(raw)})
 		case "current":

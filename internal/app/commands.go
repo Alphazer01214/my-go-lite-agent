@@ -10,6 +10,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
+	"github.com/tomori/my-go-lite-agent/protocol"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
 
@@ -59,6 +60,20 @@ func (cp *commandPlane) refresh() error {
 			cp.manifests[name] = m
 		}
 	}
+	// Broadcast config.reload so running plugins re-read disk config (ADR / plugin-config).
+	// Plugins without the method fail the Frame; that is expected and ignored.
+	for _, name := range cp.mounted {
+		out, err := cp.srv.Call(name, &protocol.Frame{
+			V:       protocol.Version,
+			Type:    protocol.TypeReq,
+			Cap:     "config",
+			Method:  "reload",
+			Payload: json.RawMessage(`{}`),
+		})
+		if err != nil || (out != nil && out.Error != nil) {
+			continue
+		}
+	}
 	return nil
 }
 
@@ -99,7 +114,7 @@ func (cp *commandPlane) handleOut(line string) (output string, quit bool, err er
 		if err := cp.refresh(); err != nil {
 			return "", false, err
 		}
-		return "refresh ok — manifests updated (no hot-plug)\n", false, nil
+		return "refresh ok — manifests updated, config.reload broadcast (no hot-plug)\n", false, nil
 	}
 
 	if _, ok := cp.manifests[name]; ok {
@@ -181,7 +196,7 @@ func (cp *commandPlane) helpText(pluginName string) string {
 	b.WriteString("Native commands:\n")
 	b.WriteString("  /help [plugin]     Show this help, or a plugin's commands\n")
 	b.WriteString("  /lp                List mounted plugins (name, version, provides)\n")
-	b.WriteString("  /refresh           Rescan plugin directory (manifest metadata only)\n")
+	b.WriteString("  /refresh           Rescan manifests and broadcast config.reload (no hot-plug)\n")
 	b.WriteString("  /exit              Quit (CLI only)\n")
 	b.WriteString("\nPlugin commands:\n")
 	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
