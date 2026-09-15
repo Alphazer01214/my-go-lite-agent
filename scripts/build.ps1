@@ -6,6 +6,14 @@ $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root "dist"
 $go = "go"
 
+# Preserve the user's llm-openai config (API key) across the dist wipe below.
+$llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
+$llmStash = $null
+if (Test-Path $llmDistCfg) {
+    $llmStash = Join-Path ([IO.Path]::GetTempPath()) ("llm-openai-config-" + [guid]::NewGuid().ToString("N") + ".json")
+    Copy-Item $llmDistCfg $llmStash -Force
+}
+
 if (Test-Path $dist) {
     try {
         Remove-Item -Recurse -Force $dist -ErrorAction Stop
@@ -74,26 +82,21 @@ try {
 
     Copy-Item (Join-Path $root "plugins\context-manager\segments.json") (Join-Path $dist "plugins\context-manager\") -Force
     Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") (Join-Path $dist "plugins\llm-openai\") -Force
-    # Ship runnable llm-openai config: DeepSeek public key is filled in at build time.
-    $llmCfg = Join-Path $root "plugins\llm-openai\config.json"
-    if (-not (Test-Path $llmCfg)) {
-        throw "missing plugins\llm-openai\config.json — required for release build"
-    }
-    $cfg = Get-Content $llmCfg -Raw | ConvertFrom-Json
-    if (-not $cfg.PSObject.Properties['apiKey'] -or [string]::IsNullOrWhiteSpace([string]$cfg.apiKey)) {
-        $cfg | Add-Member -NotePropertyName apiKey -NotePropertyValue "sk-b741c1d4895c4e8583e1ce691975df72" -Force
+    # llm-openai config priority: keep what the user already runs (dist), then a
+    # repo-local config.json (gitignored), else seed the empty example template.
+    # The build never injects or rewrites an API key.
+    $repoCfg = Join-Path $root "plugins\llm-openai\config.json"
+    if ($null -ne $llmStash) {
+        Copy-Item $llmStash $llmDistCfg -Force
+        Remove-Item $llmStash -Force
+        Write-Host "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+    } elseif (Test-Path $repoCfg) {
+        Copy-Item $repoCfg $llmDistCfg -Force
+        Write-Host "llm-openai config: seeded from repo plugins\llm-openai\config.json (kept as-is)"
     } else {
-        $cfg.apiKey = "sk-b741c1d4895c4e8583e1ce691975df72"
+        Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") $llmDistCfg -Force
+        Write-Warning "no llm-openai config yet — set your key via /llm-openai config set apiKey=... or edit dist\plugins\llm-openai\config.json; later rebuilds will keep it"
     }
-    if (-not $cfg.PSObject.Properties['baseURL'] -or [string]::IsNullOrWhiteSpace([string]$cfg.baseURL)) {
-        $cfg | Add-Member -NotePropertyName baseURL -NotePropertyValue "https://api.deepseek.com/v1" -Force
-    }
-    if (-not $cfg.PSObject.Properties['model'] -or [string]::IsNullOrWhiteSpace([string]$cfg.model)) {
-        $cfg | Add-Member -NotePropertyName model -NotePropertyValue "deepseek-flash" -Force
-    }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText((Join-Path $dist "plugins\llm-openai\config.json"), ($cfg | ConvertTo-Json), $utf8NoBom)
-    Write-Host "wrote llm-openai config.json (DeepSeek public apiKey) -> dist\plugins\llm-openai\"
 
     Copy-Item (Join-Path $root "examples\assembly.json") (Join-Path $dist "examples\") -Force
     Copy-Item (Join-Path $root "examples\assembly-with-tools.json") (Join-Path $dist "examples\") -Force

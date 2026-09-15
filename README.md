@@ -67,7 +67,9 @@ export OPENAI_BASE_URL=https://api.deepseek.com/v1
 export OPENAI_MODEL=deepseek-chat
 ```
 
-也可编辑 `dist/plugins/llm-openai/config.json`。
+也可编辑 `dist/plugins/llm-openai/config.json`，或在 REPL / Web 输入框里 `/llm-openai config set apiKey=sk-...`。
+
+**构建不会动你的密钥**：`config.json` 不进 git；重新构建时，dist 里已有的配置原样保留（首次构建才会从仓库根的 `plugins/llm-openai/config.json` 播种）。
 
 ### 跑起来
 
@@ -79,14 +81,14 @@ export OPENAI_MODEL=deepseek-chat
 .\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\chat.json -repl
 
 # Web
-.\dist\liteagent-server.exe -plugins dist\plugins -assembly dist\examples\chat.json
+.\dist\liteagent-server.exe -plugins dist\plugins -assembly dist\examples\chat.json -serve 127.0.0.1:8080
 # 浏览器打开 http://127.0.0.1:8080
 ```
 
 ```bash
 # macOS / Linux
 ./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/chat.json -turn "你好"
-./dist/liteagent-server -plugins dist/plugins -assembly dist/examples/chat.json
+./dist/liteagent-server -plugins dist/plugins -assembly dist/examples/chat.json -serve 127.0.0.1:8080
 ```
 
 带文件工具：

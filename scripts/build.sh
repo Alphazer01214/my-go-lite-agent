@@ -7,6 +7,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 
 # ── clean ────────────────────────────────────────────────────────────────────
+# Preserve the user's llm-openai config (API key) across the dist wipe below.
+LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
+LLM_STASH=""
+if [[ -f "$LLM_DIST_CFG" ]]; then
+    LLM_STASH="$(mktemp)"
+    cp "$LLM_DIST_CFG" "$LLM_STASH"
+fi
 if [[ -d "$DIST" ]]; then
     echo "removing previous dist/"
     rm -rf "$DIST"
@@ -43,7 +50,7 @@ install_plugin() {
 {
   "name": "$name",
   "version": "0.1.0",
-  "protocol": 2,
+  "protocol": 3,
   "provides": $provides,
   "consumes": $consumes,
   "entry": "$name"$extra
@@ -98,12 +105,19 @@ rm -f "$DIST/plugins/uidemo/plugin.json.bak"
 cp "$ROOT/plugins/context-manager/segments.json" "$DIST/plugins/context-manager/"
 cp "$ROOT/plugins/llm-openai/config.example.json" "$DIST/plugins/llm-openai/"
 
-LLM_CFG="$ROOT/plugins/llm-openai/config.json"
-if [[ ! -f "$LLM_CFG" ]]; then
-    echo "WARNING: plugins/llm-openai/config.json not found — dist will not include API key"
+# llm-openai config priority: keep what the user already runs (dist), then a
+# repo-local config.json (gitignored), else seed the empty example template.
+# The build never injects or rewrites an API key.
+REPO_CFG="$ROOT/plugins/llm-openai/config.json"
+if [[ -n "$LLM_STASH" ]]; then
+    cp "$LLM_STASH" "$LLM_DIST_CFG" && rm -f "$LLM_STASH"
+    echo "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+elif [[ -f "$REPO_CFG" ]]; then
+    cp "$REPO_CFG" "$LLM_DIST_CFG"
+    echo "llm-openai config: seeded from repo plugins/llm-openai/config.json (kept as-is)"
 else
-    cp "$LLM_CFG" "$DIST/plugins/llm-openai/"
-    echo "copied llm-openai config.json (with apiKey) -> dist/plugins/llm-openai/"
+    cp "$ROOT/plugins/llm-openai/config.example.json" "$LLM_DIST_CFG"
+    echo "WARNING: no llm-openai config yet — set your key via /llm-openai config set apiKey=... or edit dist/plugins/llm-openai/config.json; later rebuilds will keep it"
 fi
 
 # ── examples & docs ─────────────────────────────────────────────────────────
@@ -111,6 +125,10 @@ cp "$ROOT/examples/assembly.json"           "$DIST/examples/"
 cp "$ROOT/examples/assembly-with-tools.json" "$DIST/examples/"
 cp "$ROOT/examples/chat.json"               "$DIST/examples/"
 cp "$ROOT/examples/agent.json"              "$DIST/examples/"
+# Layout is required at runtime (ADR-0012); ship the base layout with dist.
+cp "$ROOT/layout.json" "$DIST/"
+# Author SDK single source (dual export: repo copy + /sdk/ HTTP).
+cp "$ROOT/sdk/lite-agent.js" "$DIST/lite-agent.js"
 cp "$ROOT/README.md"                         "$DIST/"
 cp "$ROOT/CONTEXT.md"                        "$DIST/"
 
