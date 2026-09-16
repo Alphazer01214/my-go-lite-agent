@@ -1,0 +1,9 @@
+{
+  "name": "webtools",
+  "version": "0.1.0",
+  "protocol": 3,
+  "provides": ["tools"],
+  "consumes": [],
+  "entry": "webtools.exe",
+  "description": "web_fetch and web_search (DuckDuckGo HTML)"
+}

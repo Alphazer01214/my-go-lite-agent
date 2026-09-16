@@ -38,7 +38,7 @@
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
 - CLI REPL / 一轮 `-turn`；Web Shell（聊天 + Session Trace）
 - **Workspace**：Session 级项目根（CLI 默认 cwd，Web 会话可选）
-- **coding 装配**：filetools + shelltools + permission + skill-manager + project-context
+- **coding 装配**：filetools + shelltools + sandbox + skill-manager + project-context + webtools
 - 多 `tools` 插件共存；`$skill` 输入触发；Todo / Plan Constraint（提示约束）
 - 跨平台：Windows / macOS / Linux
 
@@ -106,7 +106,7 @@ Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件
 .\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\agent.json -turn "读一下 README.md"
 ```
 
-Coding 装配（Workspace + shell + permission + skills）：
+Coding 装配（Workspace + shell + sandbox + skills + web）：
 
 ```bash
 ./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/coding.json -workspace "$PWD" -turn "读一下 README 并总结"

@@ -181,7 +181,7 @@ _Avoid_: 工具结果截断（可作口语）、placeholder
 _Avoid_: 插件配置文件（磁盘 config.json 只是持久化）、Manifest 参数
 
 **Workspace**:
-一次运行中项目文件与工具操作的根目录。CLI 默认启动时 cwd；Web 由会话选择。作为 Session 元数据携带，filetools / shelltools / permission / skill 等只认此根，不认全局 cwd。
+一次运行中项目文件与工具操作的根目录。CLI 默认启动时 cwd；Web 由会话选择。作为 Session 元数据携带，filetools / shelltools / sandbox / skill 等只认此根，不认全局 cwd。
 _Avoid_: 工作目录、项目路径、repo root（口语可用，规范名词是 Workspace）
 
 **Permission**:

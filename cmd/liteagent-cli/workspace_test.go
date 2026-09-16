@@ -121,7 +121,7 @@ func buildPkgToPlugin(t *testing.T, root, pluginsDir, name string) {
 		t.Fatalf("build %s: %v\n%s", name, err, b)
 	}
 	provides := `["tools"]`
-	if name == "permission" {
+	if name == "sandbox" {
 		provides = `["policy"]`
 	}
 	if name == "project-context" {
@@ -148,10 +148,10 @@ func TestPolicyDenyBlocksWriteTool(t *testing.T) {
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	buildPkgToPlugin(t, root, pluginsDir, "filetools")
-	buildPkgToPlugin(t, root, pluginsDir, "permission")
+	buildPkgToPlugin(t, root, pluginsDir, "sandbox")
 
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["agent","session","stubllm","filetools","permission"]}`)
+	writeFile(t, cfg, `{"plugins":["agent","session","stubllm","filetools","sandbox"]}`)
 
 	ws := t.TempDir()
 	writeFile(t, filepath.Join(ws, ".liteagent", "permissions.json"),

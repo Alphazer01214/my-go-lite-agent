@@ -108,8 +108,11 @@ install_plugin "filetools"      "./plugins/filetools"      '["tools"]' "[]" 0 \
 install_plugin "shelltools"     "./plugins/shelltools"     '["tools"]' "[]" 60000 \
     "Cross-platform shell tool (no PTY)"
 
-install_plugin "permission"     "./plugins/permission"     '["policy"]' "[]" 0 \
-    "Permission rules: policy.decide allow/ask/deny"
+install_plugin "sandbox"       "./plugins/sandbox"        '["policy"]' "[]" 0 \
+    "Sandbox / permission rules: policy.decide allow/ask/deny"
+
+install_plugin "webtools"      "./plugins/webtools"       '["tools"]' "[]" 30000 \
+    "Web fetch and search tools"
 
 install_plugin "skill-manager"  "./plugins/skill-manager"  '["tools","skills"]' "[]" 0 \
     'Workspace skills: discovery, $skill expand, load_skill'

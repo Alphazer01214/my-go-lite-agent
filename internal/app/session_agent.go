@@ -174,7 +174,7 @@ func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
 
 // cliToolApproval prompts on the CLI Medium for policy.ask (ADR-0019).
 func cliToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
-	fmt.Printf("⚠ permission: allow tool %s?\n", tool)
+	fmt.Printf("⚠ sandbox: allow tool %s?\n", tool)
 	if len(arguments) > 0 {
 		fmt.Printf("  arguments: %s\n", string(arguments))
 	}
