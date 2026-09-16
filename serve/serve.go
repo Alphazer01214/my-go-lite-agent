@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
 	"github.com/tomori/my-go-lite-agent/protocol"
@@ -459,21 +460,6 @@ func (s *Server) softCheckConsumes(mounted []discovery.Found) {
 	}
 	s.mu.Unlock()
 	_ = degraded
-}
-
-// checkConsumes is retained for tests that assert the old fail-loud shape; product path uses softCheckConsumes.
-func (s *Server) checkConsumes(mounted []discovery.Found) error {
-	for _, p := range mounted {
-		for _, need := range p.Manifest.Consumes {
-			s.mu.Lock()
-			_, ok := s.provides[need]
-			s.mu.Unlock()
-			if !ok {
-				return fmt.Errorf("plugin %s consumes %q but no mounted plugin provides it", p.Manifest.Name, need)
-			}
-		}
-	}
-	return nil
 }
 
 func (s *Server) launch(found discovery.Found) error {
@@ -1703,17 +1689,6 @@ func (s *Server) emitStatus(sessionID, status string) {
 	s.publish(Event{Topic: "status", Data: map[string]string{"status": status, "sessionId": sessionID}})
 }
 
-// emitRenderIntent notifies the CLI hook and all Subscribers (Web Medium).
-func (s *Server) emitRenderIntent(ri RenderIntent) {
-	if ri.SessionID == "" {
-		ri.SessionID = "default"
-	}
-	if s.OnRender != nil {
-		s.OnRender(ri)
-	}
-	s.publish(Event{Topic: "presentation", Data: ri})
-}
-
 // extractStreamDelta returns text delta, channel (content|reasoning), and
 // sessionId from llm.chunk or presentation.stream chunk frames.
 func extractStreamDelta(f *protocol.Frame) (delta, channel, sessionID string, ok bool) {
@@ -1900,11 +1875,6 @@ func (s *Server) SetSessionWorkspace(sessionID, workspace string) error {
 	return s.CreateSessionWithWorkspace(sessionID, "", "", 0, workspace)
 }
 
-// NewSessionID creates a Session (auto id when empty) and returns the id.
-func (s *Server) NewSessionID(id string) (string, error) {
-	return s.NewSessionIDWithWorkspace(id, "")
-}
-
 // NewSessionIDWithWorkspace creates a Session with an optional Workspace root.
 func (s *Server) NewSessionIDWithWorkspace(id, workspace string) (string, error) {
 	if id == "" {
@@ -2056,44 +2026,25 @@ type EnsurePluginsResult struct {
 }
 
 // EnsurePlugins idempotently mounts catalog plugins by name (UI-only allowed).
+// The dependsOn closure is expanded by assembly.ResolveClosure (ADR-0021).
 func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
 	catalog := s.ensureCatalog()
-
-	var toLaunch []discovery.Found
 	out := &EnsurePluginsResult{}
 
-	byName := map[string]discovery.Found{}
-	for _, p := range catalog.Plugins {
-		byName[p.Manifest.Name] = p
-	}
+	mountedSet, missing, _ := assembly.ResolveClosure(catalog, names)
+	out.Missing = missing
 
-	seen := map[string]bool{}
-	var walk func(name string)
-	walk = func(name string) {
-		if seen[name] {
-			return
-		}
-		seen[name] = true
+	var toLaunch []discovery.Found
+	for _, p := range mountedSet {
 		s.mu.Lock()
-		_, alive := s.plugins[name]
-		_, ui := s.mountedUI[name]
+		_, alive := s.plugins[p.Manifest.Name]
+		_, ui := s.mountedUI[p.Manifest.Name]
 		s.mu.Unlock()
 		if alive || ui {
-			out.Mounted = append(out.Mounted, name)
-			return
-		}
-		p, ok := byName[name]
-		if !ok {
-			out.Missing = append(out.Missing, name)
-			return
+			out.Mounted = append(out.Mounted, p.Manifest.Name)
+			continue
 		}
 		toLaunch = append(toLaunch, p)
-		for _, dep := range p.Manifest.DependsOn {
-			walk(dep)
-		}
-	}
-	for _, n := range names {
-		walk(n)
 	}
 
 	if len(toLaunch) == 0 {

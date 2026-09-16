@@ -14,11 +14,11 @@ import (
 func TestSetDebug(t *testing.T) {
 	defer SetDebug(false)
 	SetDebug(true)
-	if !DebugEnabled() {
+	if !debugOn.Load() {
 		t.Fatal("expected debug enabled")
 	}
 	SetDebug(false)
-	if DebugEnabled() {
+	if debugOn.Load() {
 		t.Fatal("expected debug disabled")
 	}
 }

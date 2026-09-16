@@ -99,14 +99,6 @@ func hasExternalTools(schemas []toolSchema) bool {
 	return false
 }
 
-func mapToToolSchema(m map[string]any) toolSchema {
-	return toolSchema{
-		Name:        fmt.Sprint(m["name"]),
-		Description: fmt.Sprint(m["description"]),
-		InputSchema: marshal(m["input_schema"]),
-	}
-}
-
 type message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`

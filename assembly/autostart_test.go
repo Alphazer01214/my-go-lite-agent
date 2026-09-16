@@ -58,13 +58,13 @@ func TestResolveAutostartIncludesUIOnly(t *testing.T) {
 	}
 }
 
-func TestExpandDepends(t *testing.T) {
+func TestResolveClosure(t *testing.T) {
 	res := discovery.Result{Plugins: []discovery.Found{
 		{Dir: "/p/f", Manifest: plugin.Manifest{Name: "filetools", DependsOn: []string{"session"}, Entry: "f"}},
 		{Dir: "/p/s", Manifest: plugin.Manifest{Name: "session", Entry: "s"}},
 	}}
-	names, missing := ExpandDepends(res, []string{"filetools", "ghost"})
-	if len(names) != 2 || len(missing) != 1 || missing[0] != "ghost" {
-		t.Fatalf("names=%v missing=%v", names, missing)
+	mounted, missing, _ := ResolveClosure(res, []string{"filetools", "ghost"})
+	if len(mounted) != 2 || len(missing) != 1 || missing[0] != "ghost" {
+		t.Fatalf("mounted=%v missing=%v", mounted, missing)
 	}
 }

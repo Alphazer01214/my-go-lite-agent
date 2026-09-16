@@ -19,11 +19,6 @@ func SetDebug(on bool) {
 	debugOn.Store(on)
 }
 
-// DebugEnabled reports whether Host debug logging is on.
-func DebugEnabled() bool {
-	return debugOn.Load()
-}
-
 func debugf(format string, args ...any) {
 	if !debugOn.Load() {
 		return

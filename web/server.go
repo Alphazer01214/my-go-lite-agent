@@ -173,11 +173,6 @@ func (s *Server) Serve(ln net.Listener) error {
 	return s.http.Serve(ln)
 }
 
-// ListenAndServe blocks.
-func (s *Server) ListenAndServe() error {
-	return s.http.ListenAndServe()
-}
-
 // Close shuts the HTTP server down.
 func (s *Server) Close() error {
 	return s.http.Close()

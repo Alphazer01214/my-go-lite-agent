@@ -5,9 +5,24 @@ import (
 	"testing"
 )
 
+// stripANSI removes ANSI escape sequences so tests can assert on visible text.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func TestRenderBasicMarkdown(t *testing.T) {
 	out := Render("# Title\n\nHello **bold** and `code`.\n\n- one\n- two\n")
-	plain := Plain(out)
+	plain := stripANSI(out)
 	if !strings.Contains(plain, "Title") {
 		t.Fatalf("want title: %q", plain)
 	}
@@ -21,7 +36,7 @@ func TestRenderBasicMarkdown(t *testing.T) {
 
 func TestRenderFence(t *testing.T) {
 	out := Render("```go\nfmt.Println(1)\n```\n")
-	plain := Plain(out)
+	plain := stripANSI(out)
 	if !strings.Contains(plain, "fmt.Println(1)") {
 		t.Fatalf("want code line: %q", plain)
 	}
@@ -32,7 +47,7 @@ func TestRenderFence(t *testing.T) {
 
 func TestRenderTableAndLink(t *testing.T) {
 	out := Render("| a | b |\n|---|---|\n| 1 | 2 |\n\nSee [x](https://example.com).\n")
-	plain := Plain(out)
+	plain := stripANSI(out)
 	if !strings.Contains(plain, "│ a │ b │") {
 		t.Fatalf("want table header row: %q", plain)
 	}

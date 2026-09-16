@@ -107,15 +107,6 @@ func saveConfig(cfg agentConfig) error {
 	return os.WriteFile(configPath(), raw, 0o600)
 }
 
-func (a *agent) activeSchemeName() string {
-	cfg := loadConfig()
-	name := cfg.DefaultScheme
-	if _, ok := cfg.Schemes[name]; !ok {
-		return "tool_calling"
-	}
-	return name
-}
-
 func (a *agent) activeScheme() (string, scheme) {
 	cfg := loadConfig()
 	name := cfg.DefaultScheme

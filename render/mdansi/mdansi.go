@@ -253,21 +253,6 @@ func writeText(b *strings.Builder, s string) {
 	b.WriteString(s)
 }
 
-// Plain strips ANSI codes (for width tests / logging).
-func Plain(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b {
-			for i < len(s) && s[i] != 'm' {
-				i++
-			}
-			continue
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
 // Indent prefixes each non-empty line with pad.
 func Indent(s, pad string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
