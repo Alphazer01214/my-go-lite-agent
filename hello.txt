@@ -1,0 +1,2 @@
+Hello from the coding agent.
+Edited: placeholder line added by an agent pass.

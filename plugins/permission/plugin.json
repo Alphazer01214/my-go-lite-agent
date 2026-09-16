@@ -1,9 +1,0 @@
-{
-  "name": "permission",
-  "version": "0.1.0",
-  "protocol": 3,
-  "provides": ["policy"],
-  "consumes": [],
-  "entry": "permission.exe",
-  "description": "Permission rules: policy.decide allow/ask/deny (ADR-0019)"
-}
