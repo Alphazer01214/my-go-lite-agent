@@ -82,6 +82,9 @@ type RenderIntent struct {
 	Title  string        `json:"title,omitempty"`
 	Pairs  []SummaryPair `json:"pairs,omitempty"`
 	Detail string        `json:"detail,omitempty"`
+	// SessionID scopes the intent so multi-session Render Media ignore foreign
+	// turns. Empty is the default Session — do not omitempty it away.
+	SessionID string `json:"sessionId"`
 }
 
 // EmitRender sends a classified render intent (broadcast).
@@ -106,4 +109,66 @@ func (s *Server) EmitMessageText(level, text string) error {
 // EmitSummaryText is shorthand for a summary_text card.
 func (s *Server) EmitSummaryText(title string, pairs []SummaryPair, detail string) error {
 	return s.EmitRender(RenderIntent{Kind: RenderSummaryText, Title: title, Pairs: pairs, Detail: detail})
+}
+
+// Host Capability contract (ADR-0016/0026): the capability names Host routes.
+// Defined once here (the plugin-side contract package) so Host and Plugins
+// share the names without hard-coding plugin directory names in Host code.
+const (
+	SessionCap      = "session"
+	AgentCap        = "agent"
+	LLMCap          = "llm"
+	SystemPromptCap = "system-prompt"
+	ContextCap      = "context"
+	LoopCap         = "loop"
+	ToolsCap        = "tools"
+	// ProbeCap/ProbeMethod name the reference echo capability used by Host's
+	// -plugin / probe diagnostics. "echo" is a fixture plugin name, but the
+	// Host treats it as a capability contract, never as a plugin directory
+	// reference (ADR-0026).
+	ProbeCap    = "echo"
+	ProbeMethod = "echo"
+)
+
+// StreamPayload is one ephemeral stream signal for the Render Medium
+// (start | chunk | end). Channel distinguishes content from reasoning so
+// media can paint them differently. Broadcast evt cap=presentation
+// method=stream.
+type StreamPayload struct {
+	Op        string `json:"op"`
+	Delta     string `json:"delta,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+// EmitStream sends an ephemeral stream signal (broadcast, no id).
+func (s *Server) EmitStream(p StreamPayload) error {
+	return s.emitStream("", p)
+}
+
+// EmitStreamTo sends a stream signal attributed to a request id so Host can
+// correlate it with an in-flight Call.
+func (s *Server) EmitStreamTo(id string, p StreamPayload) error {
+	return s.emitStream(id, p)
+}
+
+func (s *Server) emitStream(id string, p StreamPayload) error {
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return s.Emit(PresentationCap, PresentationStreamEvt, payload)
+	}
+	return s.EmitTo(id, PresentationCap, PresentationStreamEvt, payload)
+}
+
+// EmitStatus sends an agent idle/running status signal (broadcast).
+// Status is presentation-level: Host relays it to Render Media as-is.
+func (s *Server) EmitStatus(status string) error {
+	payload, err := json.Marshal(map[string]string{"status": status})
+	if err != nil {
+		return err
+	}
+	return s.Emit(PresentationCap, PresentationStatusEvt, payload)
 }

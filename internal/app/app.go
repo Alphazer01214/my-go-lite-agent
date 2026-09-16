@@ -85,14 +85,14 @@ func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan,
 	return plan, assembly.Config{}, nil
 }
 
-func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
+func runAssembly(pluginsDir, assemblyPath string, dump bool, capName, method string) error {
 	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump)
 	if err != nil {
 		return err
 	}
 
 	for _, p := range plan.Mounted {
-		if err := probePlugin(p); err != nil {
+		if err := probePlugin(p, capName, method); err != nil {
 			return fmt.Errorf("mount %s: %w", p.Manifest.Name, err)
 		}
 	}
@@ -125,21 +125,26 @@ func dumpAssembly(plan assembly.Plan) {
 	}
 }
 
-// probePlugin starts the Plugin, completes one echo Frame, then shuts it down.
-// UI-only Plugins have no executable to probe (ADR-0011).
-func probePlugin(p discovery.Found) error {
+// probePlugin starts the Plugin, completes one Frame, then shuts it down.
+// UI-only Plugins have no executable to probe (ADR-0011). The probe capability
+// and method come from the caller (-frame-cap/-frame-method, ADR-0026).
+func probePlugin(p discovery.Found, capName, method string) error {
 	fmt.Printf("mount name=%s\n", p.Manifest.Name)
 	if p.Manifest.Entry == "" {
 		return nil
 	}
-	return roundtrip(p.Manifest.ResolveEntry(p.Dir), p.Manifest.Name)
+	return roundtrip(p.Manifest.ResolveEntry(p.Dir), p.Manifest.Name, capName, method)
 }
 
-func runEchoRoundtrip(pluginPath string) error {
-	return roundtrip(pluginPath, "1")
+// runPluginRoundtrip sends one Frame round-trip to a plugin executable.
+func runPluginRoundtrip(pluginPath, capName, method string) error {
+	return roundtrip(pluginPath, "1", capName, method)
 }
 
-func roundtrip(pluginPath, id string) error {
+// roundtrip sends one Frame to a plugin executable and waits for its res.
+// cap/method come from the caller (-frame-cap/-frame-method): the probe no
+// longer assumes a plugin name (ADR-0026).
+func roundtrip(pluginPath, id, capName, method string) error {
 	cmd := exec.Command(pluginPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -163,8 +168,8 @@ func roundtrip(pluginPath, id string) error {
 		V:       protocol.Version,
 		ID:      id,
 		Type:    protocol.TypeReq,
-		Cap:     "echo",
-		Method:  "echo",
+		Cap:     capName,
+		Method:  method,
 		Payload: json.RawMessage(`{"hello":"world"}`),
 	}
 	if err := protocol.WriteFrame(stdin, req); err != nil {
@@ -184,7 +189,7 @@ func roundtrip(pluginPath, id string) error {
 	return nil
 }
 
-func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
+func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool, method string) error {
 	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump)
 	if err != nil {
 		return err
@@ -195,21 +200,13 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 	}
 	defer func() { _ = srv.Close() }()
 
-	frame := &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     name,
-		Method:  "echo",
-		Payload: json.RawMessage(`{"hello":"lifecycle"}`),
-	}
-	out, err := srv.Call(name, frame)
+	// -call-plugin is a diagnostic surface: route by the capability name the
+	// user asked for (ADR-0027 — Host addresses capabilities, not plugin names).
+	payload, err := srv.CallByCap(name, method, json.RawMessage(`{"hello":"lifecycle"}`))
 	if err != nil {
 		return err
 	}
-	if out.Error != nil {
-		return fmt.Errorf("call failed: %s: %s", out.Error.Code, out.Error.Message)
-	}
-	fmt.Printf("ok plugin=%s payload=%s\n", name, string(out.Payload))
+	fmt.Printf("ok plugin=%s payload=%s\n", name, string(payload))
 	return nil
 }
 
@@ -225,7 +222,7 @@ func probeCommandFaces(srv *serve.Server, mounted []discovery.Found) {
 		if len(p.Manifest.Commands) == 0 {
 			continue
 		}
-		_, err := srv.CallCommand(p.Manifest.Name, "__probe__", "")
+		_, err := serve.CallByFace(srv, p.Manifest.Name, "commands", "call", json.RawMessage(`{"command":"__probe__","args":""}`))
 		if err == nil {
 			continue
 		}

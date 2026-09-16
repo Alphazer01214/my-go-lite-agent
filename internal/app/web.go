@@ -10,6 +10,7 @@ import (
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/layout"
+	"github.com/tomori/my-go-lite-agent/serve"
 	"github.com/tomori/my-go-lite-agent/web"
 )
 
@@ -23,7 +24,7 @@ func (w webCommandPlane) HandleOut(line string) (string, bool, error) {
 func (w webCommandPlane) Complete(prefix string) []string { return w.cp.completeSlash(prefix) }
 
 // runWebAndOptionalREPL mounts Plugins, starts the Web Medium, and optionally the CLI REPL.
-func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool, scheme string) error {
+func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool) error {
 	plan, cfg, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
@@ -63,15 +64,14 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 	}
 	defer func() { _ = srv.Close() }()
 
-	if scheme != "" {
-		applyAgentScheme(srv, scheme)
-	}
-
 	defaultWS := ""
 	if cwd, err := os.Getwd(); err == nil {
 		defaultWS = cwd
 	}
-	_ = srv.SetSessionWorkspace("default", defaultWS)
+	// default Workspace is the Session 初值 (ADR-0020), not a Host path walk.
+	_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+		"sessionId": "default", "workspace": defaultWS,
+	}))
 
 	probeCommandFaces(srv, plan.Mounted)
 	cp := newCommandPlane(srv, pluginsDir, plan)
@@ -112,12 +112,9 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 	}()
 
 	if withREPL {
-		// Combined Web+REPL: web.New already bound OnToolApproval to the Web
-		// Medium (SSE + /api/tool-approval). Rebind to the CLI prompt so an
-		// interactive REPL turn is not stuck waiting for a browser confirm.
-		// Web-initiated turns still get the Web face via the same hook when
-		// the REPL is not the one asking — CLI answers first when stdin is a TTY.
-		srv.OnToolApproval = cliToolApproval
+		// Combined Web+REPL (ADR-0029): both Medium approval faces are
+		// registered — the Web face answers browser confirms, the CLI face
+		// answers the interactive prompt, and the first responder wins.
 		return runREPLLoop(srv, cp)
 	}
 	select {}

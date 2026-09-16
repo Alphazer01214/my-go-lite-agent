@@ -32,7 +32,8 @@ func defaultSchemes() map[string]scheme {
 	chatSteps := 8
 	return map[string]scheme{
 		"chat": {
-			DependsPlugins: []string{},
+			// filetools provides the read-only tools chat allows (C6).
+			DependsPlugins: []string{"filetools"},
 			AllowedTools:   &chatTools,
 			MaxSteps:       &chatSteps,
 			RunSubagent:    &off,
@@ -46,6 +47,9 @@ func defaultSchemes() map[string]scheme {
 			DependsPlugins: []string{
 				"filetools", "shelltools", "sandbox",
 				"skill-manager", "project-context", "webtools",
+				// Reference plugins ride along the richest scheme so every
+				// shipped plugin has a mount path (C12).
+				"echotool", "echo", "uidemo",
 			},
 			RunSubagent: &on,
 			Todo:        &on,

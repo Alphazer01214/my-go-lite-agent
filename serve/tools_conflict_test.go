@@ -56,7 +56,7 @@ func installToolsPlugin(t *testing.T, pluginsDir, name, bin string) {
 	}
 }
 
-func TestDuplicateToolNameFailsMount(t *testing.T) {
+func TestDuplicateToolNameFailsLoud(t *testing.T) {
 	root := moduleRoot(t)
 	bin := filepath.Join(t.TempDir(), "echotool")
 	buildBin(t, root, "./plugins/echotool", bin)
@@ -70,11 +70,18 @@ func TestDuplicateToolNameFailsMount(t *testing.T) {
 	if len(plan.Mounted) != 2 {
 		t.Fatalf("want 2 mounted, got %+v", plan)
 	}
-	_, err := serve.Start(plan.Mounted)
-	if err == nil {
-		t.Fatal("want fail-loud on duplicate tool name")
+	// ADR-0017: Start soft-fails; the duplicate tool name stays visible at
+	// use time instead of taking the Host down at launch.
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		t.Fatalf("Start must soft-fail, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "provided by both") && !strings.Contains(err.Error(), "tool") {
+	defer func() { _ = srv.Close() }()
+	_, err = srv.CallByCap("tools", "list", nil)
+	if err == nil {
+		t.Fatal("want fail-loud on duplicate tool name at tools.list")
+	}
+	if !strings.Contains(err.Error(), "multiple") && !strings.Contains(err.Error(), "tool") {
 		t.Fatalf("want tool conflict error, got: %v", err)
 	}
 }

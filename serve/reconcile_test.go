@@ -64,9 +64,9 @@ func TestReconcileConsumesIsIdempotentAndIncrementsGen(t *testing.T) {
 		degraded: map[string]bool{},
 	}
 	s.reconcileConsumes()
-	gen1, snap1 := s.reconcileGen, s.Registry()
+	gen1, snap1 := s.reconcileGen, s.registry()
 	s.reconcileConsumes()
-	gen2, snap2 := s.reconcileGen, s.Registry()
+	gen2, snap2 := s.reconcileGen, s.registry()
 	if gen2 != gen1+1 {
 		t.Fatalf("reconcileGen must increment, got %d -> %d", gen1, gen2)
 	}

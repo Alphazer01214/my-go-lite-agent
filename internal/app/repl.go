@@ -11,7 +11,7 @@ import (
 )
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
-func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string, scheme string) error {
+func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string) error {
 	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
@@ -22,13 +22,13 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string, sche
 	}
 	defer func() { _ = srv.Close() }()
 
-	if scheme != "" {
-		applyAgentScheme(srv, scheme)
-	}
 	if workspace != "" {
-		_ = srv.SetSessionWorkspace("default", workspace)
+		// Session 初值 (ADR-0020): soft — session plugin may be absent.
+		_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+			"sessionId": "default", "workspace": workspace,
+		}))
 	}
-	srv.OnToolApproval = cliToolApproval
+	serve.RegisterApproval(srv, cliToolApproval)
 
 	probeCommandFaces(srv, plan.Mounted)
 

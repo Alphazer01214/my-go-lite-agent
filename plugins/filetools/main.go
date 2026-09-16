@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
@@ -192,7 +193,110 @@ func main() {
 		return json.Marshal(map[string]string{"content": content})
 	})
 
+	// workspace.resolve maps a directory NAME picked in the Web Shell to an
+	// absolute path (ADR-0020). The File System Access API never reveals the
+	// real path; this Plugin owns the directory walk so Host does not traverse
+	// the filesystem for a plugin's business (ADR-0026).
+	s.Handle("workspace", "resolve", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Name string `json:"name"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		return resolveWorkspaceName(in.Name)
+	})
+
 	_ = s.Serve()
+}
+
+// workspaceResolveMaxDirs caps the directory walk so a pick never hangs.
+const workspaceResolveMaxDirs = 20000
+
+// skipWalkDirs are directory names never searched for a picked workspace.
+var skipWalkDirs = map[string]bool{
+	"node_modules": true, "AppData": true, "$RECYCLE.BIN": true,
+	"System Volume Information": true, "Windows": true, "ProgramData": true,
+}
+
+// resolveWorkspaceName implements workspace.resolve: an absolute path is taken
+// at face value; otherwise the name is matched against the Plugin's working
+// directory (descendants, depth<=3) and its ancestors' immediate children, so
+// picking a sibling project works. Exactly one match wins; several become
+// candidates; zero means the user types the path.
+func resolveWorkspaceName(name string) (json.RawMessage, error) {
+	raw := strings.TrimSpace(name)
+	out := map[string]any{"name": raw, "path": "", "candidates": []string{}}
+	if raw == "" {
+		return json.Marshal(out)
+	}
+	// An absolute (or otherwise usable) path is taken at face value.
+	if abs, err := filepath.Abs(raw); err == nil {
+		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+			out["path"] = abs
+			out["candidates"] = []string{abs}
+			return json.Marshal(out)
+		}
+	}
+	base := filepath.Base(filepath.Clean(raw))
+	cwd, err := os.Getwd()
+	if err != nil {
+		return json.Marshal(out)
+	}
+	type scope struct {
+		root  string
+		depth int
+	}
+	scopes := []scope{{cwd, 3}}
+	up := cwd
+	for i := 0; i < 3; i++ {
+		parent := filepath.Dir(up)
+		if parent == up {
+			break
+		}
+		scopes = append(scopes, scope{parent, 1})
+		up = parent
+	}
+	visited := 0
+	seen := map[string]bool{}
+	var found []string
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if visited > workspaceResolveMaxDirs || len(found) > 32 {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || skipWalkDirs[e.Name()] {
+				continue
+			}
+			visited++
+			full := filepath.Join(dir, e.Name())
+			if e.Name() == base && !seen[full] {
+				seen[full] = true
+				found = append(found, full)
+			}
+			if depth > 1 {
+				walk(full, depth-1)
+			}
+		}
+	}
+	for _, sc := range scopes {
+		if filepath.Base(sc.root) == base && !seen[sc.root] {
+			seen[sc.root] = true
+			found = append(found, sc.root)
+		}
+		walk(sc.root, sc.depth)
+	}
+	sort.Strings(found)
+	if len(found) == 1 {
+		out["path"] = found[0]
+	}
+	out["candidates"] = found
+	return json.Marshal(out)
 }
 
 func handleReadFile(args json.RawMessage, workspace string) (string, error) {

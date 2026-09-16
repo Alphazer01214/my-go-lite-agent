@@ -16,6 +16,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -91,18 +92,10 @@ type Server struct {
 	turnStatesMu sync.Mutex
 	turnStates   map[string]*sessionTurn
 	job          *jobHolder
-	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
-	// channel is "content" or "reasoning" so media can paint them differently.
-	OnStreamDelta func(delta, channel string)
-	// OnStatus is the live Render Medium hook for agent idle/running.
-	OnStatus func(status string)
-	// OnToolCall is the live Render Medium hook when the Loop starts a tool (or Subagent).
-	OnToolCall func(name string, arguments json.RawMessage)
-	// OnRender is the live Render Medium hook for presentation.render intents.
-	OnRender func(ri RenderIntent)
-	// OnToolApproval is the live Render Medium hook for policy.ask (agent.confirm).
-	// Return true to allow the tool call. Nil means deny (safe default).
-	OnToolApproval func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
+	// approvals are the registered Render Medium faces for policy.ask
+	// (agent.confirm, ADR-0029). All registered faces are asked in parallel;
+	// the first responder wins the ruling. No faces deny (safe default).
+	approvals []func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
 }
 
 // HostCap is the Capability for Host cross-cutting methods (ensurePlugins).
@@ -197,7 +190,13 @@ type RegistrySnapshot struct {
 }
 
 // Registry returns a consistent snapshot of the Capability registry.
-func (s *Server) Registry() RegistrySnapshot {
+// Package function so observability surfaces (web) read it without expanding
+// the Server's exported method surface (ADR-0016 allowlist).
+func Registry(s *Server) RegistrySnapshot {
+	return s.registry()
+}
+
+func (s *Server) registry() RegistrySnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := RegistrySnapshot{
@@ -222,16 +221,6 @@ func (s *Server) Registry() RegistrySnapshot {
 	}
 	sort.Strings(out.Degraded)
 	return out
-}
-
-// PanelOp is one Web Medium panel mutation (ADR-0010): mount (set) or remove
-// (clear) a Panel Component by id. See CONTEXT.md PanelOp.
-type PanelOp struct {
-	Op        string          `json:"op"`                  // set | clear
-	Slot      string          `json:"slot"`                // sidebar | main-overlay | toolbar-right
-	ID        string          `json:"id"`                  // stable panel id; set replaces by id
-	Component string          `json:"component,omitempty"` // custom element tag, required for set
-	Props     json.RawMessage `json:"props,omitempty"`     // JSON object passed to the element
 }
 
 // PresentationPanelMethod is a PanelOp op (set|clear). See CONTEXT.md PanelOp.
@@ -265,11 +254,8 @@ const CommandsCap = "commands"
 const CommandsCallMethod = "call"
 
 // PresentationCard is a structured UI render intent projected from args/result (no I/O).
-type PresentationCard struct {
-	CardType string          `json:"cardType"`
-	Tool     string          `json:"tool,omitempty"`
-	Data     json.RawMessage `json:"data,omitempty"`
-}
+// Alias of the pluginsdk Card wire type (one definition, ADR-0026).
+type PresentationCard = pluginsdk.Card
 
 // Cards returns a copy of Presentation Cards observed this run.
 func (s *Server) Cards() []PresentationCard {
@@ -295,7 +281,11 @@ func (s *Server) recordCard(f *protocol.Frame) {
 	s.mu.Unlock()
 }
 
-// Start launches every mounted Plugin, soft-checks consumes, and builds the Capability registry.
+// Start launches every mounted Plugin, reconciles consumes, and builds the
+// Capability registry. Soft-fail (ADR-0017): a single Plugin launch failure
+// never takes down the whole Host — the failure is surfaced on stderr and the
+// remaining Plugins still start. Capability conflicts and tool discovery
+// errors are likewise visible but non-fatal.
 func Start(mounted []discovery.Found) (*Server, error) {
 	s := &Server{
 		plugins:    make(map[string]*proc, len(mounted)),
@@ -314,8 +304,9 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		s.job = job
 	}
 	if err := s.registerProvides(mounted); err != nil {
-		_ = s.Close()
-		return nil, err
+		// Configuration error (duplicate capability owner): visible, continue —
+		// the registry will simply not route the conflicting capability.
+		fmt.Fprintf(os.Stderr, "warn: %v\n", err)
 	}
 	for _, p := range mounted {
 		// UI-only Plugin: no executable, no process, no Frames (ADR-0011).
@@ -326,15 +317,14 @@ func Start(mounted []discovery.Found) (*Server, error) {
 			continue
 		}
 		if err := s.launch(p); err != nil {
-			debugf("launch failed plugin=%s err=%v", p.Manifest.Name, err)
-			_ = s.Close()
-			return nil, err
+			// ADR-0017: one bad Plugin must not take down the Host.
+			fmt.Fprintf(os.Stderr, "warn: launch failed plugin=%s err=%v\n", p.Manifest.Name, err)
+			continue
 		}
 	}
 	s.reconcileConsumes()
 	if err := s.discoverTools(); err != nil {
-		_ = s.Close()
-		return nil, err
+		fmt.Fprintf(os.Stderr, "warn: tools discovery failed: %v\n", err)
 	}
 	return s, nil
 }
@@ -386,7 +376,7 @@ func (s *Server) discoverTools() error {
 	s.mu.Unlock()
 	next := make(map[string]string)
 	for _, name := range providers {
-		payload, err := s.CallByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
+		payload, err := s.callByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
 		if err != nil {
 			return fmt.Errorf("tools.list from %s: %w", name, err)
 		}
@@ -414,12 +404,14 @@ func (s *Server) discoverTools() error {
 	return nil
 }
 
-// CallByPlugin is Host-initiated cap.method to a named Plugin (bypasses unique-owner lookup).
-func (s *Server) CallByPlugin(pluginName, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+// callByPlugin is Host-initiated cap.method to a named Plugin (bypasses
+// unique-owner lookup). Internal primitive: exported callers go through
+// CallByCap or CallByFace (ADR-0027).
+func (s *Server) callByPlugin(pluginName, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	out, err := s.Call(pluginName, &protocol.Frame{
+	out, err := s.call(pluginName, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     cap,
@@ -446,7 +438,7 @@ func (s *Server) toolsListMerged() (json.RawMessage, error) {
 	merged := []any{}
 	seen := map[string]bool{}
 	for _, name := range providers {
-		payload, err := s.CallByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
+		payload, err := s.callByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
 		if err != nil {
 			return nil, err
 		}
@@ -749,17 +741,13 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	if f.Cap == PresentationCap && f.Method == PresentationPanelMethod {
 		s.dispatchPanel(from, f)
 	}
-	// Live stream chunks are a Presentation signal (ADR-0016): fan out even when
-	// the LLM Plugin was called by an external Agent via the star, not by Host.
-	if delta, channel, sessionID, ok := extractStreamDelta(f); ok {
-		if s.OnStreamDelta != nil {
-			s.OnStreamDelta(delta, channel)
-		}
-		s.publish(Event{Topic: "stream", Data: map[string]string{
-			"delta":     delta,
-			"channel":   channel,
-			"sessionId": sessionID,
-		}})
+	// Stream signals are relayed as-is: Host does not interpret payload fields
+	// (ADR-0026) — the Render Medium parses the public stream contract itself.
+	// Both presentation.stream (typed emitter) and the legacy llm.chunk signal
+	// are forwarded so external Agents and test stubs stay live.
+	if (f.Cap == PresentationCap && f.Method == PresentationStreamMethod) ||
+		(f.Cap == LLMCap && f.Method == LLMChunkMethod) {
+		s.publish(Event{Topic: "stream", Data: f.Payload})
 	}
 	if f.ID == "" {
 		return
@@ -777,38 +765,14 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 }
 
 func (s *Server) dispatchRender(f *protocol.Frame) {
-	var ri struct {
-		Kind      string        `json:"kind"`
-		Text      string        `json:"text"`
-		Level     string        `json:"level"`
-		Title     string        `json:"title"`
-		Pairs     []SummaryPair `json:"pairs"`
-		Detail    string        `json:"detail"`
-		SessionID string        `json:"sessionId"`
-	}
+	// Render intents are a public contract type (pluginsdk.RenderIntent);
+	// Host decodes and relays without judging kind or content (ADR-0026:
+	// presentation events are emitted by the Plugin, not curated by Host).
+	var ri pluginsdk.RenderIntent
 	if len(f.Payload) > 0 {
 		_ = json.Unmarshal(f.Payload, &ri)
 	}
-	intent := RenderIntent{
-		Kind:      ri.Kind,
-		Text:      ri.Text,
-		Level:     ri.Level,
-		Title:     ri.Title,
-		Pairs:     ri.Pairs,
-		Detail:    ri.Detail,
-		SessionID: ri.SessionID,
-	}
-	switch ri.Kind {
-	case KindMarkdownText, KindMessageText, KindSummaryText:
-		if s.OnRender != nil {
-			s.OnRender(intent)
-		}
-		s.publish(Event{Topic: "presentation", Data: intent})
-	default:
-		if s.OnStatus != nil {
-			s.OnStatus(fmt.Sprintf("warn: dropped unknown render kind %q", ri.Kind))
-		}
-	}
+	s.publish(Event{Topic: "presentation", Data: ri})
 }
 
 func (s *Server) dispatchPanel(from string, f *protocol.Frame) {
@@ -862,9 +826,6 @@ func (s *Server) validatePanelOp(from string, op PanelOp) error {
 // silently dropping it. Panel evt frames carry no id, so there is no
 // correlated error Frame; the warn status is the observable rejection.
 func (s *Server) rejectPanel(from, reason string) {
-	if s.OnStatus != nil {
-		s.OnStatus(fmt.Sprintf("warn: rejected panel op from %s: %s", from, reason))
-	}
 	s.publish(Event{Topic: "status", Data: map[string]string{
 		"status": fmt.Sprintf("warn: rejected panel op from %s: %s", from, reason),
 	}})
@@ -1005,7 +966,7 @@ func (s *Server) routeToolsFromPlugin(from string, f *protocol.Frame) {
 		}
 		if owner == from {
 			// Self-call of an owned tool: execute via Call (bypass star self-block).
-			payload, err := s.CallByPlugin(owner, ToolsCap, "call", f.Payload)
+			payload, err := s.callByPlugin(owner, ToolsCap, "call", f.Payload)
 			if err != nil {
 				res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
 			} else {
@@ -1099,67 +1060,15 @@ func (s *Server) complete(f *protocol.Frame) {
 		}
 		return
 	}
-	// Fan-out plugin-originated session.append so Web trace stays live
-	// without Host interpreting fact types (reasoning, tools, …).
-	if f.Error == nil && w.cap == SessionCap && w.method == "append" {
-		s.publishPluginSessionAppend(w.reqPayload, f)
-	}
-	// Host policy: every llm.complete that reports usage is mirrored into
-	// Context Manager so tokens stay accurate even if a custom Loop forgets.
-	// Async: must not block the LLM Plugin's readLoop on another star call.
-	if f.Error == nil && w.cap == LLMCap && w.method == "complete" {
-		reqPayload, resPayload := w.reqPayload, f.Payload
-		go s.noteLLMUsage(reqPayload, resPayload)
-	}
+	// No Host-side side effects on plugin-originated calls: session facts are
+	// emitted by the Session Plugin itself, and llm usage is pushed by the LLM
+	// Plugin via context.noteUsage (ADR-0026: Host does not interpret payloads
+	// or duplicate business facts).
 	out := *f
 	out.ID = w.origID
 	_ = s.writeTo(w.caller, &out)
 }
 
-// noteLLMUsage forwards provider usage from an llm.complete res into Context
-// Manager. sessionId comes from the original request payload.
-func (s *Server) noteLLMUsage(reqPayload, resPayload json.RawMessage) {
-	var req struct {
-		SessionID string `json:"sessionId"`
-	}
-	if len(reqPayload) > 0 {
-		_ = json.Unmarshal(reqPayload, &req)
-	}
-	var out struct {
-		Usage map[string]any `json:"usage"`
-	}
-	if len(resPayload) > 0 {
-		_ = json.Unmarshal(resPayload, &out)
-	}
-	if req.SessionID == "" || len(out.Usage) == 0 {
-		return
-	}
-	_ = s.NoteContextUsage(req.SessionID, out.Usage)
-}
-
-// publishPluginSessionAppend mirrors AppendSessionFacts' live topic=session event
-// for appends that came from a Plugin (star call), not from the Host Loop.
-func (s *Server) publishPluginSessionAppend(reqPayload json.RawMessage, res *protocol.Frame) {
-	if len(reqPayload) == 0 {
-		return
-	}
-	var body map[string]any
-	if err := json.Unmarshal(reqPayload, &body); err != nil {
-		return
-	}
-	var out struct {
-		Seq int `json:"seq"`
-	}
-	if len(res.Payload) > 0 {
-		_ = json.Unmarshal(res.Payload, &out)
-	}
-	factOut := make(map[string]any, len(body)+1)
-	for k, v := range body {
-		factOut[k] = v
-	}
-	factOut["seq"] = out.Seq
-	s.publish(Event{Topic: "session", Data: factOut})
-}
 
 func (s *Server) writeTo(plugin string, f *protocol.Frame) error {
 	s.mu.Lock()
@@ -1175,30 +1084,47 @@ func (s *Server) writeTo(plugin string, f *protocol.Frame) error {
 	return protocol.WriteFrame(p.stdin, f)
 }
 
-// Call sends a Host-initiated req to pluginName and waits for its res (with timeout).
+// call sends a Host-initiated req to pluginName and waits for its res (with timeout).
 // Retries once on plugin_down after on-demand restart (crash recovery).
-func (s *Server) Call(pluginName string, f *protocol.Frame) (*protocol.Frame, error) {
-	out, err := s.CallStream(pluginName, f)
+// Internal primitive (ADR-0027): exported callers go through CallByCap or
+// CallByFace so nothing bypasses the registry.
+func (s *Server) call(pluginName string, f *protocol.Frame) (*protocol.Frame, error) {
+	out, err := s.callStream(pluginName, f)
 	if err != nil {
 		return nil, err
 	}
 	return out.Frame, nil
 }
 
-// CallCommand routes a slash command into pluginName (cap=commands, method=call).
-func (s *Server) CallCommand(pluginName, command, args string) (json.RawMessage, error) {
-	payload, err := json.Marshal(map[string]string{
-		"command": command,
-		"args":    args,
-	})
-	if err != nil {
-		return nil, err
+// CallByFace routes a Host-addressed face call into a Plugin that declared the
+// hostFace (config | commands | ui, ADR-0027). The face must be declared or
+// the call is rejected — this is what makes bypassing the registry impossible
+// at the call-site level.
+func CallByFace(s *Server, pluginName, face, method string, payload json.RawMessage) (json.RawMessage, error) {
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
 	}
-	out, err := s.Call(pluginName, &protocol.Frame{
+	s.mu.Lock()
+	p := s.plugins[pluginName]
+	s.mu.Unlock()
+	if p == nil {
+		return nil, fmt.Errorf("plugin %q not mounted", pluginName)
+	}
+	declared := false
+	for _, f := range p.found.Manifest.HostFaces {
+		if f == face {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return nil, fmt.Errorf("plugin %q does not declare hostFace %q", pluginName, face)
+	}
+	out, err := s.call(pluginName, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
-		Cap:     CommandsCap,
-		Method:  CommandsCallMethod,
+		Cap:     face,
+		Method:  method,
 		Payload: payload,
 	})
 	if err != nil {
@@ -1210,23 +1136,6 @@ func (s *Server) CallCommand(pluginName, command, args string) (json.RawMessage,
 	return out.Payload, nil
 }
 
-// CallUIAction routes a UI Action into pluginName (cap=ui, method=action).
-func (s *Server) CallUIAction(pluginName string, payload json.RawMessage) (json.RawMessage, error) {
-	out, err := s.Call(pluginName, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     UICap,
-		Method:  UIActionMethod,
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if out.Error != nil {
-		return nil, out.Error
-	}
-	return out.Payload, nil
-}
 
 // CallByCap routes cap.method to the Plugin that provides cap.
 // For tools (multi-provider, ADR-0018), list merges and call routes by tool name.
@@ -1246,7 +1155,7 @@ func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.Ra
 			if !ok {
 				return nil, &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
 			}
-			return s.CallByPlugin(owner, ToolsCap, method, payload)
+			return s.callByPlugin(owner, ToolsCap, method, payload)
 		}
 	}
 	s.mu.Lock()
@@ -1258,7 +1167,7 @@ func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.Ra
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	out, err := s.Call(owner, &protocol.Frame{
+	out, err := s.call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     cap,
@@ -1274,14 +1183,15 @@ func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.Ra
 	return out.Payload, nil
 }
 
-// CallStream is Call plus any evt frames attributed to the request id while waiting.
-func (s *Server) CallStream(pluginName string, f *protocol.Frame) (*CallResult, error) {
-	return s.CallStreamOn(pluginName, f, nil)
+// callStream is call plus any evt frames attributed to the request id while waiting.
+// Internal primitive (ADR-0027).
+func (s *Server) callStream(pluginName string, f *protocol.Frame) (*CallResult, error) {
+	return s.callStreamOn(pluginName, f, nil)
 }
 
-// CallStreamOn is CallStream with a live callback for each attributed evt (Render Medium).
+// callStreamOn is callStream with a live callback for each attributed evt (Render Medium).
 // Callback runs on the Host read-loop goroutine; keep it fast and non-blocking.
-func (s *Server) CallStreamOn(pluginName string, f *protocol.Frame, onEvent func(*protocol.Frame)) (*CallResult, error) {
+func (s *Server) callStreamOn(pluginName string, f *protocol.Frame, onEvent func(*protocol.Frame)) (*CallResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt == 1 {
@@ -1412,33 +1322,24 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// SessionCap is the Capability name Session Plugins must provide.
-const SessionCap = "session"
-
-// AgentCap is the Host-owned Capability namespace for agent/request and agent.inject.
-const AgentCap = "agent"
-
-// LLMCap is the Capability name LLM Plugins provide (consumed by Agent Loop).
-const LLMCap = "llm"
-
-// SystemPromptCap is the Capability Context Manager Plugins provide (ADR-0006).
-const SystemPromptCap = "system-prompt"
-
-// ContextCap is the Capability Context Manager Plugins provide for prepare/compact/usage (ADR-0013).
-const ContextCap = "context"
-
-// LoopCap is the Agent Loop Capability (ADR-0016). A mounted Agent Plugin must
-// provide it; Host has no in-process default Loop.
-const LoopCap = "loop"
+// Capability names: aliases of the pluginsdk contract (ADR-0016/0026).
+// Host references these instead of literal capability names so plugin
+// directory names never appear in Host code.
+const (
+	SessionCap      = pluginsdk.SessionCap
+	AgentCap        = pluginsdk.AgentCap
+	LLMCap          = pluginsdk.LLMCap
+	SystemPromptCap = pluginsdk.SystemPromptCap
+	ContextCap      = pluginsdk.ContextCap
+	LoopCap         = pluginsdk.LoopCap
+	ToolsCap        = pluginsdk.ToolsCap
+)
 
 // LLMChunkMethod is the evt method LLM Plugins use to stream a delta.
 const LLMChunkMethod = "chunk"
 
 // LLMCompleteMethod is the req/res method LLM Plugins implement.
 const LLMCompleteMethod = "complete"
-
-// ToolsCap is the Capability Tools Plugins provide (list/call).
-const ToolsCap = "tools"
 
 // ToolCall is a model-requested tool invocation.
 type ToolCall struct {
@@ -1464,133 +1365,71 @@ type AgentRequestResult struct {
 	Rebuilt bool `json:"rebuilt"`
 }
 
-// QuerySessionFacts lists Session Log facts via session.query.
-// Empty sessionID targets the default Session.
-func (s *Server) QuerySessionFacts(sessionID string, afterSeq, limit int) ([]map[string]any, error) {
+// callByCapOwner routes cap.method to its unique owner (internal helper for
+// the Host's own contract consumption; public Medium callers use CallByCap).
+func (s *Server) callByCapOwner(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
+	owner, ok := s.provides[cap]
 	s.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
+		return nil, fmt.Errorf("no plugin provides %q", cap)
 	}
-	payload := map[string]any{"afterSeq": afterSeq, "limit": limit}
-	if sessionID != "" {
-		payload["sessionId"] = sessionID
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
 	}
-	res, err := s.Call(owner, &protocol.Frame{
+	out, err := s.call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
-		Cap:     SessionCap,
-		Method:  "query",
-		Payload: MarshalPayload(payload),
+		Cap:     cap,
+		Method:  method,
+		Payload: payload,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("session.query: %w", err)
+		return nil, err
 	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("session.query: %w", res.Error)
+	if out.Error != nil {
+		return nil, out.Error
 	}
-	var out struct {
-		Facts []map[string]any `json:"facts"`
-	}
-	if err := json.Unmarshal(res.Payload, &out); err != nil {
-		return nil, fmt.Errorf("session.query: bad payload: %w", err)
-	}
-	if out.Facts == nil {
-		out.Facts = []map[string]any{}
-	}
-	return out.Facts, nil
+	return out.Payload, nil
 }
 
-// DeriveMessages rebuilds Model Context from the mounted Session Plugin (session.derive).
-// Empty sessionID targets the default Session.
-func (s *Server) DeriveMessages(sessionID string) ([]Message, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
-	}
+// agentDerive rebuilds Model Context through the Session Plugin's public
+// session.derive contract (empty sessionID targets the default Session).
+func (s *Server) agentDerive(sessionID string) ([]Message, error) {
 	payload := json.RawMessage(`{}`)
 	if sessionID != "" {
 		payload = MarshalPayload(map[string]string{"sessionId": sessionID})
 	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     SessionCap,
-		Method:  "derive",
-		Payload: payload,
-	})
+	out, err := s.callByCapOwner(SessionCap, "derive", payload)
 	if err != nil {
 		return nil, fmt.Errorf("session.derive: %w", err)
 	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("session.derive: %w", res.Error)
-	}
-	var out struct {
+	var res struct {
 		Messages []Message `json:"messages"`
 	}
-	if err := json.Unmarshal(res.Payload, &out); err != nil {
+	if err := json.Unmarshal(out, &res); err != nil {
 		return nil, fmt.Errorf("session.derive: bad payload: %w", err)
 	}
-	if out.Messages == nil {
-		out.Messages = []Message{}
+	if res.Messages == nil {
+		res.Messages = []Message{}
 	}
-	return out.Messages, nil
+	return res.Messages, nil
 }
 
-// AppendSessionFacts appends each fact to the mounted Session Plugin.
-// Empty sessionID targets the default Session.
-func (s *Server) AppendSessionFacts(sessionID string, facts []map[string]any) (int, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
-	s.mu.Unlock()
-	if !ok {
-		return 0, fmt.Errorf("no plugin provides %q", SessionCap)
+// agentAppend appends one fact through the Session Plugin's public
+// session.append contract and returns the new seq.
+func (s *Server) agentAppend(sessionID string, fact map[string]any) (int, error) {
+	out, err := s.callByCapOwner(SessionCap, "append", MarshalPayload(fact))
+	if err != nil {
+		return 0, fmt.Errorf("session.append: %w", err)
 	}
-	last := 0
-	for _, fact := range facts {
-		body := fact
-		if sessionID != "" {
-			body = make(map[string]any, len(fact)+1)
-			for k, v := range fact {
-				body[k] = v
-			}
-			body["sessionId"] = sessionID
-		}
-		res, err := s.Call(owner, &protocol.Frame{
-			V:       protocol.Version,
-			Type:    protocol.TypeReq,
-			Cap:     SessionCap,
-			Method:  "append",
-			Payload: MarshalPayload(body),
-		})
-		if err != nil {
-			return last, fmt.Errorf("session.append: %w", err)
-		}
-		if res.Error != nil {
-			return last, fmt.Errorf("session.append: %w", res.Error)
-		}
-		var out struct {
-			Seq int `json:"seq"`
-		}
-		if err := json.Unmarshal(res.Payload, &out); err != nil {
-			return last, fmt.Errorf("session.append: bad payload: %w", err)
-		}
-		last = out.Seq
-		// Live Session Log for Web trace (topic=session).
-		factOut := make(map[string]any, len(body)+2)
-		for k, v := range body {
-			factOut[k] = v
-		}
-		if _, ok := factOut["sessionId"]; !ok {
-			factOut["sessionId"] = sessionID
-		}
-		factOut["seq"] = out.Seq
-		s.publish(Event{Topic: "session", Data: factOut})
+	var res struct {
+		Seq int `json:"seq"`
 	}
-	return last, nil
+	if err := json.Unmarshal(out, &res); err != nil {
+		return 0, fmt.Errorf("session.append: bad payload: %w", err)
+	}
+	return res.Seq, nil
 }
 
 // AgentRequest enforces the Session Log invariant before a model call (ADR-0002).
@@ -1599,7 +1438,7 @@ func (s *Server) AppendSessionFacts(sessionID string, facts []map[string]any) (i
 // claimed non-empty → must match session.derive exactly, else session_invariant_violation.
 // Empty sessionID targets the default Session.
 func (s *Server) AgentRequest(sessionID string, claimed []Message) (*AgentRequestResult, error) {
-	derived, err := s.DeriveMessages(sessionID)
+	derived, err := s.agentDerive(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("agent/request: %w", err)
 	}
@@ -1610,101 +1449,6 @@ func (s *Server) AgentRequest(sessionID string, claimed []Message) (*AgentReques
 		}
 	}
 	return &AgentRequestResult{Messages: derived, Rebuilt: len(claimed) == 0}, nil
-}
-
-// ContextUsage returns the Context Manager's last prepare usage for a session.
-func (s *Server) ContextUsage(sessionID string) (map[string]any, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[ContextCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, nil
-	}
-	payload := json.RawMessage(`{}`)
-	if sessionID != "" {
-		payload = MarshalPayload(map[string]string{"sessionId": sessionID})
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     ContextCap,
-		Method:  "usage",
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("context.usage: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("context.usage: %w", res.Error)
-	}
-	var out struct {
-		Usage map[string]any `json:"usage"`
-	}
-	if len(res.Payload) > 0 {
-		_ = json.Unmarshal(res.Payload, &out)
-	}
-	return out.Usage, nil
-}
-
-// NoteContextUsage pushes provider usage into Context Manager (source=provider).
-func (s *Server) NoteContextUsage(sessionID string, usage map[string]any) error {
-	s.mu.Lock()
-	owner, ok := s.provides[ContextCap]
-	s.mu.Unlock()
-	if !ok || len(usage) == 0 {
-		return nil
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:      protocol.Version,
-		Type:   protocol.TypeReq,
-		Cap:    ContextCap,
-		Method: "noteUsage",
-		Payload: MarshalPayload(map[string]any{
-			"sessionId": sessionID,
-			"usage":     usage,
-		}),
-	})
-	if err != nil {
-		return fmt.Errorf("context.noteUsage: %w", err)
-	}
-	if res.Error != nil {
-		return fmt.Errorf("context.noteUsage: %w", res.Error)
-	}
-	return nil
-}
-
-// ListContextMessages returns the last prepare messages preview from Context Manager.
-func (s *Server) ListContextMessages(sessionID string, n int) ([]Message, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[ContextCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, nil
-	}
-	payload := MarshalPayload(map[string]any{"sessionId": sessionID, "n": n})
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     ContextCap,
-		Method:  "listContext",
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("context.listContext: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("context.listContext: %w", res.Error)
-	}
-	var out struct {
-		Messages []Message `json:"messages"`
-	}
-	if len(res.Payload) > 0 {
-		_ = json.Unmarshal(res.Payload, &out)
-	}
-	if out.Messages == nil {
-		out.Messages = []Message{}
-	}
-	return out.Messages, nil
 }
 
 // sessionTurn is one Session's in-flight default-Loop turn control.
@@ -1757,8 +1501,9 @@ func (s *Server) endRunning(sid string) {
 	s.turnFor(sid).running.Store(false)
 }
 
-// IsRunning reports whether any default-Loop turn is in flight.
-func (s *Server) IsRunning() bool {
+// isRunning reports whether any default-Loop turn is in flight (internal;
+// Mediums observe per-Session via RunningSessions / IsRunningOn).
+func (s *Server) isRunning() bool {
 	return len(s.RunningSessions()) > 0
 }
 
@@ -1794,35 +1539,9 @@ func (s *Server) StatusForSession(sid string) string {
 
 func (s *Server) emitStatus(sessionID, status string) {
 	sessionID = normalizeSessionID(sessionID)
-	if s.OnStatus != nil {
-		s.OnStatus(status)
-	}
 	s.publish(Event{Topic: "status", Data: map[string]string{"status": status, "sessionId": sessionID}})
 }
 
-// extractStreamDelta returns text delta, channel (content|reasoning), and
-// sessionId from llm.chunk or presentation.stream chunk frames.
-func extractStreamDelta(f *protocol.Frame) (delta, channel, sessionID string, ok bool) {
-	var c struct {
-		Op        string `json:"op"`
-		Delta     string `json:"delta"`
-		Channel   string `json:"channel"`
-		SessionID string `json:"sessionId"`
-	}
-	if len(f.Payload) > 0 {
-		_ = json.Unmarshal(f.Payload, &c)
-	}
-	if c.Channel == "" {
-		c.Channel = "content"
-	}
-	if f.Method == LLMChunkMethod {
-		return c.Delta, c.Channel, c.SessionID, c.Delta != ""
-	}
-	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod && c.Op == "chunk" {
-		return c.Delta, c.Channel, c.SessionID, c.Delta != ""
-	}
-	return "", "", "", false
-}
 
 // RunTurn is the Host entry for one chat turn: lock + status + loop.turn (ADR-0016).
 //
@@ -1866,19 +1585,6 @@ func (s *Server) CancelTurnOn(sessionID string) {
 	}
 }
 
-// CancelTurn cancels every in-flight turn (CLI Ctrl+C / legacy).
-func (s *Server) CancelTurn() {
-	s.turnStatesMu.Lock()
-	states := make([]*sessionTurn, 0, len(s.turnStates))
-	for _, st := range s.turnStates {
-		states = append(states, st)
-	}
-	s.turnStatesMu.Unlock()
-	for _, st := range states {
-		st.cancel.Store(true)
-	}
-}
-
 // TurnCancelledOn reports whether CancelTurnOn was requested for sessionID.
 func (s *Server) TurnCancelledOn(sessionID string) bool {
 	sessionID = normalizeSessionID(sessionID)
@@ -1886,115 +1592,6 @@ func (s *Server) TurnCancelledOn(sessionID string) bool {
 	st := s.turnStates[sessionID]
 	s.turnStatesMu.Unlock()
 	return st != nil && st.cancel.Load()
-}
-
-// TurnCancelled reports whether any turn has a cancel request.
-func (s *Server) TurnCancelled() bool {
-	s.turnStatesMu.Lock()
-	defer s.turnStatesMu.Unlock()
-	for _, st := range s.turnStates {
-		if st.cancel.Load() {
-			return true
-		}
-	}
-	return false
-}
-
-// ListSessions returns mounted Session Plugin session ids (for Web history rail).
-func (s *Server) ListSessions() ([]map[string]any, error) {
-	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", SessionCap)
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     SessionCap,
-		Method:  "list",
-		Payload: json.RawMessage(`{}`),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("session.list: %w", err)
-	}
-	if res.Error != nil {
-		return nil, fmt.Errorf("session.list: %w", res.Error)
-	}
-	var out struct {
-		Sessions []map[string]any `json:"sessions"`
-	}
-	if len(res.Payload) > 0 {
-		_ = json.Unmarshal(res.Payload, &out)
-	}
-	if out.Sessions == nil {
-		out.Sessions = []map[string]any{}
-	}
-	return out.Sessions, nil
-}
-
-// CreateSession creates a Session by id via the mounted Session Plugin (idempotent).
-func (s *Server) CreateSession(sessionID, parentSession, origin string, delegationDepth int) error {
-	return s.CreateSessionWithWorkspace(sessionID, parentSession, origin, delegationDepth, "")
-}
-
-// CreateSessionWithWorkspace creates/updates a Session, optionally setting Workspace (ADR-0020).
-func (s *Server) CreateSessionWithWorkspace(sessionID, parentSession, origin string, delegationDepth int, workspace string) error {
-	s.mu.Lock()
-	owner, ok := s.provides[SessionCap]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("no plugin provides %q", SessionCap)
-	}
-	res, err := s.Call(owner, &protocol.Frame{
-		V:      protocol.Version,
-		Type:   protocol.TypeReq,
-		Cap:    SessionCap,
-		Method: "create",
-		Payload: MarshalPayload(map[string]any{
-			"sessionId":       sessionID,
-			"parentSession":   parentSession,
-			"origin":          origin,
-			"delegationDepth": delegationDepth,
-			"workspace":       workspace,
-		}),
-	})
-	if err != nil {
-		return fmt.Errorf("session.create: %w", err)
-	}
-	if res.Error != nil {
-		return fmt.Errorf("session.create: %w", res.Error)
-	}
-	return nil
-}
-
-// SessionWorkspace returns the Workspace bound to a Session (empty when unset).
-func (s *Server) SessionWorkspace(sessionID string) string {
-	payload, err := s.CallByCap(SessionCap, "info", MarshalPayload(map[string]any{"sessionId": sessionID}))
-	if err != nil {
-		return ""
-	}
-	var out struct {
-		Workspace string `json:"workspace"`
-	}
-	_ = json.Unmarshal(payload, &out)
-	return out.Workspace
-}
-
-// SetSessionWorkspace upserts Workspace on an existing Session (ADR-0020).
-func (s *Server) SetSessionWorkspace(sessionID, workspace string) error {
-	return s.CreateSessionWithWorkspace(sessionID, "", "", 0, workspace)
-}
-
-// NewSessionIDWithWorkspace creates a Session with an optional Workspace root.
-func (s *Server) NewSessionIDWithWorkspace(id, workspace string) (string, error) {
-	if id == "" {
-		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
-	}
-	if err := s.CreateSessionWithWorkspace(id, "", "web", 0, workspace); err != nil {
-		return "", err
-	}
-	return id, nil
 }
 
 // runTurn executes one Turn on sessionID via the mounted Agent Plugin (ADR-0016).
@@ -2048,7 +1645,7 @@ func (s *Server) runExternalTurn(owner, sessionID, userInput string, allowSubage
 	if extraSystem != "" {
 		payload["extraSystem"] = extraSystem
 	}
-	res, err := s.Call(owner, &protocol.Frame{
+	res, err := s.call(owner, &protocol.Frame{
 		V:       protocol.Version,
 		Type:    protocol.TypeReq,
 		Cap:     LoopCap,
@@ -2248,10 +1845,7 @@ func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
 				return
 			}
 		}
-		approved := false
-		if s.OnToolApproval != nil {
-			approved = s.OnToolApproval(in.Tool, in.Arguments, in.Workspace, in.SessionID)
-		}
+		approved := s.askApproval(in.Tool, in.Arguments, in.Workspace, in.SessionID)
 		res.Payload = MarshalPayload(map[string]any{"approved": approved})
 		_ = s.writeTo(from, res)
 	default:
@@ -2284,19 +1878,23 @@ func (s *Server) AgentInject(payload json.RawMessage) (map[string]int, error) {
 	if len(msgs) == 0 {
 		return nil, &protocol.FrameError{Code: "bad_payload", Message: "inject requires role/content or messages"}
 	}
-	facts := make([]map[string]any, 0, len(msgs))
+	last := 0
 	for _, m := range msgs {
-		facts = append(facts, map[string]any{
+		fact := map[string]any{
 			"type":    "message",
 			"role":    defaultSystemRole(m.Role),
 			"content": m.Content,
-		})
+		}
+		if in.SessionID != "" {
+			fact["sessionId"] = in.SessionID
+		}
+		seq, err := s.agentAppend(in.SessionID, fact)
+		if err != nil {
+			return nil, err
+		}
+		last = seq
 	}
-	seq, err := s.AppendSessionFacts(in.SessionID, facts)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]int{"count": len(facts), "lastSeq": seq}, nil
+	return map[string]int{"count": len(msgs), "lastSeq": last}, nil
 }
 
 func defaultSystemRole(role string) string {

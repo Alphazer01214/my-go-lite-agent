@@ -39,6 +39,7 @@ func buildLLMOpenAIPluginDir(t *testing.T, root, pluginsDir, name, baseURL, mode
 		"protocol": 2,
 		"autostart": true,
 		"provides": ["llm"],
+		"hostFaces": ["config", "commands"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
 		"timeoutMs": 60000,

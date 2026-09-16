@@ -3,6 +3,8 @@ package serve
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 func TestTruncateRunes(t *testing.T) {
@@ -19,7 +21,7 @@ func TestTruncateRunes(t *testing.T) {
 }
 
 func TestRenderIntentJSONShape(t *testing.T) {
-	raw, err := json.Marshal(RenderIntent{Kind: KindMarkdownText, Text: "# hi", Level: "dim", Title: "t"})
+	raw, err := json.Marshal(RenderIntent{Kind: pluginsdk.RenderKind(KindMarkdownText), Text: "# hi", Level: "dim", Title: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}

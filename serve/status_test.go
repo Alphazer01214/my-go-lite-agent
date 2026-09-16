@@ -1,20 +1,17 @@
 package serve
 
 import (
-	"encoding/json"
 	"sync"
 	"testing"
-
-	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
 func TestStatusForSessionIsolatesTurns(t *testing.T) {
 	s := &Server{}
-	if s.IsRunning() || s.StatusForSession("a") != "idle" {
+	if s.isRunning() || s.StatusForSession("a") != "idle" {
 		t.Fatal("want idle before run")
 	}
 	s.beginRunning("sess-a")
-	if !s.IsRunning() || !s.IsRunningOn("sess-a") {
+	if !s.isRunning() || !s.IsRunningOn("sess-a") {
 		t.Fatalf("want running sess-a, list=%v", s.RunningSessions())
 	}
 	if s.StatusForSession("sess-a") != "running" {
@@ -33,7 +30,7 @@ func TestStatusForSessionIsolatesTurns(t *testing.T) {
 	}
 	s.endRunning("sess-a")
 	s.endRunning("")
-	if s.IsRunning() || s.StatusForSession("sess-a") != "idle" {
+	if s.isRunning() || s.StatusForSession("sess-a") != "idle" {
 		t.Fatal("want idle after clear")
 	}
 }
@@ -78,33 +75,6 @@ func TestCancelTurnOnOnlyTargetSession(t *testing.T) {
 	}
 	if s.TurnCancelledOn("b") {
 		t.Fatal("b must not cancel")
-	}
-	if !s.TurnCancelled() {
-		t.Fatal("any-cancel should report true")
-	}
-	s.CancelTurn()
-	if !s.TurnCancelledOn("b") {
-		t.Fatal("CancelTurn cancels all")
-	}
-}
-
-func TestExtractStreamDeltaReasoningChannel(t *testing.T) {
-	payload, _ := json.Marshal(map[string]string{"op": "chunk", "delta": "hi", "channel": "reasoning", "sessionId": "s1"})
-	f := &protocol.Frame{
-		Cap:     PresentationCap,
-		Method:  PresentationStreamMethod,
-		Payload: payload,
-	}
-	delta, ch, sid, ok := extractStreamDelta(f)
-	if !ok || delta != "hi" || ch != "reasoning" || sid != "s1" {
-		t.Fatalf("got ok=%v delta=%q channel=%q session=%q", ok, delta, ch, sid)
-	}
-	// llm.chunk without channel defaults to content.
-	payload2, _ := json.Marshal(map[string]string{"delta": "yo"})
-	f2 := &protocol.Frame{Method: LLMChunkMethod, Payload: payload2}
-	delta2, ch2, sid2, ok2 := extractStreamDelta(f2)
-	if !ok2 || delta2 != "yo" || ch2 != "content" || sid2 != "" {
-		t.Fatalf("got ok=%v delta=%q channel=%q session=%q", ok2, delta2, ch2, sid2)
 	}
 }
 

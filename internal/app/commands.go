@@ -10,7 +10,6 @@ import (
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
-	"github.com/tomori/my-go-lite-agent/protocol"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
 
@@ -69,14 +68,8 @@ func (cp *commandPlane) refresh() error {
 		if !ok || !hasHostFace(m, "config") {
 			continue
 		}
-		out, err := cp.srv.Call(name, &protocol.Frame{
-			V:       protocol.Version,
-			Type:    protocol.TypeReq,
-			Cap:     "config",
-			Method:  "reload",
-			Payload: json.RawMessage(`{}`),
-		})
-		if err != nil || (out != nil && out.Error != nil) {
+		_, err := cp.srv.CallByCap("config", "reload", json.RawMessage(`{}`))
+		if err != nil {
 			failed = append(failed, name)
 		}
 	}
@@ -140,7 +133,10 @@ func (cp *commandPlane) handleOut(line string) (output string, quit bool, err er
 		if sub == "" {
 			return cp.helpText(name), false, nil
 		}
-		payload, err := cp.srv.CallCommand(name, sub, args)
+		payload, err := serve.CallByFace(cp.srv, name, "commands", "call", func() json.RawMessage {
+			b, _ := json.Marshal(map[string]string{"command": sub, "args": args})
+			return b
+		}())
 		if err != nil {
 			return "", false, err
 		}
@@ -282,6 +278,23 @@ func (cp *commandPlane) pluginsText() string {
 			m.Name, m.Version, strings.Join(m.Provides, ","), status, m.Description)
 	}
 	return b.String()
+}
+
+// agentSchemeLabel reads the active Agent Scheme for REPL /lp banners through
+// the agent-presets Capability (ADR-0027): Host never reaches into agent config.
+func agentSchemeLabel(srv *serve.Server) string {
+	if srv == nil {
+		return ""
+	}
+	out, err := srv.CallByCap("agent-presets", "get", json.RawMessage(`{}`))
+	if err != nil {
+		return ""
+	}
+	var res struct {
+		DefaultScheme string `json:"defaultScheme"`
+	}
+	_ = json.Unmarshal(out, &res)
+	return res.DefaultScheme
 }
 
 func suggestCommand(input string, candidates []string) []string {

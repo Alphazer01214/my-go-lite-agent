@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tomori/my-go-lite-agent/protocol"
 	"github.com/tomori/my-go-lite-agent/render/mdansi"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
@@ -30,7 +29,6 @@ type sessionAgentOpts struct {
 	contextList   *int
 	cards         *bool
 	workspace     string
-	scheme        string
 }
 
 // turnRenderer is the CLI Render Medium (CONTEXT.md).
@@ -122,7 +120,7 @@ func (r *turnRenderer) clearProgress() {
 func (r *turnRenderer) onRender(ri serve.RenderIntent) {
 	r.clearThinking()
 	r.clearProgress()
-	switch ri.Kind {
+	switch string(ri.Kind) {
 	case serve.KindMarkdownText:
 		if ri.Text == "" {
 			return
@@ -180,15 +178,44 @@ func (r *turnRenderer) end(assistant string) {
 	r.started = false
 }
 
-// wireRenderer attaches a turnRenderer to Host live hooks for one RunTurn.
-func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
-	prevDelta, prevStatus, prevTool, prevRender := srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall, srv.OnRender
-	srv.OnStreamDelta = r.onStream
-	srv.OnStatus = r.onStatus
-	srv.OnToolCall = r.onTool
-	srv.OnRender = r.onRender
-	return func() {
-		srv.OnStreamDelta, srv.OnStatus, srv.OnToolCall, srv.OnRender = prevDelta, prevStatus, prevTool, prevRender
+// wireRenderer attaches a turnRenderer to Host live signals for one RunTurn.
+// Live signals are broadcast events (ADR-0029): subscribing keeps Multi
+// Medium coexistence intact — the CLI face reads the same stream/presentation
+// events the Web medium consumes, without overwriting any hook.
+func wireRenderer(srv *serve.Server, r *turnRenderer) func() {
+	unsub := srv.Subscribe(&serve.Subscriber{OnEvent: func(e serve.Event) {
+		switch e.Topic {
+		case "stream":
+			var p struct {
+				Delta   string `json:"delta"`
+				Channel string `json:"channel"`
+			}
+			_ = json.Unmarshal(marshalAny(e.Data), &p)
+			r.onStream(p.Delta, p.Channel)
+		case "status":
+			var p struct {
+				Status string `json:"status"`
+			}
+			_ = json.Unmarshal(marshalAny(e.Data), &p)
+			r.onStatus(p.Status)
+		case "presentation":
+			if ri, ok := e.Data.(serve.RenderIntent); ok {
+				r.onRender(ri)
+			}
+		}
+	}})
+	return unsub
+}
+
+func marshalAny(v any) json.RawMessage {
+	switch t := v.(type) {
+	case json.RawMessage:
+		return t
+	case nil:
+		return json.RawMessage(`{}`)
+	default:
+		b, _ := json.Marshal(v)
+		return b
 	}
 }
 
@@ -232,26 +259,33 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	// Bind Workspace only when a Turn will run (ADR-0020). Session-only
 	// diagnostics must not insert session_meta facts that shift seq coverage.
 	if opts.workspace != "" && opts.turnInput != nil && *opts.turnInput != "" {
-		if err := srv.SetSessionWorkspace("default", opts.workspace); err != nil {
-			// Soft: session plugin may be absent in bare assemblies.
-			_ = err
-		}
+		// Soft: session plugin may be absent in bare assemblies.
+		_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+			"sessionId": "default", "workspace": opts.workspace,
+		}))
 	}
-	srv.OnToolApproval = cliToolApproval
-	if opts.scheme != "" {
-		applyAgentScheme(srv, opts.scheme)
-	}
+	serve.RegisterApproval(srv, cliToolApproval)
 
 	if *opts.appendJSON != "" {
 		var facts []map[string]any
 		if err := json.Unmarshal([]byte(*opts.appendJSON), &facts); err != nil {
 			return fmt.Errorf("parse -session-append: %w", err)
 		}
-		seq, err := srv.AppendSessionFacts("", facts)
-		if err != nil {
-			return err
+		last := 0
+		for _, fact := range facts {
+			out, err := srv.CallByCap(serve.SessionCap, "append", serve.MarshalPayload(fact))
+			if err != nil {
+				return err
+			}
+			var res struct {
+				Seq int `json:"seq"`
+			}
+			if len(out) > 0 {
+				_ = json.Unmarshal(out, &res)
+			}
+			last = res.Seq
 		}
-		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), seq)
+		fmt.Printf("append ok count=%d lastSeq=%d\n", len(facts), last)
 	}
 
 	if opts.injectJSON != nil && *opts.injectJSON != "" {
@@ -285,22 +319,11 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		if opts.frameMethod != nil && *opts.frameMethod != "" {
 			methodName = *opts.frameMethod
 		}
-		frame := &protocol.Frame{
-			V:       protocol.Version,
-			Type:    protocol.TypeReq,
-			Cap:     capName,
-			Method:  methodName,
-			Payload: rawPayload,
-		}
-		out, err := srv.Call(*opts.invokePlugin, frame)
+		out, err := srv.CallByCap(capName, methodName, rawPayload)
 		if err != nil {
 			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
 		}
-		if out.Error != nil {
-			fmt.Printf("invoke error code=%s msg=%s\n", out.Error.Code, out.Error.Message)
-			return fmt.Errorf("invoke failed: %s", out.Error.Code)
-		}
-		fmt.Printf("invoke ok payload=%s\n", string(out.Payload))
+		fmt.Printf("invoke ok payload=%s\n", string(out))
 	}
 
 	if *opts.turnInput != "" {
@@ -323,37 +346,64 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		for i, name := range out.ToolCalls {
 			fmt.Printf("tool_call[%d]=%s\n", i, name)
 		}
-		if u, err := srv.ContextUsage(""); err == nil && u != nil {
-			body, _ := json.Marshal(u)
+		if u, err := srv.CallByCap("context", "usage", json.RawMessage(`{}`)); err == nil && len(u) > 0 {
+			body, _ := json.Marshal(json.RawMessage(u))
 			fmt.Printf("context usage=%s\n", body)
 		}
 	}
 
 	if *opts.derive {
-		msgs, err := srv.DeriveMessages("")
+		out, err := srv.CallByCap(serve.SessionCap, "derive", json.RawMessage(`{}`))
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(msgs)
+		var res struct {
+			Messages []serve.Message `json:"messages"`
+		}
+		if len(out) > 0 {
+			_ = json.Unmarshal(out, &res)
+		}
+		if res.Messages == nil {
+			res.Messages = []serve.Message{}
+		}
+		body, _ := json.Marshal(res.Messages)
 		fmt.Printf("derive ok messages=%s\n", body)
 	}
 
 	if *opts.query {
-		facts, err := srv.QuerySessionFacts("", 0, 0)
+		out, err := srv.CallByCap(serve.SessionCap, "query", serve.MarshalPayload(map[string]any{"afterSeq": 0, "limit": 0}))
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(facts)
+		var res struct {
+			Facts []map[string]any `json:"facts"`
+		}
+		if len(out) > 0 {
+			_ = json.Unmarshal(out, &res)
+		}
+		if res.Facts == nil {
+			res.Facts = []map[string]any{}
+		}
+		body, _ := json.Marshal(res.Facts)
 		fmt.Printf("query ok facts=%s\n", body)
 	}
 
 	if opts.contextList != nil && *opts.contextList > 0 {
-		msgs, err := srv.ListContextMessages("", *opts.contextList)
+		out, err := srv.CallByCap("context", "listContext", serve.MarshalPayload(map[string]any{"n": *opts.contextList}))
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(msgs)
-		fmt.Printf("context list count=%d messages=%s\n", len(msgs), body)
+		var res struct {
+			Messages []serve.Message `json:"messages"`
+		}
+		if len(out) > 0 {
+			_ = json.Unmarshal(out, &res)
+		}
+		if res.Messages == nil {
+			res.Messages = []serve.Message{}
+		}
+		body, _ := json.Marshal(res.Messages)
+		fmt.Printf("context list count=%d messages=%s\n", len(res.Messages), body)
 	}
 
 	if *opts.requestJSON != "" {

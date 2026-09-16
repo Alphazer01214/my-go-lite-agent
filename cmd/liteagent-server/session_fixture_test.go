@@ -17,6 +17,7 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"protocol": 2,
 		"autostart": true,
 		"provides": ["session"],
+		"hostFaces": ["config", "commands"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
 		"commands": [

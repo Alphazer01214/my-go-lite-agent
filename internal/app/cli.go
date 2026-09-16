@@ -5,8 +5,17 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
+
+// orDefault returns def when v is empty (flag defaults per entry).
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
 
 // CLI runs the liteagent-cli entry: the CLI Render Medium over the shared
 // kernel — REPL, one-shot turns, session ops, and plugin diagnostics
@@ -18,7 +27,6 @@ func CLI() {
 	discoverDir := flag.String("discover", "", "scan plugin directory and list discovered plugins (no mount)")
 	pluginsDir := flag.String("plugins", "", "plugin directory for Discovery")
 	assemblyPath := flag.String("assembly", "", "deprecated (ADR-0021): ignored whitelist; Autostart+dependsOn is used")
-	schemeFlag := flag.String("scheme", "", "override agent defaultScheme for this run")
 	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
 	invokePlugin := flag.String("invoke", "", "after mount, Host-initiated req to this plugin (serve mode)")
 	callCap := flag.String("call-cap", "", "Capability name for the consumer to call via Host (default echo)")
@@ -32,8 +40,8 @@ func CLI() {
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL (same process/session; Ctrl+C or /exit to quit)")
 	workspace := flag.String("workspace", "", "Workspace root for the default Session (default: process cwd)")
 	invokePayload := flag.String("invoke-payload", "", "JSON payload for -invoke (overrides -call-cap)")
-	frameCap := flag.String("frame-cap", "", "Frame Capability for -invoke (default demo)")
-	frameMethod := flag.String("frame-method", "", "Frame method for -invoke (default invoke)")
+	frameCap := flag.String("frame-cap", "", "Frame Capability for -invoke / -plugin (default per entry: demo / echo)")
+	frameMethod := flag.String("frame-method", "", "Frame method for -invoke / -plugin (default per entry: invoke / echo)")
 	contextList := flag.Int("context-list", 0, "print last N Model Context messages from Context Manager (0=off)")
 	cards := flag.Bool("cards", false, "print Presentation Cards observed during the run")
 	debug := flag.Bool("debug", false, "print host Frame debug log to stderr")
@@ -55,7 +63,7 @@ func CLI() {
 		}
 	case *pluginsDir != "" && (*repl || *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards || *contextList > 0 || *invokePlugin != "" || *callPlugin != "" || *dump):
 		if *repl {
-			if err := runREPL(*pluginsDir, *assemblyPath, dump, ws, *schemeFlag); err != nil {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump, ws); err != nil {
 				fatal(err)
 			}
 			return
@@ -79,7 +87,6 @@ func CLI() {
 				contextList:   contextList,
 				cards:         cards,
 				workspace:     ws,
-				scheme:        *schemeFlag,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -87,23 +94,23 @@ func CLI() {
 			return
 		}
 		if *callPlugin != "" {
-			if err := runCallPlugin(*pluginsDir, *assemblyPath, *callPlugin, *dump); err != nil {
+			if err := runCallPlugin(*pluginsDir, *assemblyPath, *callPlugin, *dump, orDefault(*frameMethod, pluginsdk.ProbeMethod)); err != nil {
 				fatal(err)
 			}
 			return
 		}
-		if err := runAssembly(*pluginsDir, *assemblyPath, *dump); err != nil {
+		if err := runAssembly(*pluginsDir, *assemblyPath, *dump, orDefault(*frameCap, pluginsdk.ProbeCap), orDefault(*frameMethod, pluginsdk.ProbeMethod)); err != nil {
 			fatal(err)
 		}
 	case *assemblyPath != "":
 		if *pluginsDir == "" {
 			fatal(fmt.Errorf("-assembly requires -plugins"))
 		}
-		if err := runAssembly(*pluginsDir, *assemblyPath, *dump); err != nil {
+		if err := runAssembly(*pluginsDir, *assemblyPath, *dump, orDefault(*frameCap, pluginsdk.ProbeCap), orDefault(*frameMethod, pluginsdk.ProbeMethod)); err != nil {
 			fatal(err)
 		}
 	case *pluginPath != "":
-		if err := runEchoRoundtrip(*pluginPath); err != nil {
+		if err := runPluginRoundtrip(*pluginPath, orDefault(*frameCap, pluginsdk.ProbeCap), orDefault(*frameMethod, pluginsdk.ProbeMethod)); err != nil {
 			fatal(err)
 		}
 	default:

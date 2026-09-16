@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "protocol": 4,
   "provides": [
-    "tools"
+    "tools",
+    "workspace"
   ],
   "consumes": [],
   "entry": "filetools.exe",

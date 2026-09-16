@@ -15,7 +15,6 @@ func Server() {
 	enableVirtualTerminal()
 	pluginsDir := flag.String("plugins", "", "plugin directory for Discovery")
 	assemblyPath := flag.String("assembly", "", "deprecated (ADR-0021): ignored whitelist; Autostart+dependsOn is used")
-	schemeFlag := flag.String("scheme", "", "override agent defaultScheme for this run")
 	dump := flag.Bool("dump", false, "dump mount plan after resolve")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL alongside the Web Medium")
 	serveAddr := flag.String("serve", "", "start Web Medium on this address (e.g. 127.0.0.1:7788); combine with -repl")
@@ -32,7 +31,7 @@ func Server() {
 	if *serveAddr == "" {
 		fatal(fmt.Errorf("-serve is required — liteagent-server is the Web Medium entry; the CLI Medium lives in liteagent-cli"))
 	}
-	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *layoutPath, *repl, dump, *schemeFlag); err != nil {
+	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *layoutPath, *repl, dump); err != nil {
 		fatal(err)
 	}
 }

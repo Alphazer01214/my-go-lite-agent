@@ -77,7 +77,7 @@ type Server struct {
 // {ok,result} envelope.
 func (s *Server) currentSession() string {
 	if s.opts.Srv != nil {
-		out, err := s.opts.Srv.CallByCap("session", "current", json.RawMessage(`{}`))
+		out, err := s.opts.Srv.CallByCap(serve.SessionCap, "current", json.RawMessage(`{}`))
 		if err == nil && out != nil {
 			var res struct {
 				SessionID string `json:"sessionId"`
@@ -98,7 +98,7 @@ func (s *Server) setCurrentSession(id string) {
 	s.sessMu.Unlock()
 	if s.opts.Srv != nil && id != "" {
 		payload, _ := json.Marshal(map[string]string{"sessionId": id})
-		_, _ = s.opts.Srv.CallByCap("session", "select", payload)
+		_, _ = s.opts.Srv.CallByCap(serve.SessionCap, "select", payload)
 	}
 }
 
@@ -137,8 +137,9 @@ func New(opts Options) *Server {
 				s.broadcast(Event{Topic: e.Topic, Data: e.Data})
 			},
 		})
-		// policy.ask → Web Medium (ADR-0019): broadcast and wait for /api/tool-approval.
-		opts.Srv.OnToolApproval = s.requestToolApproval
+		// policy.ask → Web Medium (ADR-0019/0029): register the approval face;
+		// CLI and Web can both be registered without overwriting each other.
+		serve.RegisterApproval(opts.Srv, s.requestToolApproval)
 		// Seed replay with panels emitted during mount (before Subscribe).
 		for _, p := range opts.Srv.Panels() {
 			s.broadcast(Event{Topic: "panel", Data: p})
@@ -377,8 +378,16 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 	if workspace == "" {
 		workspace = s.defaultWorkspace
 	}
-	id, err := s.opts.Srv.NewSessionIDWithWorkspace(in.SessionID, workspace)
-	if err != nil {
+	id := in.SessionID
+	if id == "" {
+		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
+	}
+	// session.create is the public Session contract (ADR-0020); origin=web
+	// so subagent-created sessions never steal Current (CONTEXT.md).
+	payload, _ := json.Marshal(map[string]any{
+		"sessionId": id, "origin": "web", "workspace": workspace,
+	})
+	if _, err := s.opts.Srv.CallByCap(serve.SessionCap, "create", payload); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -408,7 +417,10 @@ func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) 
 	if sid == "" {
 		sid = s.currentSession()
 	}
-	if err := s.opts.Srv.SetSessionWorkspace(sid, in.Workspace); err != nil {
+	// Session metadata including Workspace is read via the public session.info
+	// contract; setting Workspace upserts via session.create (ADR-0020).
+	payload, _ := json.Marshal(map[string]any{"sessionId": sid, "workspace": in.Workspace})
+	if _, err := s.opts.Srv.CallByCap(serve.SessionCap, "create", payload); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -428,13 +440,16 @@ var skipWalkDirs = map[string]bool{
 //
 // The File System Access API (showDirectoryPicker) deliberately never reveals a
 // path — only the directory NAME. The Web Workspace (ADR-0020) needs a real
-// path, so the Host resolves the name against its own working directory
-// (descendants, depth<=3) and its ancestors' immediate children, so picking a
-// sibling project also works. Exactly one match wins; several become candidates
-// the UI can offer; zero means the user types the path.
+// path. The directory walk lives in the workspace Capability provider (a
+// Plugin, ADR-0026: Host does not traverse the filesystem for plugin business);
+// this handler only relays name → {path, candidates}.
 func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.Srv == nil {
+		http.Error(w, "no agent server", http.StatusServiceUnavailable)
 		return
 	}
 	var in struct {
@@ -444,78 +459,29 @@ func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	raw := strings.TrimSpace(in.Name)
-	// An absolute (or otherwise usable) path is taken at face value.
-	if abs, err := filepath.Abs(raw); err == nil {
-		if st, err := os.Stat(abs); err == nil && st.IsDir() {
-			writeJSON(w, map[string]any{"ok": true, "name": raw, "path": abs, "candidates": []string{abs}})
-			return
-		}
-	}
-	base := filepath.Base(filepath.Clean(raw))
-	cwd, err := os.Getwd()
+	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(in.Name)})
+	out, err := s.opts.Srv.CallByCap("workspace", "resolve", payload)
 	if err != nil {
-		writeJSON(w, map[string]any{"ok": true, "name": raw, "path": "", "candidates": []string{}})
+		// No provider: fall back to "type the path" (empty result), do not fail
+		// the whole picker.
+		writeJSON(w, map[string]any{"ok": true, "name": in.Name, "path": "", "candidates": []string{}})
 		return
 	}
-	type scope struct {
-		root  string
-		depth int
+	var res struct {
+		Name       string   `json:"name"`
+		Path       string   `json:"path"`
+		Candidates []string `json:"candidates"`
 	}
-	scopes := []scope{{cwd, 3}}
-	up := cwd
-	for i := 0; i < 3; i++ {
-		parent := filepath.Dir(up)
-		if parent == up {
-			break
-		}
-		scopes = append(scopes, scope{parent, 1})
-		up = parent
+	if len(out) > 0 {
+		_ = json.Unmarshal(out, &res)
 	}
-	visited := 0
-	seen := map[string]bool{}
-	var found []string
-	var walk func(dir string, depth int)
-	walk = func(dir string, depth int) {
-		if visited > workspaceResolveMaxDirs || len(found) > 32 {
-			return
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || skipWalkDirs[e.Name()] {
-				continue
-			}
-			visited++
-			full := filepath.Join(dir, e.Name())
-			if e.Name() == base && !seen[full] {
-				seen[full] = true
-				found = append(found, full)
-			}
-			if depth > 1 {
-				walk(full, depth-1)
-			}
-		}
+	if res.Name == "" {
+		res.Name = in.Name
 	}
-	for _, sc := range scopes {
-		// The scope root itself may be the picked directory.
-		if filepath.Base(sc.root) == base && !seen[sc.root] {
-			seen[sc.root] = true
-			found = append(found, sc.root)
-		}
-		walk(sc.root, sc.depth)
+	if res.Candidates == nil {
+		res.Candidates = []string{}
 	}
-	sort.Strings(found)
-	path := ""
-	if len(found) == 1 {
-		path = found[0]
-	}
-	if found == nil {
-		found = []string{}
-	}
-	writeJSON(w, map[string]any{"ok": true, "name": raw, "path": path, "candidates": found})
+	writeJSON(w, map[string]any{"ok": true, "name": res.Name, "path": res.Path, "candidates": res.Candidates})
 }
 
 // requestToolApproval implements Host OnToolApproval for the Web Medium (ADR-0019).
@@ -596,12 +562,21 @@ func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"sessions": []any{}, "current": s.currentSession()})
 		return
 	}
-	list, err := s.opts.Srv.ListSessions()
+	out, err := s.opts.Srv.CallByCap(serve.SessionCap, "list", json.RawMessage(`{}`))
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error(), "sessions": []any{}, "current": s.currentSession()})
 		return
 	}
-	writeJSON(w, map[string]any{"sessions": list, "current": s.currentSession()})
+	var listRes struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if len(out) > 0 {
+		_ = json.Unmarshal(out, &listRes)
+	}
+	if listRes.Sessions == nil {
+		listRes.Sessions = []map[string]any{}
+	}
+	writeJSON(w, map[string]any{"sessions": listRes.Sessions, "current": s.currentSession()})
 }
 
 func (s *Server) handleSessionSelect(w http.ResponseWriter, r *http.Request) {
@@ -674,7 +649,9 @@ func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {
 		"value": json.RawMessage(orEmptyJSON(in.Value)),
 		"props": json.RawMessage(orEmptyJSON(in.Props)),
 	})
-	out, err := s.opts.Srv.CallUIAction(in.Plugin, payload)
+	// UI Actions address the plugin by name through its declared ui hostFace
+	// (ADR-0027): Host validates the face declaration, no registry bypass.
+	out, err := serve.CallByFace(s.opts.Srv, in.Plugin, "ui", "action", payload)
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -709,7 +686,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	var out json.RawMessage
 	var err error
 	if in.Plugin != "" {
-		out, err = s.opts.Srv.CallByPlugin(in.Plugin, in.Cap, in.Method, in.Payload)
+		// Named targeting is restricted to the plugin's declared hostFaces
+		// (config|commands|ui, ADR-0027). A non-face cap is rejected so nothing
+		// bypasses the registry.
+		out, err = serve.CallByFace(s.opts.Srv, in.Plugin, in.Cap, in.Method, in.Payload)
 	} else {
 		out, err = s.opts.Srv.CallByCap(in.Cap, in.Method, in.Payload)
 	}
@@ -837,7 +817,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	reconcileGen := 0
 	registryProvides := map[string]string{}
 	if s.opts.Srv != nil {
-		reg := s.opts.Srv.Registry()
+		reg := serve.Registry(s.opts.Srv)
 		reconcileGen = reg.ReconcileGen
 		degraded = map[string]bool{}
 		for _, n := range reg.Degraded {
@@ -1079,10 +1059,22 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Agent Scheme edges: which plugin each scheme will ensure (ADR-0023).
+	// The agent vertex is the plugin that actually provides agent-presets
+	// (resolved from the registry), never a hard-coded plugin name.
+	agentOwner := ""
+	for cap, owner := range registryProvides {
+		if cap == "agent-presets" {
+			agentOwner = owner
+			break
+		}
+	}
+	if agentOwner == "" {
+		agentOwner = "agent-presets"
+	}
 	for _, sch := range schemeNames {
 		for _, dep := range schemePulls[sch] {
 			ensurePluginNode(dep)
-			addEdge(graphEdge{From: "agent", To: dep, Kind: "scheme", Scheme: sch})
+			addEdge(graphEdge{From: agentOwner, To: dep, Kind: "scheme", Scheme: sch})
 		}
 	}
 

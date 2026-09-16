@@ -1001,9 +1001,9 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 				return nil, fmt.Errorf("agent loop: %w", err)
 			}
 			if llmOut.Content != "" {
-				_ = a.s.Emit("presentation", "render", marshal(map[string]any{
-					"kind": "markdown_text", "text": llmOut.Content, "sessionId": sessionID,
-				}))
+				_ = a.s.EmitRender(pluginsdk.RenderIntent{
+					Kind: pluginsdk.RenderMarkdownText, Text: llmOut.Content, SessionID: sessionID,
+				})
 			}
 			_ = a.appendOne(sessionID, map[string]any{
 				"type": "step_end",
@@ -1089,12 +1089,11 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			}
 			wg.Add(1)
 			go func(i int, tc toolCall) {
-				defer wg.Done()
-				_ = a.s.Emit("presentation", "render", marshal(map[string]any{
-					"kind": "message_text", "level": "info",
-					"text":      "Running " + tc.Name + "…",
-					"sessionId": sessionID,
-				}))
+					defer wg.Done()
+					_ = a.s.EmitRender(pluginsdk.RenderIntent{
+						Kind: pluginsdk.RenderMessageText, Level: "info",
+						Text: "Running " + tc.Name + "…", SessionID: sessionID,
+					})
 				out, addCtx, callErr := a.callTool(sessionID, tc, toolSeverity[tc.Name])
 				if callErr != nil {
 					outcomes[i].content = "error: " + callErr.Error()
@@ -1193,11 +1192,10 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 						}
 					}
 				} else {
-					_ = a.s.Emit("presentation", "render", marshal(map[string]any{
-						"kind": "message_text", "level": "info",
-						"text":      "Running " + tc.Name + "…",
-						"sessionId": sessionID,
-					}))
+					_ = a.s.EmitRender(pluginsdk.RenderIntent{
+						Kind: pluginsdk.RenderMessageText, Level: "info",
+						Text: "Running " + tc.Name + "…", SessionID: sessionID,
+					})
 					out, addCtx, callErr := a.callTool(sessionID, tc, toolSeverity[tc.Name])
 					if callErr != nil {
 						resultContent = "error: " + callErr.Error()
@@ -1212,10 +1210,10 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			resultContent := outcomes[i].content
 			additionalContexts := outcomes[i].additional
 
-			_ = a.s.Emit("presentation", "render", marshal(map[string]any{
-				"kind": "summary_text", "title": tc.Name,
-				"detail": truncate(resultContent, 800), "sessionId": sessionID,
-			}))
+			_ = a.s.EmitRender(pluginsdk.RenderIntent{
+				Kind: pluginsdk.RenderSummaryText, Title: tc.Name,
+				Detail: truncate(resultContent, 800), SessionID: sessionID,
+			})
 
 			if err := a.appendOne(sessionID, map[string]any{
 				"type":    "tool_result",

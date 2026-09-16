@@ -38,7 +38,8 @@ func buildAgentPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"version": "0.1.0",
 		"protocol": 2,
 		"autostart": true,
-		"provides": ["loop"],
+		"provides": ["loop", "agent-presets"],
+		"hostFaces": ["config", "commands"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
 		"timeoutMs": 180000,
@@ -63,6 +64,7 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"protocol": 2,
 		"autostart": true,
 		"provides": ["session"],
+		"hostFaces": ["config", "commands"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
 		"commands": [

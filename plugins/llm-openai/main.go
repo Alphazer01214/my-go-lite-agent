@@ -246,23 +246,6 @@ func toWireTools(in []struct {
 	return out
 }
 
-// streamPayload builds a presentation.stream body. sessionId is required so
-// Web session-view can attribute live chunks (Host forwards it on the SSE event).
-func streamPayload(sessionID, op, channel, delta string) json.RawMessage {
-	m := map[string]string{"op": op}
-	if channel != "" {
-		m["channel"] = channel
-	}
-	if delta != "" {
-		m["delta"] = delta
-	}
-	if sessionID != "" {
-		m["sessionId"] = sessionID
-	}
-	b, _ := json.Marshal(m)
-	return b
-}
-
 // noteUsage pushes provider token usage into Context Manager (star call).
 // Best-effort: missing context-manager must not fail the model hop.
 func noteUsage(s *pluginsdk.Server, sessionID string, usage *Usage) {
@@ -339,7 +322,9 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		}
 		msg := cr.Choices[0].Message
 		if msg.Content != "" {
-			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "content", msg.Content))
+			_ = s.EmitStreamTo(reqID, pluginsdk.StreamPayload{
+				Op: "chunk", Channel: "content", Delta: msg.Content, SessionID: sessionID,
+			})
 		}
 		usage := cr.Usage
 		noteUsage(s, sessionID, usageOrNil(usage))
@@ -359,7 +344,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 	// after the hop (Host does not interpret channel).
 	var reasonAcc strings.Builder
 
-	_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "start", "", ""))
+	_ = s.EmitStreamTo(reqID, pluginsdk.StreamPayload{Op: "start", SessionID: sessionID})
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -385,12 +370,16 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 		delta := d.Choices[0].Delta
 		// DeepSeek (and OpenAI-compatible reasoning models) stream thinking in reasoning_content.
 		if delta.ReasoningContent != "" {
-			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "reasoning", delta.ReasoningContent))
+			_ = s.EmitStreamTo(reqID, pluginsdk.StreamPayload{
+				Op: "chunk", Channel: "reasoning", Delta: delta.ReasoningContent, SessionID: sessionID,
+			})
 			reasonAcc.WriteString(delta.ReasoningContent)
 		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
-			_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "chunk", "content", delta.Content))
+			_ = s.EmitStreamTo(reqID, pluginsdk.StreamPayload{
+				Op: "chunk", Channel: "content", Delta: delta.Content, SessionID: sessionID,
+			})
 		}
 		for _, tc := range delta.ToolCalls {
 			i, ok := callIdx[tc.Index]
@@ -416,7 +405,7 @@ func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, m
 	if err := sc.Err(); err != nil {
 		return nil, &protocol.FrameError{Code: "llm_stream_error", Message: err.Error()}
 	}
-	_ = s.EmitTo(reqID, "presentation", "stream", streamPayload(sessionID, "end", "", ""))
+	_ = s.EmitStreamTo(reqID, pluginsdk.StreamPayload{Op: "end", SessionID: sessionID})
 
 	msg := chatMessage{Role: "assistant", Content: content.String()}
 	for _, c := range calls {
