@@ -1,5 +1,7 @@
 # Shell 缩薄：layout 之外皆插件，Web Medium 内建于 server 入口
 
+> Status: partially superseded by ADR-0029 —— 「分歧仅在前端 Medium」的模糊表述已由 ADR-0029 收紧为「分歧限于展示实现，不含决策与时序」；Shell 缩薄、双入口、聊天面归插件等决策继续有效。
+
 程序收敛为双入口：liteagent-cli.exe（内核 + CLI Medium）与 liteagent-server.exe（内核 + Web Medium，保留 `-repl` 组合），共享同一内核与全部插件协议，分歧仅在前端 Medium。Web Medium 的 HTTP 静态服务、layout、SSE hub 内建于 server 进程，不做独立插件进程：协议无需为「插件订阅事件流」扩容（protocol 保持 2），代价是改 layout 需重编 server.exe，与 build.ps1 全量构建的日常相符；将来若要「换壳不重编」，再升级为插件进程并补事件订阅设施，升级路径保留。
 
 Shell 缩至最薄：项目至多提供整体 layout（页面与 Panel 槽位）、整体样式表（Design Token）与必要全局脚本（LiteAgent SDK 与通用装载器——读 /api/plugins、动态 import UI Entry、按 page+slot 挂载）。ADR-0009/0010 的「插件不得替换聊天主流程」约束就此废止：聊天主流程移出 Shell，成为插件 Panel Component。官方实现不例外——session 插件（已有 session capability）增加 `ui` 块，声明主会话视图（主内容槽位）、会话栏（sidebar）与 trace 视图（trace 页）三个挂载。不设「chat 插件」：聊天面在协议里从无对应 capability，/api/history 与 /api/trace 经查证同为 `QuerySessionFacts` 的投影，聊天面就是 Session Log 的主视图，「聊天」降为口语别名。可替换性由槽位 + Assembly 保证：第三方视图声明 mount 到同一槽位即可竞争。
