@@ -21,8 +21,8 @@
 
 同时停止为单个插件定制读取路径（承接 ADR-0026）：
 
-- agent 插件增 `provides: ["agent-presets"]`（可选实现），对外暴露 `defaultScheme` 与 `schemes`。Plugin Graph 的 `scheme` 边（ADR-0025 要求）改由 `CallByCap("agent-presets", "get")` 取数；未实现时图不画 scheme 边。
+- agent 插件增 `provides: ["agent-presets"]`（可选实现，已评审定案），对外暴露 `defaultScheme` 与 `schemes`。Plugin Graph 的 `scheme` 边（ADR-0025 要求）改由 `CallByCap("agent-presets", "get")` 取数；未实现时图不画 scheme 边。
 - Web Settings 继续走 README 已描述的通用机制（凡实现 `config.schema` / `config.get` 的插件自动出现在列表中），删除 `web/server.go:873` 对 agent 的定制读取。
-- CLI 与 server 的 `-scheme` flag 删除，切换改由用户在命令面输入 `/agent scheme <name>`——CLI 因此完全不必知道 scheme 概念。
+- CLI 与 server 的 `-scheme` flag **彻底删除**（已评审定案，明确否决「保留但换实现」）：切换只有两个入口——交互式 `/agent scheme <name>`（REPL / Web 命令面）与 `config.json` 的 `defaultScheme`。由此产生的后果一并接受：一次性 `-turn` 模式**无法在启动时预选 scheme**，须先设 defaultScheme 或进 REPL 切换；README 快速开始中 4 处 `-scheme` 示例在 Z5 全部改写。
 
 Manifest `protocol` 升至 4：带 `hostFaces` 的清单在旧 Host 上被拒载（承接 ADR-0012 的版本纪律）。允许破坏性变更，不留旧 manifest 兼容路径。

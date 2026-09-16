@@ -114,6 +114,8 @@ ADR-0026..0029，本 spec 只负责把执行顺序、任务坐标与约束写清
 
 - ADR-0018 正文修订（todo provider 已改为 agent 内建）。
 - README 的 `chat` scheme 描述与新行为对齐。
+- README 快速开始中 4 处 `-scheme` 示例全部改写（ADR-0027 已定案彻底删 flag：
+  一次性 `-turn` 无法预选 scheme，改为先设 defaultScheme 或进 REPL 切换）。
 - `plugin-config/spec.md` 状态更新。
 - 剩余 issue 状态翻新。
 
