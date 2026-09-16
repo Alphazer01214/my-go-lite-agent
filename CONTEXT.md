@@ -201,8 +201,16 @@ _Avoid_: 插件配置文件（磁盘 config.json 只是持久化）、Manifest �
 _Avoid_: 工作目录、项目路径、repo root（口语可用，规范名词是 Workspace）
 
 **Permission**:
-对一次工具调用的 allow / ask / deny 裁决及规则集合。由 provides `policy` 的插件持有规则；Agent Loop 在执行工具前查询。不是路由中间件。
+对一次工具调用的 allow / ask / deny 裁决及规则集合。由 provides `policy` 的插件持有规则；Agent Loop 在执行工具前查询。不是路由中间件。承载它的官方插件名为 sandbox（commit 6226445 由 permission 改名）；本词条描述裁决概念，插件名见 Sandbox。
 _Avoid_: 审批流、ACL、Interceptor（已废弃）、权限系统（过泛）
+
+**Sandbox**:
+官方 Policy 插件（provides `policy`）：持有 permissions 规则并按 Tool Severity 给出 allow / ask / deny 裁决。ask 经 Host `agent.request` 回到 Render Medium 确认。是 Permission 概念的默认实现，可被任何 provides `policy` 的插件替换（ADR-0019）。
+_Avoid_: 沙箱进程、OS sandbox（语义不同，指操作系统级隔离，属 Phase 2+ backlog）、权限插件
+
+**Tool Severity**:
+工具 schema 上由作者声明的风险等级（`severity`：low / medium / high）。sandbox 按 `severityPolicy` 映射默认裁决（缺省 low→allow、medium→ask、high→ask），显式规则仍优先。与 Read-only Tool 正交：readOnly 管并行调度，severity 管策略裁决。
+_Avoid_: 危险等级、风险标记（泛称）、readOnly（语义不同，管调度不管裁决）
 
 **Policy Capability**:
 Permission 的可调用面：decide（对一次 tool call 给出裁决）与必要的规则观测。消费方是 Agent Loop；Host 不内建策略引擎。
