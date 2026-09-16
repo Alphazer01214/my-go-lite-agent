@@ -27,14 +27,17 @@ $cacheDir = Join-Path $dist ".build-cache"
 $go = "go"
 
 # ── shipped plugins ─────────────────────────────────────────────────────────
-# 核四件 (autostart: true in their own plugin.json): the Host startup roots.
-$corePlugins = @("agent", "session", "llm-openai", "context-manager")
-# 场景工具: not autostart, pulled in by an Agent Scheme's dependsPlugins via
-# Host ensurePlugins (ADR-0023).
-$toolsPlugins = @("filetools", "shelltools", "sandbox", "skill-manager", "project-context", "webtools")
-# 示例/参考: shipped, but neither autostart nor pulled by any scheme.
-$examplePlugins = @("echotool", "echo", "uidemo")
-$shippedPlugins = $corePlugins + $toolsPlugins + $examplePlugins
+# Single source of truth: scripts/shipped-plugins.conf (shared with build.sh).
+$groups = @{}
+foreach ($line in Get-Content (Join-Path $PSScriptRoot "shipped-plugins.conf")) {
+    if ($line -match '^\s*(\w+):\s*(.+?)\s*$') {
+        $groups[$matches[1]] = @($matches[2] -split '\s+')
+    }
+}
+$corePlugins = @($groups["core"])
+$toolsPlugins = @($groups["tools"])
+$examplePlugins = @($groups["example"])
+$shippedPlugins = @($corePlugins + $toolsPlugins + $examplePlugins)
 # 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
 #   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow
 #   located under testdata/plugins/ (never under plugins/, so Discovery skips them).

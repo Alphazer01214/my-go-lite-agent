@@ -35,13 +35,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── shipped plugins ─────────────────────────────────────────────────────────
-# 核四件 (autostart: true in their own plugin.json): the Host startup roots.
-CORE_PLUGINS=(agent session llm-openai context-manager)
-# 场景工具: not autostart, pulled in by an Agent Scheme's dependsPlugins via
-# Host ensurePlugins (ADR-0023).
-TOOLS_PLUGINS=(filetools shelltools sandbox skill-manager project-context webtools)
-# 示例/参考: shipped, but neither autostart nor pulled by any scheme.
-EXAMPLE_PLUGINS=(echotool echo uidemo)
+# Single source of truth: scripts/shipped-plugins.conf (shared with build.ps1).
+CORE_PLUGINS=()
+TOOLS_PLUGINS=()
+EXAMPLE_PLUGINS=()
+while IFS= read -r line; do
+  case "$line" in
+    core\:*) __rest="${line#core: }"; CORE_PLUGINS=($__rest) ;;
+    tools\:*) __rest="${line#tools: }"; TOOLS_PLUGINS=($__rest) ;;
+    example\:*) __rest="${line#example: }"; EXAMPLE_PLUGINS=($__rest) ;;
+  esac
+done < "$ROOT/scripts/shipped-plugins.conf"
 SHIPPED_PLUGINS=("${CORE_PLUGINS[@]}" "${TOOLS_PLUGINS[@]}" "${EXAMPLE_PLUGINS[@]}")
 # 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
 #   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow

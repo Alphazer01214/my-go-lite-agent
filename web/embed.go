@@ -5,6 +5,8 @@ import (
 	_ "embed"
 )
 
+//go:generate go run gen_sdk.go
+
 //go:embed static/shell.html
 var shellHTML string
 
