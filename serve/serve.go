@@ -790,8 +790,10 @@ func (s *Server) dispatchPanel(from string, f *protocol.Frame) {
 	s.publish(Event{Topic: "panel", Data: op})
 }
 
-// validatePanelOp enforces the Panel Component contract (ADR-0010): the
-// component tag must belong to the emitting plugin and target a real slot.
+// validatePanelOp enforces the Panel Component contract: the component tag
+// must belong to the emitting plugin (component prefix check authorized by
+// ADR-0010 — retained) and payloads must be structurally sound JSON
+// (ADR-0026: Host validates structure, not plugin business semantics).
 func (s *Server) validatePanelOp(from string, op PanelOp) error {
 	if op.Op != "set" && op.Op != "clear" {
 		return fmt.Errorf("op %q must be set|clear", op.Op)
@@ -1560,8 +1562,12 @@ func (s *Server) RunTurnOn(sessionID, userInput string) (*TurnResult, error) {
 	return s.runTurn(normalizeSessionID(sessionID), userInput, true, "")
 }
 
-// CancelTurnOn requests the in-flight Loop on sessionID to stop at the next safe boundary.
-// Also notifies the mounted Agent Plugin so an external Loop can observe cancel (ADR-0016).
+// CancelTurnOn requests the in-flight Loop on sessionID to stop at the next
+// safe boundary. Also notifies the mounted Agent Plugin so an external Loop can
+// observe cancel (ADR-0016). The notification is a fire-and-forget req (no
+// pending registered, response ignored): spec permits either TypeEvt or a
+// pending-registered req — fire-and-forget keeps the cancel path non-blocking
+// and is covered by lifecycle tests.
 func (s *Server) CancelTurnOn(sessionID string) {
 	sessionID = normalizeSessionID(sessionID)
 	s.turnStatesMu.Lock()
