@@ -15,7 +15,7 @@
 
 **Blocked by:** 01（workspace）、02（多 tools）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 三平台默认解释器
 - [x] 配置覆盖

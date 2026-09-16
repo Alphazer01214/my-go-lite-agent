@@ -14,7 +14,7 @@
 
 **Blocked by:** 无（建议 01 先行以便项目层路径真实）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] policy.decide 契约与实现
 - [x] 双层文件加载与覆盖语义

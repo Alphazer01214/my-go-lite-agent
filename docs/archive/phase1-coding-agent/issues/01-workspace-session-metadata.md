@@ -10,7 +10,7 @@
 
 **Blocked by:** 无
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Session 元数据契约与 derive/query 可见
 - [x] CLI 默认 cwd + flag

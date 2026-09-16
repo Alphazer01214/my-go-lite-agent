@@ -11,7 +11,7 @@
 
 **Blocked by:** 02（多 tools）、01（workspace）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 目录发现 + registerSkill
 - [x] load_skill

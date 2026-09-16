@@ -9,7 +9,7 @@
 
 **Blocked by:** 02；投影依赖 session derive 语义（已有）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] todo 工具 + Log 事实
 - [x] prepare 投影

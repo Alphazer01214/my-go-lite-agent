@@ -10,7 +10,7 @@
 
 **Blocked by:** 无
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 多提供方注册与同名冲突失败
 - [x] list 合并、call 分路由

@@ -14,7 +14,7 @@
 
 **Blocked by:** 01–09（实现票）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] coding.json
 - [x] 金路径测试全绿

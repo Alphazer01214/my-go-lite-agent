@@ -9,7 +9,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 读根文件 → Segment
 - [x] 主缝：derive/assemble 含文件内容标记

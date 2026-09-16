@@ -11,7 +11,7 @@
 
 **Blocked by:** 02（多 tools）、03（policy）；展开依赖 08
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] decide/ask/deny 路径 + Log
 - [x] CLI ask 金路径（可用 stub）

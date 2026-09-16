@@ -10,7 +10,7 @@
 
 **Blocked by:** 01、02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] workspace 相对解析
 - [x] readOnly 标志
