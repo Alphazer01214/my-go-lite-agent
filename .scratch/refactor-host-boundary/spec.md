@@ -68,6 +68,11 @@ ADR-0026..0029，本 spec 只负责把执行顺序、任务坐标与约束写清
 - `discoverTools` 改「全量成功才替换」，重名策略与 `toolsListMerged` 统一；
   插件重启后重跑，随后删 `routeToolsFromPlugin` 的试探 fallback。
 - `plugins/agent` 的 `consumes` 补全（system-prompt/context/session/llm/tools）。
+  **修正标注（fixup，2026-09）**：`tools` 已从 consumes 移除——autostart 集
+  无 tools 提供方（filetools 等按 scheme dependsPlugins 拉起），reconcile
+  （ADR-0022）会默认把 agent 判 degraded 并撤回 loop，使 `-turn` 开箱即坏；
+  agent 对无 tools 有显式降级路径（toolsOK=false 提示继续纯聊天），tools 属
+  可选依赖，consumes 只留硬依赖。见 fixup-agent-consumes.md。
 - `web/server.go` 的 `hostUsedCapabilities` 删 `SystemPromptCap` 假边；
   Plugin Graph 改读注册表快照并显示「声明 vs 实际」差异。
 - 新增 `agent-presets` 能力（agent 插件可选实现），Plugin Graph 的 scheme

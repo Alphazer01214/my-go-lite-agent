@@ -16,8 +16,7 @@
     "system-prompt",
     "context",
     "session",
-    "llm",
-    "tools"
+    "llm"
   ],
   "entry": "agent.exe",
   "timeoutMs": 180000,
