@@ -104,10 +104,8 @@ export OPENAI_MODEL=deepseek-chat
 # 一轮对话（默认 scheme: tool_calling）
 .\dist\liteagent-cli.exe -plugins dist\plugins -turn "你好"
 
-# 指定 Agent Scheme
-.\dist\liteagent-cli.exe -plugins dist\plugins -scheme coding -turn "读一下 README.md"
-
-# 多轮 REPL
+# 指定 Agent Scheme：-scheme flag 已删除（ADR-0027），一次性 -turn 无法预选；
+# 进 REPL 热切换，或先改 dist/plugins/agent/config.json 的 defaultScheme
 .\dist\liteagent-cli.exe -plugins dist\plugins -repl
 
 # Web
@@ -116,7 +114,7 @@ export OPENAI_MODEL=deepseek-chat
 
 ```bash
 ./dist/liteagent-cli -plugins dist/plugins -turn "你好"
-./dist/liteagent-cli -plugins dist/plugins -scheme coding -turn "读一下 README 并总结"
+./dist/liteagent-cli -plugins dist/plugins -repl   # 进入后 /agent config set defaultScheme=coding
 ./dist/liteagent-server -plugins dist/plugins -serve 127.0.0.1:8080
 ```
 
@@ -124,7 +122,7 @@ export OPENAI_MODEL=deepseek-chat
 
 | scheme | 含义 |
 |--------|------|
-| `chat` | 显式 `allowedTools` 只读名单（read_file/grep/glob），无 subagent |
+| `chat` | `dependsPlugins` 拉起 filetools；显式 `allowedTools` 只读名单（read_file/grep/glob），无 subagent、无 todo |
 | `tool_calling` | 默认完全体，不按名单过滤 |
 | `coding` | `dependsPlugins` 拉起 filetools/shelltools/sandbox/skill-manager/project-context/webtools |
 
@@ -132,15 +130,15 @@ export OPENAI_MODEL=deepseek-chat
 
 Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件 / id / cap / method / payload）与插件启停会打到 **stderr**，不污染 stdout 的对话输出。
 
-Coding Scheme（Workspace + shell + sandbox + skills + web）：
+Coding Scheme（Workspace + shell + sandbox + skills + web）：`-scheme` flag 已删除（ADR-0027），一次性 `-turn` 无法预选；先设 `defaultScheme=coding`（`dist/plugins/agent/config.json` 或 REPL 里 `/agent config set defaultScheme=coding`）再执行：
 
 ```bash
-./dist/liteagent-cli -plugins dist/plugins -scheme coding -workspace "$PWD" -turn "读一下 README 并总结"
+./dist/liteagent-cli -plugins dist/plugins -workspace "$PWD" -turn "读一下 README 并总结"
 # 工作区可放 .liteagent/permissions.json、.liteagent/skills/<name>/SKILL.md、AGENTS.md
 ```
 
 ```powershell
-.\dist\liteagent-cli.exe -plugins dist\plugins -scheme coding -workspace (Get-Location) -turn "读一下 README 并总结"
+.\dist\liteagent-cli.exe -plugins dist\plugins -workspace (Get-Location) -turn "读一下 README 并总结"
 ```
 ## 常用命令
 

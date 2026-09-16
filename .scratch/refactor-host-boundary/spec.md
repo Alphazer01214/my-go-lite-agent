@@ -1,6 +1,6 @@
 # refactor-host-boundary：Host 去特化与注册真源统一
 
-Status: ready-for-agent
+Status: resolved
 
 ## Intent
 

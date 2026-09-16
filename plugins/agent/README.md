@@ -31,8 +31,7 @@ Default Agent Plugin（ADR-0016）：提供 `loop`，经 Host 组合 llm / sessi
 
 - `dependsPlugins`：进入 scheme 前经 Host `host.ensurePlugins` 拉起
 - `allowedTools`：省略 = 不按名单过滤；`[]` = 无外部 tool；无 readOnly 门禁
-- 热切换：`config.set defaultScheme=chat` 下一 Turn 生效；scheme 名写入 Session Log
-- CLI/Server 可用 `-scheme` 覆盖 `defaultScheme`
+- 热切换：`/agent config set defaultScheme=chat`（REPL / Web 命令面）或 `config.json` 的 `defaultScheme`，下一 Turn 生效；scheme 名写入 Session Log（`-scheme` flag 已删除，ADR-0027）
 
 ## UI
 

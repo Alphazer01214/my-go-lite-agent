@@ -1,6 +1,6 @@
 # 插件配置契约（config Capability + /refresh reload）
 
-Status: in-progress
+Status: resolved
 
 ## Problem Statement
 
