@@ -207,6 +207,7 @@ func buildStubLLMPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["llm"],
 		"consumes": [],
 		"entry": "`+name+`.exe"

@@ -2,9 +2,7 @@ package main_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -33,69 +31,5 @@ func copyFile(t *testing.T, src, dst string) {
 	}
 	if err := os.WriteFile(dst, b, 0o755); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestAssemblyMountsOnlyNamedPlugins(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildEchoPluginDir(t, root, pluginsDir, "alpha")
-	buildEchoPluginDir(t, root, pluginsDir, "beta")
-
-	// Config A: only alpha
-	cfgA := filepath.Join(t.TempDir(), "a.json")
-	writeFile(t, cfgA, `{"plugins":["alpha"]}`)
-	outA, err := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfgA, "-dump").CombinedOutput()
-	if err != nil {
-		t.Fatalf("assembly A: %v\n%s", err, outA)
-	}
-	sA := string(outA)
-	if !strings.Contains(sA, "mount name=alpha") || !strings.Contains(sA, "ok id=alpha") {
-		t.Fatalf("A should mount alpha: %s", sA)
-	}
-	if strings.Contains(sA, "mount name=beta") || strings.Contains(sA, "ok id=beta") {
-		t.Fatalf("A must not start beta: %s", sA)
-	}
-	if !strings.Contains(sA, "available name=beta mounted=false") {
-		t.Fatalf("A dump should list beta as available: %s", sA)
-	}
-
-	// Config B: both
-	cfgB := filepath.Join(t.TempDir(), "b.json")
-	writeFile(t, cfgB, `{"plugins":["alpha","beta"]}`)
-	outB, err := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfgB, "-dump").CombinedOutput()
-	if err != nil {
-		t.Fatalf("assembly B: %v\n%s", err, outB)
-	}
-	sB := string(outB)
-	if !strings.Contains(sB, "ok id=alpha") || !strings.Contains(sB, "ok id=beta") {
-		t.Fatalf("B should mount both: %s", sB)
-	}
-}
-
-func TestAssemblyMissingPluginSoftFails(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildEchoPluginDir(t, root, pluginsDir, "alpha")
-
-	cfg := filepath.Join(t.TempDir(), "bad.json")
-	writeFile(t, cfg, `{"plugins":["alpha","ghost"]}`)
-	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-dump")
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	// Soft-fail (ADR-0017): missing plugin is reported but the process continues.
-	if err != nil {
-		t.Fatalf("want soft-fail continue, got: %v\n%s", err, out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "ghost") {
-		t.Fatalf("want missing plugin name in warning: %s", s)
-	}
-	if !strings.Contains(s, "mount name=alpha") {
-		t.Fatalf("want alpha still mounted: %s", s)
 	}
 }

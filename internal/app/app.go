@@ -61,33 +61,20 @@ func plural(n int) string {
 	return "ies"
 }
 
-// resolveAssembly loads plugins and builds the mount plan (ADR-0021).
-// Daily path: Autostart roots + dependsOn closure (no assembly file).
-// Legacy path: a non-empty -assembly plugins list still uses assembly.Resolve
-// (deprecated; retained for tests/reference only — not the daily product path).
-// Soft-fail (ADR-0017/0022): discovery errors print but do not abort.
+// resolveAssembly scans plugins and builds the mount plan (ADR-0021).
+// The daily path is Autostart roots + dependsOn closure; -assembly is a
+// deprecated no-op (its file is ignored — assembly files no longer act as a
+// mount whitelist). Soft-fail (ADR-0017/0022): discovery errors print but do
+// not abort.
 func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan, assembly.Config, error) {
-	cfg := assembly.Config{}
-	legacy := false
 	if assemblyPath != "" {
-		fmt.Fprintf(os.Stderr, "warn: -assembly is deprecated (ADR-0021); prefer Autostart+dependsOn (file: %s)\n", assemblyPath)
-		if loaded, err := assembly.Load(assemblyPath); err == nil {
-			cfg = loaded
-			if len(cfg.Plugins) > 0 {
-				legacy = true
-			}
-		}
+		fmt.Fprintf(os.Stderr, "warn: -assembly is deprecated (ADR-0021) and ignored; Autostart+dependsOn is used (file: %s)\n", assemblyPath)
 	}
 	res := discovery.Scan(pluginsDir)
 	for _, e := range res.Errors {
 		fmt.Fprintf(os.Stderr, "discover error: %v\n", e)
 	}
-	var plan assembly.Plan
-	if legacy {
-		plan = assembly.Resolve(cfg, res)
-	} else {
-		plan = assembly.ResolveAutostart(res)
-	}
+	plan := assembly.ResolveAutostart(res)
 	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		fmt.Fprintf(os.Stderr, "assembly references unknown plugins (continuing): %s\n", strings.Join(plan.Missing, ", "))
@@ -95,7 +82,7 @@ func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan,
 	if dump {
 		dumpAssembly(plan)
 	}
-	return plan, cfg, nil
+	return plan, assembly.Config{}, nil
 }
 
 func runAssembly(pluginsDir, assemblyPath string, dump bool) error {

@@ -1,3 +1,0 @@
-{
-  "plugins": ["session", "llm-openai", "context-manager", "echotool"]
-}

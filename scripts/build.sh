@@ -79,7 +79,7 @@ if [[ $CLEAN -eq 1 && -d "$DIST" ]]; then
   echo "removing previous dist/ (configs + sessions stashed)"
   rm -rf "$DIST"
 fi
-mkdir -p "$DIST/plugins" "$DIST/examples" "$CACHE_DIR"
+mkdir -p "$DIST/plugins" "$CACHE_DIR"
 
 # ── incremental helpers ─────────────────────────────────────────────────────
 local_dep_dirs() {
@@ -305,9 +305,6 @@ if [[ ! -f "$AGENT_DIST_CFG" && -f "$ROOT/plugins/agent/config.example.json" ]];
 fi
 
 # ── examples & docs ─────────────────────────────────────────────────────────
-for ex in assembly.json assembly-with-tools.json chat.json agent.json coding.json; do
-  [[ -f "$ROOT/examples/$ex" ]] && cp "$ROOT/examples/$ex" "$DIST/examples/"
-done
 mkdir -p "$DIST/config"
 if [[ ! -f "$DIST/config/permissions.json" ]]; then
   cat > "$DIST/config/permissions.json" <<'EOF'

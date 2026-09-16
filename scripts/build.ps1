@@ -373,10 +373,6 @@ try {
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaultAction`": `"allow`",`n  `"rules`": []`n}`n", $utf8NoBom)
     }
-    foreach ($ex in @("assembly.json", "assembly-with-tools.json", "chat.json", "agent.json", "coding.json")) {
-        $p = Join-Path $root "examples\$ex"
-        if (Test-Path $p) { Copy-Item $p (Join-Path $dist "examples\") -Force }
-    }
     # Layout is required at runtime (ADR-0012); ship the base layout with dist.
     Copy-Item (Join-Path $root "layout.json") $dist -Force
     # Author SDK single source (dual export: repo copy + /sdk/ HTTP).
