@@ -84,7 +84,7 @@ func TestMultiToolsProvidersStart(t *testing.T) {
 	echoBin := filepath.Join(t.TempDir(), "echotool")
 	emptyBin := filepath.Join(t.TempDir(), "emptytools")
 	buildBin(t, root, "./plugins/echotool", echoBin)
-	buildBin(t, root, "./plugins/emptytools", emptyBin)
+	buildBin(t, root, "./testdata/plugins/emptytools", emptyBin)
 
 	pluginsDir := t.TempDir()
 	installToolsPlugin(t, pluginsDir, "echotool", echoBin)

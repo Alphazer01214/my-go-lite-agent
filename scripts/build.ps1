@@ -37,6 +37,7 @@ $examplePlugins = @("echotool", "echo", "uidemo")
 $shippedPlugins = $corePlugins + $toolsPlugins + $examplePlugins
 # 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
 #   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow
+#   located under testdata/plugins/ (never under plugins/, so Discovery skips them).
 
 $onlySet = @{}
 foreach ($n in $Only) {

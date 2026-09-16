@@ -45,6 +45,7 @@ EXAMPLE_PLUGINS=(echotool echo uidemo)
 SHIPPED_PLUGINS=("${CORE_PLUGINS[@]}" "${TOOLS_PLUGINS[@]}" "${EXAMPLE_PLUGINS[@]}")
 # 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
 #   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow
+#   located under testdata/plugins/ (never under plugins/, so Discovery skips them).
 
 should_build() {
   local target="$1"

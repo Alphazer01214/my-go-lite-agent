@@ -10,7 +10,7 @@ import (
 
 func buildSessionProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/sessionprobe")
+	bin := buildPkg(t, root, "./testdata/plugins/sessionprobe")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",

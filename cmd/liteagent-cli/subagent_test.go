@@ -22,7 +22,7 @@ func buildEmptyToolsPluginDir(t *testing.T, root, pluginsDir, name string) {
 
 	t.Helper()
 
-	bin := buildPkg(t, root, "./plugins/emptytools")
+	bin := buildPkg(t, root, "./testdata/plugins/emptytools")
 
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 
@@ -239,7 +239,7 @@ func TestSubagentAsyncRejected(t *testing.T) {
 
 	buildAgentPluginDir(t, root, pluginsDir, "agent")
 
-	bin := buildPkg(t, root, "./plugins/asyncsubllm")
+	bin := buildPkg(t, root, "./testdata/plugins/asyncsubllm")
 
 	dst := filepath.Join(pluginsDir, "asyncsubllm", "asyncsubllm.exe")
 

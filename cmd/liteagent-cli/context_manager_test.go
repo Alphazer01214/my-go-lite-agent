@@ -94,7 +94,7 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 
 func buildPromptRegPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/promptreg")
+	bin := buildPkg(t, root, "./testdata/plugins/promptreg")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",

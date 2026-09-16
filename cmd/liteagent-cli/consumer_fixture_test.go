@@ -9,7 +9,7 @@ import (
 // buildConsumerPluginDir installs a fixture Plugin that calls another Capability only via Host.
 func buildConsumerPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/consumer")
+	bin := buildPkg(t, root, "./testdata/plugins/consumer")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",

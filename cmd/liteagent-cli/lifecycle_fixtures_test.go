@@ -8,7 +8,7 @@ import (
 
 func buildSlowPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/slow")
+	bin := buildPkg(t, root, "./testdata/plugins/slow")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
@@ -83,7 +83,7 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 
 func buildAgentProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/agentprobe")
+	bin := buildPkg(t, root, "./testdata/plugins/agentprobe")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
@@ -127,7 +127,7 @@ func buildEchoToolPluginDir(t *testing.T, root, pluginsDir, name string) {
 
 func buildCrashOncePluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
-	bin := buildPkg(t, root, "./plugins/crashonce")
+	bin := buildPkg(t, root, "./testdata/plugins/crashonce")
 	dst := filepath.Join(pluginsDir, name, name+".exe")
 	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
 		"name": "`+name+`",
