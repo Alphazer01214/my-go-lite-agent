@@ -1,17 +1,16 @@
-// Shell entry: boot order only. Every face — chat view, session rail, trace,
-// composer — is a plugin Panel Component; the layout provides slots, Design
-// Tokens, and this loader. Navigation is rendered from the merged layout.
+// Shell entry: boot order only. Every content face is a plugin Panel Component
+// (ADR-0011). Settings chrome is medium framework; per-plugin settings faces
+// are <name>-settings custom elements owned by each plugin.
 
 import { state, setSessionId } from './state.js';
 import { setPageLoader, createLoader, setPages } from './loader.js';
 import { openSSE } from './events.js';
-import { openPluginsPanel } from './plugins-panel.js';
+import { openPluginsPanel, prefetchPlugins } from './plugins-panel.js';
 import { openSettingsPanel } from './settings.js';
 
 var sessionLabel = document.getElementById('session-label');
 
 function notice(text, cls) {
-  // The session-view paints notices; before it is mounted, fall back to console.
   if (window.LiteAgent && window.LiteAgent.emit) {
     window.LiteAgent.emit('__notice', { text: text, cls: cls });
   } else {
@@ -19,26 +18,27 @@ function notice(text, cls) {
   }
 }
 
-// This page's Panel mounts (ADR-0012): sidebar/chat/trace/toolbar/overlay,
-// filled by plugin components.
 const pageLoader = createLoader('main', function panelHost(slot) {
   if (slot === 'sidebar') return document.getElementById('rail');
   if (slot === 'main-overlay') return document.getElementById('main-overlay');
   if (slot === 'trace') return document.getElementById('slot-trace');
+  if (slot === 'statusbar') return document.getElementById('statusbar');
   if (slot === 'chat') return document.getElementById('chat');
   return document.getElementById('slot-toolbar-right');
 }, function (msg) { notice(msg, 'message error'); });
 setPageLoader(pageLoader);
 
 function refreshRunState() {
-  // Current Session comes from the session Capability (ADR-0012).
+  // The Host still knows a Current Session, but the Shell must NOT announce it:
+  // the Session View opens on its new-session face and only loads a Session
+  // when the user picks one (or sends the first message). Hence silent=true.
   LiteAgent.call('session', 'current', {}).then(function (b) {
     var id = (b && b.ok !== false && b.result && b.result.sessionId) || '';
-    setSessionId(id);
+    setSessionId(id, true);
     if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
   }).catch(function () {
     fetch('/api/session').then(function (r) { return r.json(); }).then(function (b) {
-      if (b.sessionId !== undefined) setSessionId(b.sessionId);
+      if (b.sessionId !== undefined) setSessionId(b.sessionId, true);
       if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
     }).catch(function () { });
   });
@@ -49,7 +49,6 @@ LiteAgent.on('__session', function (sid) {
   state.currentSessionId = sid;
   window.__liteSessionId = sid;
   sessionLabel.textContent = sid || '(default)';
-  // The session-view reloads its history on the same __session event.
 });
 
 function renderNav(pages) {
@@ -67,7 +66,6 @@ function renderNav(pages) {
   });
 }
 
-// Components load their own history; the shell only opens the live bridge.
 fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay) {
   if (lay && lay.pages) {
     setPages(lay.pages.map(function (p) { return p.slug; }));
@@ -75,6 +73,9 @@ fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay)
   }
 }).catch(function () { }).then(function () {
   pageLoader.loadPluginUIs();
+  // Warm the plugin-graph cache now: under Autostart+dependsOn most plugins
+  // mount lazily on the first Turn, so waiting would show a half-empty graph.
+  prefetchPlugins();
   refreshRunState();
   openSSE();
 });

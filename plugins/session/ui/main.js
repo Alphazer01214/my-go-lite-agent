@@ -4,25 +4,36 @@
  *                 history facts, consumes the Presentation stream live, and
  *                 renders the dsh-style disclosure flow. Rendering semantics
  *                 match the CLI Medium (markdown_text / message_text /
- *                 summary_text / stream).
- * session-rail  — the session list / switcher (sidebar). Switching is the
+ *                 summary_text / stream). It also owns the new-session face:
+ *                 at boot (and on "＋") it shows Workspace picker + Agent
+ *                 Scheme + composer instead of loading a Session — a Session
+ *                 is only loaded once the user picks one or sends a message.
+ * session-rail  — the session list / switcher (sidebar), grouped by Workspace
+ *                 path (ADR-0020) as the only grouping basis. Switching is the
  *                 Current Session on the session Capability (ADR-0012); the
  *                 component announces the switch over __session so the view
- *                 reloads.
- * session-trace — the Session Log's trace projection (main page trace column
- *                 and the /trace debug page).
+ *                 reloads, or over __new to open the new-session face.
+ * session-trace — the Session Log's trace projection (center column).
+ * session-status— one chip of the Host's bottom status bar (Workspace +
+ *                 Current Session + fact count).
  *
  * Facts come from the session Capability through the star route
  * (LiteAgent.call('session','query')). Turn status and cancel are the
  * medium's own endpoints (/api/session, /api/turn/cancel) — the author SDK
- * does not surface them yet. A 2s fact refresh backstops missed SSE events
+ * does not surface them yet. An adaptive backstop (2s while a turn is live,
+ * 8s idle; paused when the tab is hidden) covers missed SSE events
  * (incremental; skips rebuild while text is selected). Shell coordination
- * rides private topics: __session (switches), __notice (loader diagnostics).
+ * rides private topics: __session (switches), __new (new-session face),
+ * __notice (loader diagnostics).
  */
-import { esc, md } from '/app/md.js';
-import { mergeReasoningFacts } from '/app/facts.js';
+import { esc, md } from './lib/md.js';
+import { mergeReasoningFacts } from './lib/facts.js';
+import './settings.js';
 
-const POLL_MS = 2000;
+// SSE is the live path; this timer only backstops missed events.
+// Fast while a turn is running, slower when idle; pause when tab is hidden.
+const POLL_MS_ACTIVE = 2000;
+const POLL_MS_IDLE = 8000;
 
 function fmtTs(ts) {
   const n = Number(ts);
@@ -71,6 +82,9 @@ class SessionTrace extends HTMLElement {
     this._lastSeq = -1;
     this._lastCount = -1;
     this._booted = false;
+    // The Shell opens on the new-session face; the trace column stays empty
+    // until a Session is actually entered (__session).
+    this._active = false;
   }
   async connectedCallback() {
     const root = this.attachShadow({ mode: 'open' });
@@ -81,18 +95,50 @@ class SessionTrace extends HTMLElement {
     const list = document.createElement('div');
     list.className = 'list';
     root.appendChild(list);
-    // The medium owns the current session; learn it, then re-render on switches.
-    this._offSession = LiteAgent.onSessionChange(() => this.refresh(true));
+    this.renderIdle();
+    // Announcement-driven (not onSessionChange): at boot nothing is "current".
+    this._offSession = LiteAgent.on('__session', () => { this._active = true; this.refresh(true); });
+    this._offNew = LiteAgent.on('__new', () => {
+      this._active = false;
+      this._viewSid = '';
+      this._booted = false;
+      this.renderIdle();
+    });
     this._offFacts = LiteAgent.on('session', f => this.onFact(f));
-    await this.refresh(true);
     // SSE is the live path; this timer only backstops missed events.
-    if (!this._timer) this._timer = setInterval(() => this.refresh(false), POLL_MS);
+    this._busy = false;
+    this._offsStatus = [];
+    this._offsStatus.push(LiteAgent.on('status', st => {
+      const s = (st && st.status) || '';
+      this._busy = (s && s !== 'idle' && String(s).indexOf('error:') !== 0);
+    }));
+    this._offsStatus.push(LiteAgent.on('stream', () => { this._busy = true; }));
+    this._offsStatus.push(LiteAgent.on('presentation', () => { this._busy = true; }));
+    this._armPoll();
+  }
+  _armPoll() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (!this._root) return;
+    const delay = this._busy ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    this._timer = setTimeout(() => {
+      this._timer = null;
+      if (!this._root) return;
+      if (!document.hidden) this.refresh(false);
+      this._armPoll();
+    }, delay);
   }
   disconnectedCallback() {
     if (this._offSession) this._offSession();
+    if (this._offNew) this._offNew();
     if (this._offFacts) this._offFacts();
-    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    if (this._offsStatus) { this._offsStatus.forEach(off => off()); this._offsStatus = []; }
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._root = null;
+  }
+  renderIdle() {
+    if (!this._root) return;
+    const list = this._root.querySelector('.list');
+    if (list) list.innerHTML = '<div class="message">未进入会话 — 选择或新建一个会话后显示事实流。</div>';
   }
   hasTextSelection() {
     const sel = this._root && this._root.getSelection ? this._root.getSelection() : window.getSelection();
@@ -112,7 +158,9 @@ class SessionTrace extends HTMLElement {
     this.appendFact(f);
   }
   async refresh(force) {
-    if (!this._root) return;
+    if (!this._root || !this._active) return;
+    // Backstop only: skip while the tab is hidden (SSE still fills on focus).
+    if (!force && document.hidden) return;
     // Never tear down the DOM while the user is selecting text in this panel.
     if (!force && this.hasTextSelection()) return;
     try {
@@ -258,6 +306,12 @@ const RAIL_CSS = `
     display:inline-block; margin-right:6px; font-size:10px; color:var(--la-accent,#7aa2f7);
     font-family:var(--la-mono,monospace);
   }
+  .ws-head {
+    margin:10px 4px 4px; font-size:10px; letter-spacing:.04em;
+    text-transform:uppercase; color:var(--la-dim,#9aa0a6);
+    font-family:var(--la-mono,monospace);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
 `;
 
 class SessionRail extends HTMLElement {
@@ -292,7 +346,10 @@ class SessionRail extends HTMLElement {
       const s = (st && st.status) || '';
       if (s === 'idle' || String(s).indexOf('error:') === 0) this.loadSessions();
     }));
-    this._offs.push(LiteAgent.onSessionChange(id => this.markActive(id)));
+    // Only announce-driven highlighting: at boot the Shell sits on the
+    // new-session face, so nothing may look "current" yet.
+    this._offs.push(LiteAgent.on('__session', id => this.markActive(id)));
+    this._offs.push(LiteAgent.on('__new', () => { this.markActive(''); this.loadSessions(); }));
     await this.loadSessions();
   }
   disconnectedCallback() {
@@ -303,40 +360,12 @@ class SessionRail extends HTMLElement {
   async loadSessions() {
     if (!this._root) return;
     try {
-      // Current Session lives on the session Capability (ADR-0012).
-      const curRes = await LiteAgent.call('session', 'current', {});
       const listRes = await LiteAgent.call('session', 'list', {});
-      const cur = (curRes && curRes.ok !== false && curRes.result && curRes.result.sessionId) || window.__liteSessionId || '';
       const list = (listRes && listRes.ok !== false && listRes.result && listRes.result.sessions) || [];
-      this.render(cur || '', list);
+      // The Shell opens on the new-session face, so no Session is marked active
+      // until the user switches to one (see markActive on __session).
+      this.render(this._current, list);
     } catch (e) { /* rail is best-effort */ }
-  }
-  // Flatten the parent/child Session tree so Subagent sessions nest under their parent.
-  flattenTree(list) {
-    const byParent = {};
-    const ids = new Set(list.map(s => s.id || ''));
-    const roots = [];
-    list.forEach(s => {
-      const p = s.parentSession || '';
-      if (p && ids.has(p)) {
-        if (!byParent[p]) byParent[p] = [];
-        byParent[p].push(s);
-      } else {
-        roots.push(s);
-      }
-    });
-    const out = [];
-    const walk = (items, depth) => {
-      items
-        .slice()
-        .sort((a, b) => (a.id || '').localeCompare(b.id || ''))
-        .forEach(s => {
-          out.push({ s: s, depth: depth });
-          walk(byParent[s.id] || [], depth + 1);
-        });
-    };
-    walk(roots, 0);
-    return out;
   }
   render(cur, list) {
     if (!this._root) return;
@@ -350,21 +379,47 @@ class SessionRail extends HTMLElement {
       el.appendChild(empty);
       return;
     }
-    this.flattenTree(list).forEach(({ s, depth }) => {
-      const id = s.id || '';
-      const title = s.title || id;
-      const item = document.createElement('div');
-      item.className = 'sess-item' + (id === this._current ? ' active' : '') + (depth > 0 ? ' child' : '');
-      if (s.origin === 'subagent') {
-        const badge = document.createElement('span');
-        badge.className = 'badge';
-        badge.textContent = '↳';
-        item.appendChild(badge);
-      }
-      item.appendChild(document.createTextNode(title));
-      item.title = id + (s.parentSession ? '\nparent: ' + s.parentSession : '') + (s.workspace ? '\nws: ' + s.workspace : '');
-      item.onclick = () => this.select(id);
-      el.appendChild(item);
+    // Workspace path (ADR-0020) is the ONLY grouping basis: sessions of one
+    // project stay together, regardless of Subagent parentage. Subagent rows
+    // keep their ↳ badge, but the tree nesting is dropped on purpose.
+    const groups = new Map();
+    list.forEach(s => {
+      const ws = (s.workspace || '').trim() || '';
+      if (!groups.has(ws)) groups.set(ws, []);
+      groups.get(ws).push(s);
+    });
+    const keys = Array.from(groups.keys()).sort((a, b) => {
+      if (a === '') return 1;
+      if (b === '') return -1;
+      return a.localeCompare(b);
+    });
+    keys.forEach((ws) => {
+      const head = document.createElement('div');
+      head.className = 'ws-head';
+      head.title = ws || '(no workspace)';
+      const name = ws ? ws.split(/[\\/]/).filter(Boolean).pop() || ws : '未绑定工作区';
+      const members = groups.get(ws);
+      head.textContent = '▸ ' + name + '  (' + members.length + ')';
+      el.appendChild(head);
+      members
+        .slice()
+        .sort((a, b) => (a.id || '').localeCompare(b.id || ''))
+        .forEach(s => {
+          const id = s.id || '';
+          const title = s.title || id;
+          const item = document.createElement('div');
+          item.className = 'sess-item' + (id === this._current ? ' active' : '');
+          if (s.origin === 'subagent') {
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = '↳';
+            item.appendChild(badge);
+          }
+          item.appendChild(document.createTextNode(title));
+          item.title = id + (s.parentSession ? '\nparent: ' + s.parentSession : '') + (ws ? '\nws: ' + ws : '');
+          item.onclick = () => this.select(id);
+          el.appendChild(item);
+        });
     });
   }
   markActive(id) {
@@ -380,29 +435,13 @@ class SessionRail extends HTMLElement {
     // Announce the switch; the session-view reloads its history for this session.
     window.__liteSessionId = id;
     LiteAgent.emit('__session', id);
-    this.loadSessions();
+    this.markActive(id);
   }
   async newSession() {
-    // Workspace is Session metadata (ADR-0020); prompt keeps multi-project Web sessions honest.
-    const prev = await this._currentWorkspace();
-    const workspace = window.prompt('Workspace path for this session', prev || '');
-    if (workspace === null) return;
-    // create mints a fresh id and selects it as Current Session (ADR-0012).
-    const b = await LiteAgent.call('session', 'create', {
-      workspace: (workspace || '').trim()
-    });
-    if (!b || b.ok === false) return;
-    const id = (b.result && b.result.sessionId) || '';
-    window.__liteSessionId = id;
-    LiteAgent.emit('__session', id);
-    this.loadSessions();
-  }
-  async _currentWorkspace() {
-    try {
-      const b = await LiteAgent.call('session', 'info', {});
-      if (b && b.ok !== false && b.result && b.result.workspace) return b.result.workspace;
-    } catch (e) { /* optional */ }
-    return '';
+    // No prompt here: the Session View owns the new-session face (Workspace
+    // picker + Agent Scheme + composer) and mints the Session on first send.
+    this.markActive('');
+    LiteAgent.emit('__new', {});
   }
 }
 
@@ -486,6 +525,27 @@ const VIEW_CSS = `
   }
   .family-bar button:hover { background:#1a1f2a; }
   .family-bar .f-label { opacity:.8; }
+  /* New-session face: Workspace picker + Agent Scheme + composer. */
+  .welcome { max-width:52rem; margin:0 auto; padding:28px 4px 8px; }
+  .welcome h1 { font-size:20px; margin:0 0 6px; color:var(--la-ink,#e8eaed); }
+  .welcome .sub { color:var(--la-dim,#9aa0a6); font-size:12px; margin:0 0 20px; line-height:1.55; }
+  .w-row { margin-bottom:16px; }
+  .w-label { font-size:11px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); margin-bottom:6px; }
+  .w-value { font-size:13px; font-family:var(--la-mono,monospace); color:var(--la-ink,#e8eaed); word-break:break-all; margin-bottom:8px; }
+  .w-value.empty { color:var(--la-dim,#9aa0a6); font-style:italic; }
+  .w-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .w-btn { background:transparent; border:1px solid var(--la-line,#2a2f3a); color:var(--la-accent,#7aa2f7);
+    border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; }
+  .w-btn:hover { background:#1a2438; border-color:var(--la-accent,#7aa2f7); }
+  .w-input { flex:1; min-width:220px; background:var(--la-bg,#0f1115); border:1px solid var(--la-line,#2a2f3a);
+    color:var(--la-ink,#e8eaed); border-radius:8px; padding:7px 10px; font-size:12px; font-family:var(--la-mono,monospace); }
+  .w-chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .w-chip { background:transparent; border:1px solid var(--la-line,#2a2f3a); color:var(--la-dim,#9aa0a6);
+    border-radius:999px; padding:5px 12px; font-size:12px; cursor:pointer; }
+  .w-chip:hover { color:var(--la-ink,#e8eaed); border-color:var(--la-accent,#7aa2f7); }
+  .w-chip.on { color:#0b1020; background:var(--la-accent,#7aa2f7); border-color:var(--la-accent,#7aa2f7); font-weight:600; }
+  .w-hint { font-size:11px; color:var(--la-dim,#9aa0a6); margin-top:8px; line-height:1.55; }
+  .w-cand { display:flex; flex-direction:column; gap:4px; margin-top:8px; }
 `;
 
 class SessionView extends HTMLElement {
@@ -493,6 +553,13 @@ class SessionView extends HTMLElement {
     super();
     this._root = null;
     this._sid = '';
+    // mode: 'welcome' (new-session face) | 'chat' (a Session is loaded).
+    this._mode = 'welcome';
+    // Workspace chosen on the new-session face (Session metadata, ADR-0020).
+    this._ws = '';
+    this._wsCandidates = [];
+    this._schemes = [];
+    this._scheme = '';
     this._running = false;
     this._streamBuf = '';
     this._reasoningBuf = '';
@@ -557,8 +624,12 @@ class SessionView extends HTMLElement {
     this._offs.push(LiteAgent.on('session', d => this.onSessionFact(d)));
     this._offs.push(LiteAgent.on('__notice', d => this.onNotice(d)));
     this._offs.push(LiteAgent.on('tool_approval', d => this.onToolApproval(d)));
-    this._offs.push(LiteAgent.onSessionChange(sid => this.onSessionChange(sid)));
-    this.reload();
+    // Announcement-driven, never onSessionChange: that fires immediately with
+    // the Host's Current Session and would load history at boot (the Shell opens
+    // on the new-session face by design).
+    this._offs.push(LiteAgent.on('__session', sid => this.onSessionChange(sid)));
+    this._offs.push(LiteAgent.on('__new', () => this.showWelcome()));
+    this.showWelcome();
   }
   async onToolApproval(d) {
     if (!d || !d.id) return;
@@ -824,8 +895,9 @@ class SessionView extends HTMLElement {
     const text = this._input.value.trim();
     if (!text) return;
     this._input.value = '';
+    // Slash commands are Host/session-scoped and work without a Session.
     if (text.charAt(0) === '/') {
-      this.appendUser(text);
+      if (this._mode !== 'welcome') this.appendUser(text);
       LiteAgent.runCommand(text).then(body => {
         if (body.error) this.appendPre(body.error, 'message error');
         else if (body.output) this.appendPre(body.output, 'message');
@@ -834,6 +906,12 @@ class SessionView extends HTMLElement {
         const cmd = text.replace(/^\//, '').split(/\s+/)[0];
         if (cmd === 'refresh') location.reload();
       });
+      return;
+    }
+    // New-session face: the first send mints the Session (with the chosen
+    // Workspace) instead of pressing an idle Session into service.
+    if (this._mode === 'welcome') {
+      this.startSessionAndSend(text);
       return;
     }
     this.appendUser(text);
@@ -848,6 +926,222 @@ class SessionView extends HTMLElement {
       }
     }).catch(() => { this._running = false; this.setSendState(false); });
   }
+  // ---- new-session face (Workspace + Agent Scheme + composer) ----
+
+  showWelcome() {
+    this._mode = 'welcome';
+    this._sid = '';
+    this._running = false;
+    this._ready = true; // nothing to replay: no history gate
+    this._queue = [];
+    this.setSendState(false);
+    this.setUsageBar(null);
+    if (this._familyBar) this._familyBar.innerHTML = '';
+    if (this._usageBar) this._usageBar.style.display = 'none';
+    if (this._ctxPanel) { this._ctxPanel.classList.remove('open'); this._ctxPanel.innerHTML = ''; }
+    this.renderWelcome();
+    this.loadSchemeState();
+    if (this._input) this._input.focus();
+  }
+  renderWelcome() {
+    const flow = this._flow();
+    if (!flow) return;
+    flow.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'welcome';
+    const h1 = document.createElement('h1');
+    h1.textContent = '新建会话';
+    const sub = document.createElement('p');
+    sub.className = 'sub';
+    sub.textContent = '工作区可留空；agent 模式决定这一轮会话拉起哪些插件与工具。也可以在左侧选择已有会话。';
+    card.appendChild(h1);
+    card.appendChild(sub);
+
+    // Workspace row (ADR-0020): the browser picker yields only a folder name,
+    // so the Host resolves it to a path; a manual path always works too.
+    const wsRow = document.createElement('div');
+    wsRow.className = 'w-row';
+    wsRow.appendChild(this._wLabel('工作区 Workspace'));
+    const val = document.createElement('div');
+    val.className = 'w-value' + (this._ws ? '' : ' empty');
+    val.textContent = this._ws || '（留空 — 使用 Host 默认工作区）';
+    wsRow.appendChild(val);
+    const actions = document.createElement('div');
+    actions.className = 'w-actions';
+    const btnPick = document.createElement('button');
+    btnPick.type = 'button';
+    btnPick.className = 'w-btn';
+    btnPick.textContent = '选择文件夹…';
+    btnPick.onclick = () => this.pickWorkspace();
+    const input = document.createElement('input');
+    input.className = 'w-input';
+    input.placeholder = '或直接填写绝对路径（可留空）';
+    input.value = this._ws || '';
+    input.onchange = () => { this._ws = input.value.trim(); this._wsCandidates = []; this.renderWelcome(); };
+    const btnClear = document.createElement('button');
+    btnClear.type = 'button';
+    btnClear.className = 'w-btn';
+    btnClear.textContent = '清空';
+    btnClear.onclick = () => { this._ws = ''; this._wsCandidates = []; this.renderWelcome(); };
+    actions.appendChild(btnPick);
+    actions.appendChild(input);
+    actions.appendChild(btnClear);
+    wsRow.appendChild(actions);
+    if (this._wsCandidates.length) {
+      const cand = document.createElement('div');
+      cand.className = 'w-cand';
+      const tip = document.createElement('div');
+      tip.className = 'w-hint';
+      tip.textContent = 'Host 找到多个同名目录，请选择：';
+      cand.appendChild(tip);
+      this._wsCandidates.forEach(p => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'w-btn';
+        b.style.textAlign = 'left';
+        b.textContent = p;
+        b.onclick = () => { this._ws = p; this._wsCandidates = []; this.renderWelcome(); };
+        cand.appendChild(b);
+      });
+      wsRow.appendChild(cand);
+    }
+    card.appendChild(wsRow);
+
+    // Agent Scheme row.
+    const schRow = document.createElement('div');
+    schRow.className = 'w-row';
+    schRow.appendChild(this._wLabel('agent 模式 Agent Scheme'));
+    const chips = document.createElement('div');
+    chips.className = 'w-chips';
+    if (!this._schemes.length) {
+      const none = document.createElement('span');
+      none.className = 'w-hint';
+      none.textContent = '未取到 agent scheme（agent 插件未挂载？）';
+      chips.appendChild(none);
+    }
+    this._schemes.forEach(s => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'w-chip' + (s === this._scheme ? ' on' : '');
+      b.textContent = s;
+      b.title = 'config.set defaultScheme=' + s + '（下一 Turn 生效）';
+      b.onclick = () => this.applyScheme(s);
+      chips.appendChild(b);
+    });
+    schRow.appendChild(chips);
+    const hint = document.createElement('div');
+    hint.className = 'w-hint';
+    hint.textContent = '进入会话前会经 Host ensurePlugins 拉起该模式声明的插件。';
+    schRow.appendChild(hint);
+    card.appendChild(schRow);
+
+    flow.appendChild(card);
+  }
+  _wLabel(text) {
+    const l = document.createElement('div');
+    l.className = 'w-label';
+    l.textContent = text;
+    return l;
+  }
+  async loadSchemeState() {
+    try {
+      const res = await fetch('/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin: 'agent', cap: 'config', method: 'get', payload: {} })
+      });
+      const b = await res.json();
+      let face = b && b.ok !== false ? b.result : null;
+      if (typeof face === 'string') { try { face = JSON.parse(face); } catch (e) { face = null; } }
+      if (!face) return;
+      this._scheme = face.defaultScheme || '';
+      this._schemes = Object.keys(face.schemes || {}).sort();
+      if (this._mode === 'welcome') this.renderWelcome();
+    } catch (e) { /* scheme row is best-effort */ }
+  }
+  async applyScheme(name) {
+    if (!name || name === this._scheme) return;
+    this._scheme = name;
+    if (this._mode === 'welcome') this.renderWelcome();
+    try {
+      const res = await fetch('/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin: 'agent', cap: 'config', method: 'set', payload: { defaultScheme: name } })
+      });
+      const b = await res.json();
+      if (b && b.ok === false) throw new Error(b.error || 'set failed');
+      LiteAgent.emit('__scheme', { scheme: name });
+      LiteAgent.emit('__notice', { text: 'agent scheme → ' + name, cls: 'message' });
+    } catch (e) {
+      LiteAgent.emit('__notice', { text: 'scheme set failed: ' + e, cls: 'message error' });
+    }
+  }
+  async pickWorkspace() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      LiteAgent.emit('__notice', { text: '当前浏览器不支持文件夹选择 API，请直接填写路径', cls: 'message warn' });
+      return;
+    }
+    let handle = null;
+    try {
+      handle = await window.showDirectoryPicker({ mode: 'read' });
+    } catch (e) {
+      return; // user cancelled
+    }
+    const name = (handle && handle.name) || '';
+    if (!name) return;
+    // The File System Access API never exposes an absolute path; the Host maps
+    // the folder name to a real directory (cwd subtree, then siblings).
+    let body = null;
+    try {
+      const res = await fetch('/api/workspace/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      });
+      body = await res.json();
+    } catch (e) { /* fall through to manual entry */ }
+    this._wsCandidates = [];
+    if (body && body.path) {
+      this._ws = body.path;
+    } else if (body && body.candidates && body.candidates.length > 1) {
+      this._wsCandidates = body.candidates;
+    } else {
+      this._ws = '';
+      LiteAgent.emit('__notice', {
+        text: '已选择「' + name + '」，但 Host 未能定位其绝对路径，请手动填写',
+        cls: 'message warn'
+      });
+    }
+    this.renderWelcome();
+  }
+  async startSessionAndSend(text) {
+    this._running = true;
+    this.setSendState(true);
+    try {
+      const ws = (this._ws || '').trim();
+      const b = await LiteAgent.call('session', 'create', { workspace: ws, origin: 'web' });
+      if (!b || b.ok === false) throw new Error((b && b.error) || 'session.create failed');
+      const id = (b.result && b.result.sessionId) || '';
+      if (!id) throw new Error('session.create returned no id');
+      // From here on this view is a normal Session view.
+      this._mode = 'chat';
+      this._sid = id;
+      window.__liteSessionId = id;
+      if (this._usageBar) this._usageBar.style.display = '';
+      LiteAgent.emit('__session', id); // rail highlight + trace follow
+      await this.reload();
+      this.appendUser(text);
+      this.beginTurn();
+      const sent = await LiteAgent.sendMessage(text, id);
+      if (sent && sent.ok === false) throw new Error(sent.error || 'send failed');
+    } catch (e) {
+      this._running = false;
+      this.setSendState(false);
+      if (this._mode === 'welcome') this.renderWelcome();
+      this.appendPre(String(e && e.message || e), 'message error');
+    }
+  }
   setSendState(running) {
     if (!this._btnSend) return;
     this._btnSend.classList.toggle('running', running);
@@ -859,8 +1153,10 @@ class SessionView extends HTMLElement {
   }
   onSessionChange(sid) {
     sid = sid || '';
-    if (String(this._sid) === String(sid)) return;
+    if (String(this._sid) === String(sid) && this._mode === 'chat') return;
+    this._mode = 'chat';
     this._sid = sid;
+    if (this._usageBar) this._usageBar.style.display = '';
     this._running = false;
     this.setSendState(false);
     this.setUsageBar(null);
@@ -1080,3 +1376,105 @@ class SessionView extends HTMLElement {
 }
 
 if (!customElements.get('session-view')) customElements.define('session-view', SessionView);
+
+/* ---- session-status: the Host bottom status bar's session chip ---- */
+
+const STATUS_CSS = `
+  :host { display:flex; align-items:center; gap:8px; font:11px/1.6 var(--la-mono,monospace); color:var(--la-dim,#9aa0a6); }
+  .k { color:var(--la-dim,#9aa0a6); opacity:.75; }
+  .v { color:var(--la-ink,#e8eaed); }
+  .v.accent { color:var(--la-accent,#7aa2f7); }
+  .v.warn { color:#e0af68; }
+`;
+
+class SessionStatus extends HTMLElement {
+  constructor() {
+    super();
+    this._root = null;
+    this._offs = [];
+    this._timer = null;
+    this._state = { ws: '', sid: '', seq: 0, facts: 0, active: false };
+  }
+  connectedCallback() {
+    const root = this.attachShadow({ mode: 'open' });
+    this._root = root;
+    const style = document.createElement('style');
+    style.textContent = STATUS_CSS;
+    root.appendChild(style);
+    this._body = document.createElement('div');
+    this._body.style.display = 'flex';
+    this._body.style.gap = '8px';
+    this._body.style.alignItems = 'center';
+    root.appendChild(this._body);
+    this._offs.push(LiteAgent.on('__session', id => { this._state.active = true; this._state.sid = id || ''; this.refresh(); }));
+    this._offs.push(LiteAgent.on('__new', () => { this._state.active = false; this._state.sid = ''; this._state.ws = ''; this._state.seq = 0; this.render(); }));
+    this._offs.push(LiteAgent.on('session', () => { this._state.seq++; this.render(); }));
+    this._offs.push(LiteAgent.on('status', st => {
+      const s = (st && st.status) || '';
+      if (s === 'idle' || String(s).indexOf('error:') === 0) this.refresh();
+    }));
+    this.refresh();
+    this._timer = setInterval(() => { if (!document.hidden) this.refresh(); }, 15000);
+  }
+  disconnectedCallback() {
+    this._offs.forEach(off => off());
+    this._offs = [];
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    this._root = null;
+  }
+  async refresh() {
+    if (!this._root) return;
+    if (!this._state.active) {
+      // Welcome face: show the Host default workspace as a preview.
+      try {
+        const b = await LiteAgent.call('session', 'info', {});
+        const ws = (b && b.ok !== false && b.result && b.result.workspace) || '';
+        this._state.ws = ws;
+      } catch (e) { /* best-effort */ }
+      this.render();
+      return;
+    }
+    try {
+      const res = await LiteAgent.call('session', 'list', {});
+      const list = (res && res.ok !== false && res.result && res.result.sessions) || [];
+      const me = list.find(s => (s.id || '') === (this._state.sid || ''));
+      if (me) {
+        this._state.ws = me.workspace || '';
+        this._state.seq = me.seq || 0;
+        if (me.title) this._state.title = me.title;
+      }
+    } catch (e) { /* best-effort */ }
+    this.render();
+  }
+  shortPath(p) {
+    if (!p) return '';
+    const parts = String(p).split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 2) return p;
+    return '…/' + parts.slice(-2).join('/');
+  }
+  render() {
+    if (!this._body) return;
+    const s = this._state;
+    this._body.innerHTML = '';
+    const add = (k, v, cls) => {
+      const kk = document.createElement('span');
+      kk.className = 'k';
+      kk.textContent = k;
+      const vv = document.createElement('span');
+      vv.className = 'v' + (cls ? ' ' + cls : '');
+      vv.textContent = v;
+      vv.title = v;
+      this._body.appendChild(kk);
+      this._body.appendChild(vv);
+    };
+    add('ws', s.ws ? this.shortPath(s.ws) : '—', s.ws ? '' : 'warn');
+    if (s.active) {
+      add('session', s.sid ? (s.sid.length > 12 ? s.sid.slice(0, 12) : s.sid) : '—', 'accent');
+      add('facts', String(s.seq || 0));
+    } else {
+      add('session', '未开始（新建会话）', 'warn');
+    }
+  }
+}
+
+if (!customElements.get('session-status')) customElements.define('session-status', SessionStatus);

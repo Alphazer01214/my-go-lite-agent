@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -113,7 +114,11 @@ func buildPkgToPlugin(t *testing.T, root, pluginsDir, name string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(dir, name)
+	exe := name
+	if runtime.GOOS == "windows" {
+		exe = name + ".exe"
+	}
+	bin := filepath.Join(dir, exe)
 	cmd := exec.Command("go", "build", "-o", bin, "./plugins/"+name)
 	cmd.Dir = root
 	b, err := cmd.CombinedOutput()
@@ -134,9 +139,10 @@ func buildPkgToPlugin(t *testing.T, root, pluginsDir, name string) {
   "name": "`+name+`",
   "version": "0.1.0",
   "protocol": 3,
+		"autostart": true,
   "provides": `+provides+`,
   "consumes": [],
-  "entry": "`+name+`"
+  "entry": "`+exe+`"
 }`)
 }
 
@@ -171,7 +177,7 @@ func TestPolicyDenyBlocksWriteTool(t *testing.T) {
 	}
 	s := string(out)
 	if !strings.Contains(s, "denied by policy") && !strings.Contains(s, "error: denied") {
-		// stub calls tools[0] which is read_file → must be denied
+		// stub calls tools[0] which is read_file — must be denied
 		t.Fatalf("want policy deny in output: %s", s)
 	}
 }

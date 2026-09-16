@@ -16,12 +16,15 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var(--la-ink);font-family:var(--la-sans)}
 
-/* 3-column grid: history | (chat | trace) | plugins */
+/* 3-column grid (history | chat+trace | plugins) plus a full-width status bar */
 #app{
   display:grid;
   grid-template-columns:240px minmax(0,1fr) 240px;
+  grid-template-rows:minmax(0,1fr) auto;
   height:100%;
   min-height:0;
+  /* Never collapse the center column on narrow windows: scroll instead. */
+  min-width:860px;
 }
 #rail{
   background:var(--la-panel2);
@@ -36,6 +39,29 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 }
 #right-head{padding:12px;border-bottom:1px solid var(--la-line);font-size:12px;color:var(--la-dim)}
 #slot-toolbar-right{flex:1;overflow-y:auto;padding:8px;min-height:0}
+
+/* Bottom status bar: the Host reserves the last row and plugins fill it with
+   their own <plugin>-status Panel Components (workspace, tokens, model, …).
+   The Shell owns only the geometry and the slot. */
+#statusbar{
+  grid-column:1 / -1;grid-row:2;
+  display:flex;align-items:center;gap:0;
+  min-height:26px;padding:0 10px;
+  background:var(--la-panel);border-top:1px solid var(--la-line);
+  color:var(--la-dim);font-size:11px;
+  font-family:var(--la-mono,ui-monospace,monospace);
+  overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+}
+#statusbar:empty{display:none}
+/* #status is the Host's own line inside the shared bottom bar (SSE status /
+   loader warnings); plugin chips follow it. */
+#status{flex:0 0 auto;color:var(--la-dim);padding-right:2px}
+#status:empty{display:none}
+#statusbar>*{flex:0 0 auto}
+#statusbar-empty{flex:1;font-size:11px;color:var(--la-dim);opacity:.7}
+#statusbar>*+*{border-left:1px solid var(--la-line);margin-left:10px;padding-left:10px}
+/* No leading separator when the Host's own status line is empty. */
+#status:empty+*{border-left:0;margin-left:0;padding-left:0}
 
 /* center workspace */
 #center{display:flex;flex-direction:column;min-width:0;min-height:0}
@@ -54,7 +80,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 /* The chat surface is the session-view Panel Component (ADR-0011);
    the layout owns sizing, the component owns scrolling and content. */
 #chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-#chat>session-view{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#chat>*{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 #slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
 #status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
@@ -80,10 +106,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
       <section id="chat-col">
         <div id="pane-head"><span>Chat</span><span id="layout-nav" style="display:flex;gap:10px;margin-left:12px;align-items:center"></span><span style="display:flex;align-items:center"><button id="btn-plugins" class="btn-plugins" type="button" title="Mounted plugins & dependency graph">Plugins</button><button id="btn-settings" class="btn-plugins" type="button" title="Plugin settings">Settings</button><span id="session-label" style="font-family:var(--la-mono);font-size:11px;margin-left:8px"></span></span></div>
         <div id="chat" class="panel-root"></div>
-        <div id="status"></div>
       </section>
       <section id="trace-col">
-        <div id="pane-head"><span>Session trace</span><a href="/trace" target="_blank" rel="noreferrer">full ↗</a></div>
+        <div id="pane-head"><span>Session trace</span></div>
         <div id="slot-trace" class="panel-root"></div>
       </section>
     </div>
@@ -92,6 +117,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
     <div id="right-head">Panels</div>
     <div id="slot-toolbar-right" class="panel-root"></div>
   </aside>
+  <footer id="statusbar" class="panel-root">
+    <span id="status"></span>
+  </footer>
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>

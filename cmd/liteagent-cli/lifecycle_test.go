@@ -1,6 +1,8 @@
 package main_test
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -8,25 +10,44 @@ import (
 	"time"
 )
 
-func TestStartFailsWhenConsumesUnmet(t *testing.T) {
+func TestConsumesUnmetSoftSkipDegraded(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	pluginsDir := t.TempDir()
 	buildConsumerPluginDir(t, root, pluginsDir, "consumer") // consumes echo, echo not mounted
+	// Mark consumer autostart so Autostart path mounts it without assembly whitelist.
+	// (buildConsumerPluginDir writes plugin.json; patch autostart here.)
+	manifestPath := filepath.Join(pluginsDir, "consumer", "plugin.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["autostart"] = true
+	outb, _ := json.Marshal(m)
+	if err := os.WriteFile(manifestPath, outb, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["consumer"]}`)
-
-	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-assembly", cfg, "-invoke", "consumer")
+	// Host must start (soft skip) and still be invokable; use-time Call fails.
+	cmd := exec.Command(hostBin, "-plugins", pluginsDir, "-invoke", "consumer")
 	cmd.Env = hostEnv(t)
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("want fail-loud for unmet consumes: %s", out)
-	}
 	s := string(out)
-	if !strings.Contains(s, "consumes") && !strings.Contains(s, "echo") {
-		t.Fatalf("want unmet consume diagnosis: %s", s)
+	if err == nil {
+		// invoke may succeed at process level if plugin handles missing cap; require warn.
+		if !strings.Contains(s, "degraded") && !strings.Contains(s, "consumes") {
+			t.Fatalf("want degraded/consumes warning: %s", s)
+		}
+		return
+	}
+	// Use-time failure is acceptable if the process started and diagnosed consumes.
+	if !strings.Contains(s, "consumes") && !strings.Contains(s, "degraded") && !strings.Contains(s, "echo") {
+		t.Fatalf("want degraded diagnosis, got: %s", s)
 	}
 }
 

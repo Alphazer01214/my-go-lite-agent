@@ -29,6 +29,8 @@ function openSSE() {
   es.addEventListener('stream', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('session', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('status', function (e) { applySSE(JSON.parse(e.data)); });
+  // policy.ask → Host broadcasts tool_approval; session-view confirms via /api/tool-approval.
+  es.addEventListener('tool_approval', function (e) { applySSE(JSON.parse(e.data)); });
   es.onerror = function () { document.getElementById('status').textContent = 'sse reconnecting…'; };
 }
 

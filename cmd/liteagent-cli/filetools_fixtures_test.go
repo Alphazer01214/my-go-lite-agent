@@ -14,6 +14,7 @@ func buildFileToolsPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["tools"],
 		"consumes": [],
 		"entry": "`+name+`.exe"

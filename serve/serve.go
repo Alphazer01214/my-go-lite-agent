@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,19 +69,28 @@ type Server struct {
 	toolsProviders []string
 	// toolOwners maps a tool name to the Plugin that registered it via tools.list.
 	toolOwners map[string]string
-	pending    map[string]*wait
-	closed     bool
-	seq        int
-	gen        map[string]int
-	cards      []PresentationCard
-	panels     []PanelOp
-	subs       []*Subscriber
+	// catalog is the Discovery result (all known plugins) for ensurePlugins (ADR-0023).
+	catalog discovery.Result
+	// pluginsDir lets ensurePlugins re-scan when the catalog is stale (new binaries on disk).
+	pluginsDir string
+	// mountedUI tracks UI-only plugins already accepted into the plan.
+	mountedUI map[string]bool
+	// degraded marks plugins whose consumes are unmet (ADR-0022): not in provides registry.
+	degraded map[string]bool
+	pending  map[string]*wait
+	closed   bool
+	seq      int
+	gen      map[string]int
+	cards    []PresentationCard
+	panels   []PanelOp
+	subs     []*Subscriber
 	// turnStates serializes turns per Session id (parallel across sessions).
 	turnStatesMu sync.Mutex
 	turnStates   map[string]*sessionTurn
 	job          *jobHolder
 	// OnStreamDelta is the live Render Medium hook for ephemeral stream chunks.
-	OnStreamDelta func(delta string)
+	// channel is "content" or "reasoning" so media can paint them differently.
+	OnStreamDelta func(delta, channel string)
 	// OnStatus is the live Render Medium hook for agent idle/running.
 	OnStatus func(status string)
 	// OnToolCall is the live Render Medium hook when the Loop starts a tool (or Subagent).
@@ -90,6 +100,81 @@ type Server struct {
 	// OnToolApproval is the live Render Medium hook for policy.ask (agent.confirm).
 	// Return true to allow the tool call. Nil means deny (safe default).
 	OnToolApproval func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
+}
+
+// HostCap is the Capability for Host cross-cutting methods (ensurePlugins).
+const HostCap = "host"
+
+// SetCatalog stores the Discovery result so ensurePlugins can mount later (ADR-0023).
+func (s *Server) SetCatalog(res discovery.Result) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.catalog = res
+}
+
+// SetPluginsDir records the Discovery root so EnsurePlugins can re-scan a stale catalog.
+func (s *Server) SetPluginsDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pluginsDir = dir
+}
+
+// ensureCatalog returns a fresh Discovery result when pluginsDir is known.
+func (s *Server) ensureCatalog() discovery.Result {
+	s.mu.Lock()
+	dir := s.pluginsDir
+	cached := s.catalog
+	s.mu.Unlock()
+	if dir != "" {
+		if res := discovery.Scan(dir); len(res.Plugins) > 0 {
+			s.mu.Lock()
+			s.catalog = res
+			s.mu.Unlock()
+			return res
+		}
+	}
+	return cached
+}
+
+// MountedPluginNames lists process/UI plugins currently mounted (for /lp).
+func (s *Server) MountedPluginNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names := make([]string, 0, len(s.plugins)+len(s.mountedUI))
+	for n := range s.plugins {
+		names = append(names, n)
+	}
+	for n := range s.mountedUI {
+		if _, ok := s.plugins[n]; !ok {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// DegradedNames returns plugins marked degraded (consumes unmet, ADR-0022).
+func (s *Server) DegradedNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	for n := range s.degraded {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ToolOwners returns a copy of the tool-name → providing-plugin map (ADR-0018),
+// for observability surfaces such as the Web plugin graph.
+func (s *Server) ToolOwners() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.toolOwners))
+	for k, v := range s.toolOwners {
+		out[k] = v
+	}
+	return out
 }
 
 // PanelOp is one Web Medium panel mutation (ADR-0010): mount (set) or remove
@@ -163,7 +248,7 @@ func (s *Server) recordCard(f *protocol.Frame) {
 	s.mu.Unlock()
 }
 
-// Start launches every mounted Plugin, checks consumes, and builds the Capability registry.
+// Start launches every mounted Plugin, soft-checks consumes, and builds the Capability registry.
 func Start(mounted []discovery.Found) (*Server, error) {
 	s := &Server{
 		plugins:    make(map[string]*proc, len(mounted)),
@@ -171,6 +256,8 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		toolOwners: make(map[string]string),
 		pending:    make(map[string]*wait),
 		gen:        make(map[string]int),
+		mountedUI:  make(map[string]bool),
+		degraded:   make(map[string]bool),
 	}
 	job, err := newJob()
 	if err != nil {
@@ -179,30 +266,16 @@ func Start(mounted []discovery.Found) (*Server, error) {
 	} else {
 		s.job = job
 	}
-	for _, p := range mounted {
-		// UI-only Plugin: no process, so no capabilities and no launch (ADR-0011).
-		if p.Manifest.Entry == "" {
-			continue
-		}
-		for _, capName := range p.Manifest.Provides {
-			if capName == ToolsCap {
-				// Multi-provider Capability (ADR-0018): collect owners; name conflicts fail later.
-				s.toolsProviders = append(s.toolsProviders, p.Manifest.Name)
-				if _, ok := s.provides[ToolsCap]; !ok {
-					s.provides[ToolsCap] = p.Manifest.Name
-				}
-				continue
-			}
-			if owner, ok := s.provides[capName]; ok {
-				_ = s.Close()
-				return nil, fmt.Errorf("capability %q provided by both %s and %s", capName, owner, p.Manifest.Name)
-			}
-			s.provides[capName] = p.Manifest.Name
-		}
+	if err := s.registerProvides(mounted); err != nil {
+		_ = s.Close()
+		return nil, err
 	}
 	for _, p := range mounted {
 		// UI-only Plugin: no executable, no process, no Frames (ADR-0011).
 		if p.Manifest.Entry == "" {
+			s.mu.Lock()
+			s.mountedUI[p.Manifest.Name] = true
+			s.mu.Unlock()
 			continue
 		}
 		if err := s.launch(p); err != nil {
@@ -211,15 +284,49 @@ func Start(mounted []discovery.Found) (*Server, error) {
 			return nil, err
 		}
 	}
-	if err := s.checkConsumes(mounted); err != nil {
-		_ = s.Close()
-		return nil, err
-	}
+	s.softCheckConsumes(mounted)
 	if err := s.discoverTools(); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// registerProvides indexes capability owners. Non-tools conflicts fail; tools are multi-owner (ADR-0018).
+func (s *Server) registerProvides(mounted []discovery.Found) error {
+	for _, p := range mounted {
+		if p.Manifest.Entry == "" {
+			continue
+		}
+		for _, capName := range p.Manifest.Provides {
+			if capName == ToolsCap {
+				s.mu.Lock()
+				dup := false
+				for _, existing := range s.toolsProviders {
+					if existing == p.Manifest.Name {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					s.toolsProviders = append(s.toolsProviders, p.Manifest.Name)
+				}
+				if _, ok := s.provides[ToolsCap]; !ok {
+					s.provides[ToolsCap] = p.Manifest.Name
+				}
+				s.mu.Unlock()
+				continue
+			}
+			s.mu.Lock()
+			if owner, ok := s.provides[capName]; ok && owner != p.Manifest.Name {
+				s.mu.Unlock()
+				return fmt.Errorf("capability %q provided by both %s and %s", capName, owner, p.Manifest.Name)
+			}
+			s.provides[capName] = p.Manifest.Name
+			s.mu.Unlock()
+		}
+	}
+	return nil
 }
 
 // discoverTools asks every tools Provider for its schema list and builds the
@@ -323,10 +430,45 @@ func (s *Server) toolsOwnerFor(toolName string) (string, bool) {
 	return owner, ok
 }
 
+// softCheckConsumes warns and marks plugins degraded when consumes are unmet (ADR-0022).
+// Degraded plugins keep their process but are removed from the Capability registry so
+// routing fails honestly at use time.
+func (s *Server) softCheckConsumes(mounted []discovery.Found) {
+	s.mu.Lock()
+	var degraded []string
+	for _, p := range mounted {
+		if p.Manifest.Entry == "" {
+			continue
+		}
+		unmet := false
+		for _, need := range p.Manifest.Consumes {
+			if _, ok := s.provides[need]; !ok {
+				fmt.Fprintf(os.Stderr, "warn: plugin %s consumes %q but no mounted plugin provides it (degraded)\n", p.Manifest.Name, need)
+				unmet = true
+			}
+		}
+		if unmet {
+			s.degraded[p.Manifest.Name] = true
+			degraded = append(degraded, p.Manifest.Name)
+			for _, capName := range p.Manifest.Provides {
+				if owner, ok := s.provides[capName]; ok && owner == p.Manifest.Name {
+					delete(s.provides, capName)
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+	_ = degraded
+}
+
+// checkConsumes is retained for tests that assert the old fail-loud shape; product path uses softCheckConsumes.
 func (s *Server) checkConsumes(mounted []discovery.Found) error {
 	for _, p := range mounted {
 		for _, need := range p.Manifest.Consumes {
-			if _, ok := s.provides[need]; !ok {
+			s.mu.Lock()
+			_, ok := s.provides[need]
+			s.mu.Unlock()
+			if !ok {
 				return fmt.Errorf("plugin %s consumes %q but no mounted plugin provides it", p.Manifest.Name, need)
 			}
 		}
@@ -500,7 +642,7 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	// the LLM Plugin was called by an external Agent via the star, not by Host.
 	if delta, channel, sessionID, ok := extractStreamDelta(f); ok {
 		if s.OnStreamDelta != nil {
-			s.OnStreamDelta(delta)
+			s.OnStreamDelta(delta, channel)
 		}
 		s.publish(Event{Topic: "stream", Data: map[string]string{
 			"delta":     delta,
@@ -633,6 +775,12 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
 	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
 		s.handleAgentFromPlugin(from, f)
+		return
+	}
+
+	// Host owns ensurePlugins (ADR-0023).
+	if f.Cap == HostCap && f.Method == "ensurePlugins" {
+		s.handleEnsurePlugins(from, f)
 		return
 	}
 
@@ -1873,6 +2021,107 @@ func bytesEqualJSON(a, b json.RawMessage) bool {
 		return true
 	}
 	return string(a) == string(b)
+}
+
+// handleEnsurePlugins mounts discovered plugins by name (and their dependsOn closure).
+func (s *Server) handleEnsurePlugins(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+	}
+	var in struct {
+		Names []string `json:"names"`
+	}
+	if len(f.Payload) > 0 {
+		if err := json.Unmarshal(f.Payload, &in); err != nil {
+			res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			_ = s.writeTo(from, res)
+			return
+		}
+	}
+	out, err := s.EnsurePlugins(in.Names)
+	if err != nil {
+		res.Error = &protocol.FrameError{Code: "ensure_plugins_failed", Message: err.Error()}
+		_ = s.writeTo(from, res)
+		return
+	}
+	res.Payload = MarshalPayload(out)
+	_ = s.writeTo(from, res)
+}
+
+// EnsurePluginsResult is the ensurePlugins response (ADR-0023).
+type EnsurePluginsResult struct {
+	Mounted []string `json:"mounted"`
+	Missing []string `json:"missing"`
+	Failed  []string `json:"failed,omitempty"`
+}
+
+// EnsurePlugins idempotently mounts catalog plugins by name (UI-only allowed).
+func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
+	catalog := s.ensureCatalog()
+
+	var toLaunch []discovery.Found
+	out := &EnsurePluginsResult{}
+
+	byName := map[string]discovery.Found{}
+	for _, p := range catalog.Plugins {
+		byName[p.Manifest.Name] = p
+	}
+
+	seen := map[string]bool{}
+	var walk func(name string)
+	walk = func(name string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		s.mu.Lock()
+		_, alive := s.plugins[name]
+		_, ui := s.mountedUI[name]
+		s.mu.Unlock()
+		if alive || ui {
+			out.Mounted = append(out.Mounted, name)
+			return
+		}
+		p, ok := byName[name]
+		if !ok {
+			out.Missing = append(out.Missing, name)
+			return
+		}
+		toLaunch = append(toLaunch, p)
+		for _, dep := range p.Manifest.DependsOn {
+			walk(dep)
+		}
+	}
+	for _, n := range names {
+		walk(n)
+	}
+
+	if len(toLaunch) == 0 {
+		return out, nil
+	}
+	if err := s.registerProvides(toLaunch); err != nil {
+		return nil, err
+	}
+	for _, p := range toLaunch {
+		if p.Manifest.Entry == "" {
+			s.mu.Lock()
+			s.mountedUI[p.Manifest.Name] = true
+			s.mu.Unlock()
+			out.Mounted = append(out.Mounted, p.Manifest.Name)
+			continue
+		}
+		if err := s.launch(p); err != nil {
+			out.Failed = append(out.Failed, p.Manifest.Name)
+			fmt.Fprintf(os.Stderr, "ensurePlugins: launch %s: %v\n", p.Manifest.Name, err)
+			continue
+		}
+		out.Mounted = append(out.Mounted, p.Manifest.Name)
+	}
+	s.softCheckConsumes(toLaunch)
+	if err := s.discoverTools(); err != nil {
+		fmt.Fprintf(os.Stderr, "ensurePlugins: discoverTools: %v\n", err)
+	}
+	return out, nil
 }
 
 // handleAgentFromPlugin serves Host-owned agent.request and agent.inject.

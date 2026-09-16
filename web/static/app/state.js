@@ -7,10 +7,13 @@ export var state = {
 };
 
 // Session channel for Panel Components (LiteAgent.onSessionChange rides on this).
-export function setSessionId(id) {
+// silent=true records the Host's Current Session without announcing a switch:
+// the Shell uses it at boot so the Session View stays on its new-session face.
+export function setSessionId(id, silent) {
   id = id || '';
   if (window.__liteSessionId === id && state.currentSessionId === id) return;
   state.currentSessionId = id;
   window.__liteSessionId = id;
+  if (silent) return;
   if (window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit('__session', id);
 }

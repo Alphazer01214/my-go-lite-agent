@@ -170,15 +170,15 @@ func TestPluginUIAndTraversal(t *testing.T) {
 		t.Fatalf("graph nodes missing demo: %+v", payload.Graph.Nodes)
 	}
 
-	// Floating panel module is served under /app/ (shell overlay, not a page).
-	mres, err := http.Get(ts.URL + "/app/plugins-panel.js")
+	// Settings chrome module is served under /app/ (medium framework).
+	mres, err := http.Get(ts.URL + "/app/settings.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	mb, _ := io.ReadAll(mres.Body)
 	_ = mres.Body.Close()
-	if mres.StatusCode != http.StatusOK || !strings.Contains(string(mb), "openPluginsPanel") {
-		t.Fatalf("want /app/plugins-panel.js, status=%d", mres.StatusCode)
+	if mres.StatusCode != http.StatusOK || !strings.Contains(string(mb), "openSettingsPanel") {
+		t.Fatalf("want /app/settings.js, status=%d", mres.StatusCode)
 	}
 
 	// The UI-only plugin's UI Entry is served like any other.
@@ -279,6 +279,91 @@ func TestPluginDependencyGraph(t *testing.T) {
 	// Even a provides-only plugin still yields edges (no empty graph).
 	if len(payload.Graph.Edges) < 3 {
 		t.Fatalf("want visible relationship edges, got %d: %+v", len(payload.Graph.Edges), payload.Graph.Edges)
+	}
+}
+
+// TestPluginGraphShowsWholeCatalog pins the fix for "the dependency graph only
+// appears after a conversation": under Autostart+dependsOn most plugins mount
+// lazily (Agent Scheme → ensurePlugins), so the graph must be drawn from the
+// whole Discovery catalog with per-plugin state, not from the live set alone.
+func TestPluginGraphShowsWholeCatalog(t *testing.T) {
+	dir := t.TempDir()
+	writePlugin := func(name, manifest string) string {
+		d := filepath.Join(dir, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "plugin.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Discovery validates that the declared entry exists on disk.
+		if err := os.WriteFile(filepath.Join(d, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	coreDir := writePlugin("core", `{"name":"core","version":"1","protocol":3,"autostart":true,`+
+		`"provides":["session"],"entry":"core"}`)
+	writePlugin("filetools", `{"name":"filetools","version":"1","protocol":3,`+
+		`"provides":["tools"],"entry":"filetools","dependsOn":["helper"]}`)
+	writePlugin("helper", `{"name":"helper","version":"1","protocol":3,`+
+		`"provides":["helper-cap"],"entry":"helper"}`)
+
+	// Boot plan holds the autostart root only; the tools plugin is not mounted yet.
+	plan := assembly.Plan{Mounted: []discovery.Found{{
+		Dir: coreDir,
+		Manifest: plugin.Manifest{Name: "core", Version: "1", Protocol: plugin.CurrentProtocol,
+			Autostart: true, Provides: []string{"session"}, Entry: "core"},
+	}}}
+	s := New(Options{Plan: plan, PluginsDir: dir, CommandPlane: nopCommands{}})
+	ts := httptest.NewServer(s.http.Handler)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/api/plugins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	var payload struct {
+		Graph struct {
+			Nodes []graphNode `json:"nodes"`
+			Edges []graphEdge `json:"edges"`
+		} `json:"graph"`
+		Summary struct {
+			Discovered int `json:"discovered"`
+			Mounted    int `json:"mounted"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("parse: %v\n%s", err, raw)
+	}
+	if payload.Summary.Discovered < 3 || payload.Summary.Mounted != 1 {
+		t.Fatalf("want discovered>=3 mounted=1, got %+v", payload.Summary)
+	}
+	nodes := map[string]graphNode{}
+	for _, n := range payload.Graph.Nodes {
+		nodes[n.ID] = n
+	}
+	if nodes["core"].State != StateMounted {
+		t.Fatalf("core state = %q, want mounted", nodes["core"].State)
+	}
+	if nodes["filetools"].State != StateAvailable {
+		t.Fatalf("filetools state = %q, want available (not yet ensured)", nodes["filetools"].State)
+	}
+	if !nodes["core"].Autostart {
+		t.Fatal("core must be flagged autostart in the graph")
+	}
+	// dependsOn closure edge is visible before any Turn runs.
+	foundDep := false
+	for _, e := range payload.Graph.Edges {
+		if e.From == "filetools" && e.To == "helper" && e.Kind == "depends-on" {
+			foundDep = true
+		}
+	}
+	if !foundDep {
+		t.Fatalf("want filetools depends-on helper, edges=%+v", payload.Graph.Edges)
 	}
 }
 

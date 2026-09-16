@@ -167,6 +167,7 @@ func TestAssemblyRejectsNativeCommandConflict(t *testing.T) {
 		"name": "lp",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["echo"],
 		"consumes": [],
 		"entry": "lp.exe"

@@ -59,6 +59,10 @@ export function createLoader(page, panelHost, onError) {
     fetch('/api/plugins').then(function (r) { return r.json(); }).then(function (b) {
       (b.plugins || []).forEach(function (p) {
         if (!p.ui || !p.ui.entry) return;
+        // /api/plugins reports the whole Discovery catalog (the plugin graph
+        // draws from it), but only mounted plugins have live Panel Components:
+        // an unmounted plugin's UI dir is not even served under /plugin-ui/.
+        if (p.state && p.state !== 'mounted') return;
         var url = p.ui.entry + '?plugin=' + encodeURIComponent(p.name) + '&v=' + encodeURIComponent(p.version || '');
         import(url).then(function () {
           (p.ui.mounts || []).forEach(function (m) {

@@ -1,0 +1,27 @@
+{
+  "defaultScheme": "tool_calling",
+  "schemes": {
+    "chat": {
+      "allowedTools": ["read_file", "grep", "glob"],
+      "maxSteps": 8,
+      "runSubagent": false,
+      "todo": false
+    },
+    "tool_calling": {
+      "runSubagent": true,
+      "todo": true
+    },
+    "coding": {
+      "dependsPlugins": [
+        "filetools",
+        "shelltools",
+        "sandbox",
+        "skill-manager",
+        "project-context",
+        "webtools"
+      ],
+      "runSubagent": true,
+      "todo": true
+    }
+  }
+}

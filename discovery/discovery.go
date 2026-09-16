@@ -78,6 +78,10 @@ func Scan(root string) Result {
 				continue
 			}
 		}
+		// Plugin Readme is a development convention (free-form): warn only, never reject.
+		if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil && os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "discover warn: plugin %s has no README.md (recommended)\n", m.Name)
+		}
 		// protocol=1 is still mountable (ADR-0007); Host drops unknown render kinds.
 		res.Plugins = append(res.Plugins, Found{Dir: dir, Manifest: *m})
 	}

@@ -29,13 +29,17 @@ func buildNamedPlugin(t *testing.T, root, pkg, pluginsDir, name, provides string
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(dir, name)
+	exe := name
+	if runtime.GOOS == "windows" {
+		exe = name + ".exe"
+	}
+	bin := filepath.Join(dir, exe)
 	cmd := exec.Command("go", "build", "-o", bin, pkg)
 	cmd.Dir = root
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", pkg, err, b)
 	}
-	manifest := `{"name":"` + name + `","version":"0.1.0","protocol":3,"provides":` + provides + `,"consumes":[],"entry":"` + name + `"}`
+	manifest := `{"name":"` + name + `","version":"0.1.0","protocol":3,"autostart":true,"provides":` + provides + `,"consumes":[],"entry":"` + exe + `"}`
 	if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}

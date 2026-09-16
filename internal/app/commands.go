@@ -200,8 +200,7 @@ func (cp *commandPlane) helpText(pluginName string) string {
 	b.WriteString("  /exit              Quit (CLI only)\n")
 	b.WriteString("\nPlugin commands:\n")
 	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
-	b.WriteString("  Session Log ops live on the session plugin, e.g. /session dump-trace\n")
-	b.WriteString("  Context Manager: /context-manager usage | list (Model Context) | skills\n")
+	b.WriteString("  Mounted plugins and their commands are listed below.\n")
 	b.WriteString("\nCLI flags (one-shot, not slash):\n")
 	b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
 	b.WriteString("  -context-list N      Print last N prepare messages after the run\n")
@@ -231,14 +230,38 @@ func (cp *commandPlane) helpText(pluginName string) string {
 
 func (cp *commandPlane) pluginsText() string {
 	var b strings.Builder
-	if len(cp.mounted) == 0 {
+	if sch := agentSchemeLabel(cp.srv); sch != "" {
+		fmt.Fprintf(&b, "agent scheme: %s\n", sch)
+	}
+	// Prefer live mount set (includes ensurePlugins results).
+	names := cp.mounted
+	if cp.srv != nil {
+		if live := cp.srv.MountedPluginNames(); len(live) > 0 {
+			names = live
+		}
+	}
+	if len(names) == 0 {
 		b.WriteString("(no plugins mounted)\n")
 		return b.String()
 	}
-	for _, name := range cp.mounted {
-		m := cp.manifests[name]
-		fmt.Fprintf(&b, "%s\tv%s\tprovides=[%s]\t%s\n",
-			m.Name, m.Version, strings.Join(m.Provides, ","), m.Description)
+	degraded := map[string]bool{}
+	if cp.srv != nil {
+		for _, n := range cp.srv.DegradedNames() {
+			degraded[n] = true
+		}
+	}
+	for _, name := range names {
+		m, ok := cp.manifests[name]
+		if !ok {
+			fmt.Fprintf(&b, "%s\t(ensured)\n", name)
+			continue
+		}
+		status := ""
+		if degraded[name] {
+			status = "\tdegraded"
+		}
+		fmt.Fprintf(&b, "%s\tv%s\tprovides=[%s]%s\t%s\n",
+			m.Name, m.Version, strings.Join(m.Provides, ","), status, m.Description)
 	}
 	return b.String()
 }

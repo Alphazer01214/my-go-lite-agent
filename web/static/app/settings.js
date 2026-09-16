@@ -82,13 +82,36 @@ async function loadPluginConfigFace(name) {
 function renderForm(host, plugin, face, onSaved) {
   host.innerHTML = '';
   const customTag = plugin + '-settings';
+  // Prefer the plugin's own Settings face (independent render, ADR-0011).
+  // The UI Entry may still be loading — wait briefly for definition.
   if (customElements.get(customTag)) {
-    const node = document.createElement(customTag);
-    node.plugin = plugin;
-    node.configFace = face;
-    host.appendChild(node);
+    mountCustomSettings(host, customTag, plugin, face);
     return;
   }
+  let settled = false;
+  const timer = setTimeout(function () {
+    if (settled) return;
+    settled = true;
+    renderSchemaForm(host, plugin, face, onSaved);
+  }, 400);
+  customElements.whenDefined(customTag).then(function () {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    mountCustomSettings(host, customTag, plugin, face);
+  });
+}
+
+function mountCustomSettings(host, customTag, plugin, face) {
+  host.innerHTML = '';
+  const node = document.createElement(customTag);
+  node.plugin = plugin;
+  node.configFace = face;
+  host.appendChild(node);
+}
+
+function renderSchemaForm(host, plugin, face, onSaved) {
+  host.innerHTML = '';
   host.appendChild(el('h3', { text: plugin }));
   host.appendChild(el('p', { class: 'desc', text: 'Settings provided by this plugin (config.schema / config.get).' }));
   const form = el('div');
@@ -177,6 +200,8 @@ function renderForm(host, plugin, face, onSaved) {
   };
 }
 
+let keyHandler = null;
+
 function paint(root) {
   let style = root.querySelector('#st-style');
   if (!style) {
@@ -192,48 +217,70 @@ function paint(root) {
   main.appendChild(el('div', { class: 'st-empty', text: 'Loading plugins…' }));
 
   root.innerHTML = '';
+  if (keyHandler) document.removeEventListener('keydown', keyHandler);
+  keyHandler = null;
   const backdrop = el('div', { class: 'st-backdrop' });
   const modal = el('div', { class: 'st-modal' });
   const head = el('div', { class: 'st-head' });
   head.appendChild(el('span', { text: 'Settings · plugins' }));
   const btnClose = el('button', { type: 'button', text: 'Close' });
-  btnClose.onclick = () => { root.innerHTML = ''; };
+  const close = () => { root.innerHTML = ''; if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; };
+  keyHandler = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', keyHandler);
+  btnClose.onclick = close;
   head.appendChild(btnClose);
   modal.appendChild(head);
   modal.appendChild(body);
   backdrop.appendChild(modal);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) root.innerHTML = ''; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   root.appendChild(backdrop);
 
   fetch('/api/plugins').then(r => r.json()).then(async (data) => {
-    const plugins = data.plugins || [];
+    const plugins = (data.plugins || []).filter(p => !p.state || p.state === 'mounted');
     const faces = {};
-    await Promise.all(plugins.map(async (p) => {
+    // List first (fast). Config faces load only for the selected plugin —
+    // probing every plugin's config.schema/get is a Frame round-trip each.
+    const names = plugins.map(p => p.name).sort();
+    const meta = {};
+    plugins.forEach(p => { meta[p.name] = p; });
+
+    async function ensureFace(n) {
+      if (faces[n]) return faces[n];
       try {
-        const face = await loadPluginConfigFace(p.name);
-        if (face) faces[p.name] = { face: face, meta: p };
+        const face = await loadPluginConfigFace(n);
+        if (face) faces[n] = { face: face, meta: meta[n] };
       } catch (e) { /* no config face */ }
-    }));
-    const names = Object.keys(faces).sort();
-    function paintList() {
+      return faces[n];
+    }
+
+    function paintList(configurable) {
       list.innerHTML = '';
       if (!names.length) {
-        list.appendChild(el('div', { class: 'st-empty', text: 'No plugin exposes config.schema.' }));
+        list.appendChild(el('div', { class: 'st-empty', text: 'No plugins mounted.' }));
         return;
       }
       names.forEach(n => {
+        const has = configurable == null ? true : configurable.has(n);
         const item = el('div', { class: 'st-item' + (n === selected ? ' active' : '') });
         item.textContent = n;
-        const caps = (faces[n].meta.provides || []).join(', ');
+        const caps = ((meta[n] && meta[n].provides) || []).join(', ');
         if (caps) item.appendChild(el('span', { class: 'caps', text: caps }));
-        item.onclick = () => { selected = n; paintList(); paintMain(); };
+        if (has === false) item.style.opacity = '0.45';
+        item.onclick = async () => {
+          selected = n;
+          paintList(configurable);
+          main.innerHTML = '';
+          main.appendChild(el('div', { class: 'st-empty', text: 'Loading settings…' }));
+          const got = await ensureFace(n);
+          paintMain();
+        };
         list.appendChild(item);
       });
     }
     function paintMain() {
-      if (!selected) {
+      if (!selected || !faces[selected]) {
         main.innerHTML = '';
-        main.appendChild(el('div', { class: 'st-empty', text: 'Select a plugin to edit its settings.' }));
+        main.appendChild(el('div', { class: 'st-empty', text: 'This plugin has no config.schema face.' }));
         return;
       }
       renderForm(main, selected, faces[selected].face, async () => {
@@ -244,8 +291,24 @@ function paint(root) {
       });
     }
     if (!selected && names.length) selected = names[0];
-    paintList();
+    paintList(null);
+    // Lazy: only the initially selected plugin's face is fetched.
+    await ensureFace(selected);
+    // Mark plugins that actually expose config (probe remaining in background).
+    const configurable = new Set();
+    if (faces[selected]) configurable.add(selected);
+    paintList(null);
     paintMain();
+    names.forEach(async (n) => {
+      if (n === selected) return;
+      const got = await ensureFace(n);
+      if (got) {
+        configurable.add(n);
+        // soft-refresh list opacity without stealing selection
+        if (!document.querySelector('.st-backdrop')) return;
+        paintList(configurable);
+      }
+    });
   }).catch(e => {
     main.innerHTML = '';
     main.appendChild(el('div', { class: 'st-empty', text: 'Failed to load plugins: ' + e }));
@@ -257,6 +320,8 @@ export function openSettingsPanel() {
   if (!root) return;
   if (root.querySelector('.st-backdrop')) {
     root.innerHTML = '';
+    if (keyHandler) document.removeEventListener('keydown', keyHandler);
+    keyHandler = null;
     return;
   }
   paint(root);

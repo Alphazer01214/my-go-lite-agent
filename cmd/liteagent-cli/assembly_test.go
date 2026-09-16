@@ -17,6 +17,7 @@ func buildEchoPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["echo"],
 		"consumes": [],
 		"entry": "`+name+`.exe"

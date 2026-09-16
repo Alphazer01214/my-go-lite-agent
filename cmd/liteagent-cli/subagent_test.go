@@ -33,6 +33,7 @@ func buildEmptyToolsPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"version": "0.1.0",
 
 		"protocol": 2,
+		"autostart": true,
 
 		"provides": ["tools"],
 
@@ -249,6 +250,7 @@ func TestSubagentAsyncRejected(t *testing.T) {
 		"version": "0.1.0",
 
 		"protocol": 2,
+		"autostart": true,
 
 		"provides": ["llm"],
 

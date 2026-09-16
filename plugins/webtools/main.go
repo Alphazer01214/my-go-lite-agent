@@ -2,18 +2,27 @@
 //
 // Capability: tools
 //   - list → web_fetch, web_search (both readOnly)
-//   - call → fetch a URL as text, or search via DuckDuckGo HTML
+//   - call → fetch a URL as text, or search the web
 //
-// No API key required. Network is best-effort; failures return FrameError.
+// web_search backends (mirrors trading-forum-go):
+//   - Baidu Qianfan AI Search when an API key is set (env WEB_SEARCH_API_KEY
+//     overrides config.json apiKey beside the executable) — structured
+//     title/content/url/date references.
+//   - DuckDuckGo HTML fallback when no key is configured (no API key required).
+//
+// Network is best-effort; failures return FrameError.
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -27,37 +36,100 @@ const (
 	maxBodyBytes   = 512 * 1024
 	maxTextOut     = 24 * 1024
 	maxSearchHits  = 8
-	userAgent      = "liteagent-webtools/0.1 (+https://local)"
+	// maxSnippetChars caps each Qianfan reference body so one hit cannot
+	// blow the whole tool result past maxTextOut.
+	maxSnippetChars = 500
+	userAgent       = "liteagent-webtools/0.2 (+https://local)"
+
+	qianfanSource = "baidu_search_v2"
 )
 
-var toolSchemas = []map[string]any{
-	{
-		"name":        "web_fetch",
-		"description": "Fetch a web URL and return readable text (HTML stripped). Only http/https.",
-		"readOnly":    true,
-		"input_schema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url":       map[string]string{"type": "string", "description": "http(s) URL to fetch"},
-				"timeoutMs": map[string]any{"type": "integer", "description": "Timeout ms (default 20000)"},
+// qianfanSearchURL is a var so tests can point it at a fake server.
+var qianfanSearchURL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
+
+type webtoolsConfig struct {
+	// APIKey for Baidu Qianfan AI Search. Empty → DuckDuckGo HTML fallback.
+	APIKey string `json:"apiKey"`
+}
+
+func configPath() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "config.json")
+	}
+	return "config.json"
+}
+
+func loadConfig() webtoolsConfig {
+	var cfg webtoolsConfig
+	raw, err := os.ReadFile(configPath())
+	if err == nil {
+		_ = json.Unmarshal(raw, &cfg)
+	}
+	// Env wins over config.json (same rule as llm-openai / OPENAI_API_KEY).
+	if v := os.Getenv("WEB_SEARCH_API_KEY"); v != "" {
+		cfg.APIKey = v
+	}
+	return cfg
+}
+
+func saveConfig(cfg webtoolsConfig) error {
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), raw, 0o600)
+}
+
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) > 8 {
+		return key[:4] + "…" + key[len(key)-4:]
+	}
+	return "…"
+}
+
+// webSearchDescription injects "now" so the model treats the tool as the path
+// for current/recent facts (same idea as trading-forum-go's web_search Desc).
+func webSearchDescription() string {
+	return "Search the web for current/realtime information (news, markets, weather, docs). " +
+		"Must use when the user asks about recent events or live facts. Now: " +
+		time.Now().Format("2006-01-02 15:04:05")
+}
+
+func buildToolSchemas() []map[string]any {
+	return []map[string]any{
+		{
+			"name":        "web_fetch",
+			"description": "Fetch a web URL and return readable text (HTML stripped). Only http/https.",
+			"readOnly":    true,
+			"severity":    "low",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url":       map[string]string{"type": "string", "description": "http(s) URL to fetch"},
+					"timeoutMs": map[string]any{"type": "integer", "description": "Timeout ms (default 20000)"},
+				},
+				"required": []string{"url"},
 			},
-			"required": []string{"url"},
 		},
-	},
-	{
-		"name":        "web_search",
-		"description": "Search the web via DuckDuckGo HTML and return title/url/snippet hits.",
-		"readOnly":    true,
-		"input_schema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query":     map[string]string{"type": "string", "description": "Search query"},
-				"limit":     map[string]any{"type": "integer", "description": "Max hits (default 5, max 8)"},
-				"timeoutMs": map[string]any{"type": "integer", "description": "Timeout ms (default 20000)"},
+		{
+			"name":        "web_search",
+			"description": webSearchDescription(),
+			"readOnly":    true,
+			"severity":    "low",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":     map[string]string{"type": "string", "description": "Search query"},
+					"limit":     map[string]any{"type": "integer", "description": "Max hits (default 5, max 8)"},
+					"timeoutMs": map[string]any{"type": "integer", "description": "Timeout ms (default 20000)"},
+				},
+				"required": []string{"query"},
 			},
-			"required": []string{"query"},
 		},
-	},
+	}
 }
 
 func timeoutFrom(ms int) time.Duration {
@@ -129,13 +201,13 @@ func doGET(rawURL string, timeout time.Duration) (string, string, error) {
 }
 
 var (
-	reScript  = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
-	reStyle   = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
+	reScript   = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
+	reStyle    = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
 	reNoscript = regexp.MustCompile(`(?is)<noscript\b[^>]*>.*?</noscript>`)
-	reComment = regexp.MustCompile(`(?is)<!--.*?-->`)
-	reTags    = regexp.MustCompile(`(?s)<[^>]+>`)
-	reBlank   = regexp.MustCompile(`[ \t\r\f\v]+`)
-	reLines   = regexp.MustCompile(`\n{3,}`)
+	reComment  = regexp.MustCompile(`(?is)<!--.*?-->`)
+	reTags     = regexp.MustCompile(`(?s)<[^>]+>`)
+	reBlank    = regexp.MustCompile(`[ \t\r\f\v]+`)
+	reLines    = regexp.MustCompile(`\n{3,}`)
 )
 
 func htmlToText(body string) string {
@@ -206,16 +278,114 @@ type searchHit struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
+	Date    string `json:"date,omitempty"`
 }
+
+func clampLimit(limit int) int {
+	if limit <= 0 {
+		return 5
+	}
+	if limit > maxSearchHits {
+		return maxSearchHits
+	}
+	return limit
+}
+
+func truncateRunes(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	// Cut on a rune boundary so multi-byte text stays valid UTF-8.
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// --- Baidu Qianfan AI Search (primary; same contract as trading-forum-go) ---
+
+type qianfanRequest struct {
+	Messages     []qianfanMessage `json:"messages"`
+	SearchSource string           `json:"search_source"`
+}
+
+type qianfanMessage struct {
+	Content string `json:"content"`
+	Role    string `json:"role"`
+}
+
+type qianfanResponse struct {
+	References []qianfanReference `json:"references"`
+}
+
+type qianfanReference struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	URL     string `json:"url"`
+	Date    string `json:"date"`
+}
+
+func qianfanSearch(apiKey, query string, limit int, timeout time.Duration) ([]searchHit, error) {
+	body, err := json.Marshal(qianfanRequest{
+		Messages:     []qianfanMessage{{Content: query, Role: "user"}},
+		SearchSource: qianfanSource,
+	})
+	if err != nil {
+		return nil, &protocol.FrameError{Code: "search_failed", Message: err.Error()}
+	}
+	req, err := http.NewRequest(http.MethodPost, qianfanSearchURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, &protocol.FrameError{Code: "search_failed", Message: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	res, err := httpClient(timeout).Do(req)
+	if err != nil {
+		return nil, &protocol.FrameError{Code: "search_failed", Message: err.Error()}
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxBodyBytes))
+	if err != nil {
+		return nil, &protocol.FrameError{Code: "search_failed", Message: err.Error()}
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, &protocol.FrameError{
+			Code:    "search_http_status",
+			Message: fmt.Sprintf("HTTP %d: %s", res.StatusCode, truncateRunes(string(raw), 400)),
+		}
+	}
+	var parsed qianfanResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, &protocol.FrameError{Code: "search_bad_response", Message: err.Error()}
+	}
+	limit = clampLimit(limit)
+	hits := make([]searchHit, 0, limit)
+	for _, ref := range parsed.References {
+		if len(hits) >= limit {
+			break
+		}
+		title := strings.TrimSpace(ref.Title)
+		href := strings.TrimSpace(ref.URL)
+		if title == "" && href == "" {
+			continue
+		}
+		hits = append(hits, searchHit{
+			Title:   title,
+			URL:     href,
+			Snippet: truncateRunes(htmlToText(ref.Content), maxSnippetChars),
+			Date:    strings.TrimSpace(ref.Date),
+		})
+	}
+	return hits, nil
+}
+
+// --- DuckDuckGo HTML fallback (no API key) ---
 
 // ddgSearch scrapes html.duckduckgo.com result links (no API key).
 func ddgSearch(query string, limit int, timeout time.Duration) ([]searchHit, error) {
-	if limit <= 0 {
-		limit = 5
-	}
-	if limit > maxSearchHits {
-		limit = maxSearchHits
-	}
+	limit = clampLimit(limit)
 	form := url.Values{}
 	form.Set("q", query)
 	endpoint := "https://html.duckduckgo.com/html/?" + form.Encode()
@@ -280,6 +450,32 @@ func parseDDGHTML(html string, limit int) []searchHit {
 	return hits
 }
 
+// formatHits mirrors trading-forum-go's prompt shape: numbered hits with
+// 内容 / 链接 / 日期 so the model can answer from the references.
+func formatHits(query, provider string, hits []searchHit) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "以下是搜索结果（provider=%s query=%q hits=%d），请根据这些结果回答用户提问：\n\n",
+		provider, query, len(hits))
+	for i, h := range hits {
+		title := h.Title
+		if title == "" {
+			title = h.URL
+		}
+		fmt.Fprintf(&b, "[%d] %s\n", i+1, title)
+		if h.Snippet != "" {
+			fmt.Fprintf(&b, "   内容: %s\n", h.Snippet)
+		}
+		if h.URL != "" {
+			fmt.Fprintf(&b, "   链接: %s\n", h.URL)
+		}
+		if h.Date != "" {
+			fmt.Fprintf(&b, "   日期: %s\n", h.Date)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func handleSearch(args json.RawMessage) (string, error) {
 	var in struct {
 		Query     string `json:"query"`
@@ -292,25 +488,81 @@ func handleSearch(args json.RawMessage) (string, error) {
 	if strings.TrimSpace(in.Query) == "" {
 		return "", &protocol.FrameError{Code: "bad_arguments", Message: "query is required"}
 	}
-	hits, err := ddgSearch(in.Query, in.Limit, timeoutFrom(in.TimeoutMs))
+	cfg := loadConfig()
+	timeout := timeoutFrom(in.TimeoutMs)
+	limit := clampLimit(in.Limit)
+
+	if cfg.APIKey != "" {
+		hits, err := qianfanSearch(cfg.APIKey, in.Query, limit, timeout)
+		if err != nil {
+			return "", err
+		}
+		if len(hits) == 0 {
+			return fmt.Sprintf("未找到与「%s」相关的结果", in.Query), nil
+		}
+		return formatHits(in.Query, "qianfan", hits), nil
+	}
+
+	hits, err := ddgSearch(in.Query, limit, timeout)
 	if err != nil {
 		return "", err
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "query=%q hits=%d\n", in.Query, len(hits))
-	for i, h := range hits {
-		fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, h.Title, h.URL)
-		if h.Snippet != "" {
-			fmt.Fprintf(&b, "   %s\n", h.Snippet)
+	return formatHits(in.Query, "duckduckgo", hits), nil
+}
+
+func handleConfigCap(method string, payload json.RawMessage) (json.RawMessage, error) {
+	switch method {
+	case "get":
+		cfg := loadConfig()
+		provider := "duckduckgo"
+		if cfg.APIKey != "" {
+			provider = "qianfan"
 		}
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "apiKey", "value": maskKey(cfg.APIKey), "secret": true, "type": "string"},
+				{"name": "provider", "value": provider, "type": "string", "readOnly": true},
+			},
+		})
+	case "schema":
+		return json.Marshal(map[string]any{
+			"fields": []map[string]any{
+				{"name": "apiKey", "type": "string", "secret": true,
+					"description": "Baidu Qianfan AI Search API key. Empty → DuckDuckGo HTML fallback. Env WEB_SEARCH_API_KEY overrides."},
+			},
+		})
+	case "set":
+		var in map[string]any
+		if len(payload) > 0 {
+			if err := json.Unmarshal(payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		cfg := loadConfig()
+		if raw, ok := in["apiKey"]; ok {
+			cfg.APIKey = strings.TrimSpace(fmt.Sprint(raw))
+		}
+		if err := saveConfig(cfg); err != nil {
+			return nil, &protocol.FrameError{Code: "save_failed", Message: err.Error()}
+		}
+		return json.Marshal(map[string]any{"ok": true})
+	case "reload":
+		cfg := loadConfig()
+		provider := "duckduckgo"
+		if cfg.APIKey != "" {
+			provider = "qianfan"
+		}
+		return json.Marshal(map[string]any{"ok": true, "provider": provider})
+	default:
+		return nil, &protocol.FrameError{Code: "unknown_method", Message: "config." + method}
 	}
-	return strings.TrimSpace(b.String()), nil
 }
 
 func main() {
 	s := pluginsdk.New()
 	s.Handle("tools", "list", func(req *pluginsdk.Request) (json.RawMessage, error) {
-		return json.Marshal(map[string]any{"tools": toolSchemas})
+		// Rebuild each list so the web_search description carries a fresh timestamp.
+		return json.Marshal(map[string]any{"tools": buildToolSchemas()})
 	})
 	s.Handle("tools", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
@@ -334,6 +586,18 @@ func main() {
 			return nil, err
 		}
 		return json.Marshal(map[string]string{"content": content})
+	})
+	s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("get", req.Payload)
+	})
+	s.Handle("config", "set", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("set", req.Payload)
+	})
+	s.Handle("config", "schema", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("schema", req.Payload)
+	})
+	s.Handle("config", "reload", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("reload", req.Payload)
 	})
 	_ = s.Serve()
 }

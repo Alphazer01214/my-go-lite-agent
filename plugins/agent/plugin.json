@@ -1,0 +1,41 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "protocol": 3,
+  "autostart": true,
+  "dependsOn": [
+    "session",
+    "llm-openai",
+    "context-manager"
+  ],
+  "provides": [
+    "loop"
+  ],
+  "consumes": [],
+  "entry": "agent.exe",
+  "timeoutMs": 180000,
+  "description": "Default Agent Plugin: composes llm/session/tools via the star (ADR-0016)",
+  "commands": [
+    {
+      "name": "config",
+      "description": "Show or set defaultScheme (chat|tool_calling|coding)",
+      "usage": "/agent config [get|set defaultScheme=name]"
+    }
+  ],
+  "ui": {
+    "entry": "main.js",
+    "trust": "full",
+    "mounts": [
+      {
+        "page": "main",
+        "slot": "toolbar-right",
+        "component": "agent-mode-panel"
+      },
+      {
+        "page": "main",
+        "slot": "statusbar",
+        "component": "agent-status"
+      }
+    ]
+  }
+}

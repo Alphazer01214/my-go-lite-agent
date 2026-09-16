@@ -11,17 +11,20 @@ import (
 )
 
 // runREPL mounts Plugins and runs an interactive multi-turn loop on one Session.
-func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string) error {
+func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string, scheme string) error {
 	plan, _, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
 	}
-	srv, err := serve.Start(plan.Mounted)
+	srv, err := startMounted(pluginsDir, plan)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = srv.Close() }()
 
+	if scheme != "" {
+		applyAgentScheme(srv, scheme)
+	}
 	if workspace != "" {
 		_ = srv.SetSessionWorkspace("default", workspace)
 	}
@@ -46,7 +49,12 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string) erro
 
 // runREPLLoop is the interactive stdin loop (shared by -repl and -serve -repl).
 func runREPLLoop(srv *serve.Server, cp *commandPlane) error {
-	fmt.Println("lite agent REPL — type a message; /help for commands; Tab completes /commands; /exit to leave.")
+	sch := agentSchemeLabel(srv)
+	banner := "lite agent REPL — type a message; /help for commands; Tab completes /commands; /exit to leave."
+	if sch != "" {
+		banner = fmt.Sprintf("lite agent REPL — scheme: %s (/agent config set defaultScheme=… to switch)\n%s", sch, banner)
+	}
+	fmt.Println(banner)
 	for {
 		line, err := readLineRaw("> ", cp.completeSlash)
 		if err != nil {
@@ -71,11 +79,20 @@ func runREPLLoop(srv *serve.Server, cp *commandPlane) error {
 			if quit {
 				break
 			}
+			// Surface scheme changes immediately after /agent config set.
+			if strings.HasPrefix(line, "/agent ") {
+				if sch := agentSchemeLabel(srv); sch != "" {
+					fmt.Printf("agent scheme: %s\n", sch)
+				}
+			}
 			continue
 		}
 		r := &turnRenderer{}
 		restore := wireRenderer(srv, r)
 		r.begin()
+		if sch := agentSchemeLabel(srv); sch != "" {
+			fmt.Printf("[scheme: %s]\n", sch)
+		}
 		out, err := srv.RunTurn(line)
 		if err != nil {
 			r.end("")

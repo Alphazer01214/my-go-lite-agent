@@ -31,15 +31,18 @@
 ## 特性
 
 - 进程外插件（stdin/stdout JSON Frame），崩溃隔离
-- Discovery ≠ Assembly：看见 ≠ 挂载
+- **Autostart + dependsOn**：Manifest 根集 + 依赖闭包；不再依赖日常 Assembly 白名单（ADR-0021）
 - 星型路由：插件不直连，策略平面唯一
 - Session Log 不变量 + Agent 插件（提供 `loop`，经星型组合 llm/session/tools）
+- **Agent Scheme**：`chat` / `tool_calling` / `coding`（config 可自定义）；`dependsPlugins` + `allowedTools`
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
-- CLI REPL / 一轮 `-turn`；Web Shell（聊天 + Session Trace）
+- CLI REPL / 一轮 `-turn`；Web Shell（新建会话面 + 聊天 + 中心 Session Trace + 底栏信息区）
 - **Workspace**：Session 级项目根（CLI 默认 cwd，Web 会话可选）
-- **coding 装配**：filetools + shelltools + sandbox + skill-manager + project-context + webtools
+- **coding Scheme**：filetools + shelltools + sandbox + skill-manager + project-context + webtools
+- **Tool severity sandbox**：工具 schema 声明 `severity`（low/medium/high），sandbox 按 `severityPolicy` 拦截（默认 medium/high→ask）；显式 rules 仍优先
 - 多 `tools` 插件共存；`$skill` 输入触发；Todo / Plan Constraint（提示约束）
+- **Plugin Graph**：`Plugins` 弹窗按 Discovery 全量目录画依赖图，节点标 mounted / available / degraded（ADR-0025）
 - 跨平台：Windows / macOS / Linux
 
 ## 快速开始
@@ -47,14 +50,29 @@
 ### 构建
 
 ```powershell
-# Windows
+# Windows — 增量（默认）：按源码哈希跳过未变更的二进制
 .\scripts\build.ps1
+
+# 只重建某个目标（短名即可）
+.\scripts\build.ps1 -Only sandbox
+.\scripts\build.ps1 -Only liteagent-server,sandbox
+
+# 全量：清空 dist 后重编
+.\scripts\build.ps1 -Clean
+
+# 列出可构建目标
+.\scripts\build.ps1 -List
 ```
 
 ```bash
 # macOS / Linux
 bash scripts/build.sh
+bash scripts/build.sh --only sandbox
+bash scripts/build.sh --clean
+bash scripts/build.sh --list
 ```
+
+增量模式会对每个目标（cli / server / 各插件）做内容哈希（模块内依赖 `.go` + `go.mod`/`go.sum`；server 另含 `web/static`）。哈希未变且 `dist` 里已有产物时跳过 `go build`；`plugin.json` / `ui/` / README / examples 等资产始终刷新。缓存戳记在 `dist/.build-cache/`。
 
 产物在 `dist/`：`liteagent-cli`、`liteagent-server`、`plugins/`、`examples/`。
 
@@ -80,43 +98,50 @@ export OPENAI_MODEL=deepseek-chat
 
 ### 跑起来
 
+日常路径只需 `-plugins`（Autostart 核四件：agent / session / llm-openai / context-manager）：
+
 ```powershell
-# 一轮对话
-.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\chat.json -turn "你好"
+# 一轮对话（默认 scheme: tool_calling）
+.\dist\liteagent-cli.exe -plugins dist\plugins -turn "你好"
+
+# 指定 Agent Scheme
+.\dist\liteagent-cli.exe -plugins dist\plugins -scheme coding -turn "读一下 README.md"
 
 # 多轮 REPL
-.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\chat.json -repl
+.\dist\liteagent-cli.exe -plugins dist\plugins -repl
 
 # Web
-.\dist\liteagent-server.exe -plugins dist\plugins -assembly dist\examples\chat.json -serve 127.0.0.1:8080
-# 浏览器打开 http://127.0.0.1:8080
+.\dist\liteagent-server.exe -plugins dist\plugins -serve 127.0.0.1:8080
 ```
 
 ```bash
-# macOS / Linux
-./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/chat.json -turn "你好"
-./dist/liteagent-server -plugins dist/plugins -assembly dist/examples/chat.json -serve 127.0.0.1:8080
+./dist/liteagent-cli -plugins dist/plugins -turn "你好"
+./dist/liteagent-cli -plugins dist/plugins -scheme coding -turn "读一下 README 并总结"
+./dist/liteagent-server -plugins dist/plugins -serve 127.0.0.1:8080
 ```
+
+**Agent Scheme**（`dist/plugins/agent/config.json`，可用 `/agent config set defaultScheme=coding` 热切换）：
+
+| scheme | 含义 |
+|--------|------|
+| `chat` | 显式 `allowedTools` 只读名单（read_file/grep/glob），无 subagent |
+| `tool_calling` | 默认完全体，不按名单过滤 |
+| `coding` | `dependsPlugins` 拉起 filetools/shelltools/sandbox/skill-manager/project-context/webtools |
+
+`-assembly` 仍可传入但已 **deprecated**（仅测试/对照；日常不要用装配白名单）。
 
 Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件 / id / cap / method / payload）与插件启停会打到 **stderr**，不污染 stdout 的对话输出。
 
-带文件工具：
-
-```powershell
-.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\agent.json -turn "读一下 README.md"
-```
-
-Coding 装配（Workspace + shell + sandbox + skills + web）：
+Coding Scheme（Workspace + shell + sandbox + skills + web）：
 
 ```bash
-./dist/liteagent-cli -plugins dist/plugins -assembly dist/examples/coding.json -workspace "$PWD" -turn "读一下 README 并总结"
+./dist/liteagent-cli -plugins dist/plugins -scheme coding -workspace "$PWD" -turn "读一下 README 并总结"
 # 工作区可放 .liteagent/permissions.json、.liteagent/skills/<name>/SKILL.md、AGENTS.md
 ```
 
 ```powershell
-.\dist\liteagent-cli.exe -plugins dist\plugins -assembly dist\examples\coding.json -workspace (Get-Location) -turn "读一下 README 并总结"
+.\dist\liteagent-cli.exe -plugins dist\plugins -scheme coding -workspace (Get-Location) -turn "读一下 README 并总结"
 ```
-
 ## 常用命令
 
 **REPL / Web 输入框**
@@ -128,10 +153,16 @@ Coding 装配（Workspace + shell + sandbox + skills + web）：
 | `/session list` / `derive` / `dump-trace` | 会话列表 / Model Context / 导出日志 |
 | `/context-manager usage` / `list` | 上下文占用 / 进入模型的 messages |
 | `/llm-openai config` | 模型配置 |
+| `/agent config` | Agent Scheme（defaultScheme） |
 
 原生 slash 仅 `/help` `/lp` `/refresh` `/exit`；其余能力在对应插件名下。
 
-**Web 设置界面**：聊天栏 **Settings** 打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
+**Web 界面**
+
+- **新建会话面**：打开页面停在「工作区选取（可留空）+ agent 模式 + 聊天框」，**不会**自动加载当前会话。工作区用浏览器的文件夹选择 API 挑选（该 API 只给目录名，Host 经 `/api/workspace/resolve` 把它映射成本机绝对路径；匹配到多个会列出候选，匹配不到则手填）。发出第一条消息时才创建会话并绑定该工作区。左侧会话列表**按工作区路径分组**，点一下即进入历史会话。
+- **底栏信息区**：Shell 最下面一整栏（Layout `statusbar` 槽位），内容由各插件自己的 `<plugin>-status` 组件提供——工作区 / 会话 / 事实数（session）、token 与窗口占比（context-manager）、模型名与模型总时长（llm-openai）、当前 scheme（agent）。
+- **Settings**：打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
+- **Plugins**：插件 / Capability / Host / UI 槽位的关系图。实线绿=已挂载，虚线灰=已发现但待拉起（由某个 Agent Scheme 的 `dependsPlugins` 决定），红=degraded（consumes 未满足），琥珀=dependsOn 引用了未发现的插件。
 
 **CLI 一次成型**
 
@@ -145,16 +176,13 @@ Coding 装配（Workspace + shell + sandbox + skills + web）：
 
 ## 装配示例
 
-`dist/examples/chat.json`：
+日常 **不需要** assembly 文件。挂载集 = Manifest `autostart` 根 + `dependsOn` 闭包；场景工具由 Agent Scheme `dependsPlugins` 经 `host.ensurePlugins` 拉起。
 
-```json
-{ "plugins": ["session", "llm-openai", "context-manager"] }
-```
-
-按需换成/追加 `filetools`、`echotool` 等；未点名的插件不会启动。
+`dist/examples/*.json` 仅作 **reference-only**（deprecated `-assembly` 白名单，测试/对照用）。
 
 ## 文档
 
+- 插件索引（含状态标记：核四件 / 场景工具 / 示例 / 测试夹具）：[plugins/README.md](plugins/README.md)
 - 术语与边界：[CONTEXT.md](CONTEXT.md)
 - 架构决策：[docs/adr/](docs/adr/)
 - 内部票与规格：[.scratch/](.scratch/)（开发用）

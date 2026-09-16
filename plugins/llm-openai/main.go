@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
@@ -625,6 +626,57 @@ func handleConfigCap(method string, payload json.RawMessage) (json.RawMessage, e
 	}
 }
 
+// callStat is one model-call observation (per process / per Session).
+// "模型总时长" on the Host status bar reads it via llm.stats.
+type callStat struct {
+	Requests int   `json:"requests"`
+	TotalMs  int64 `json:"totalMs"`
+	LastMs   int64 `json:"lastMs"`
+	Tokens   int   `json:"tokens"`
+}
+
+var (
+	statMu     sync.Mutex
+	statAll    callStat
+	statBySess = map[string]*callStat{}
+)
+
+// noteCallStat folds one completed llm.complete into the process counters.
+func noteCallStat(sessionID string, ms int64, tokens int) {
+	statMu.Lock()
+	defer statMu.Unlock()
+	statAll.Requests++
+	statAll.TotalMs += ms
+	statAll.LastMs = ms
+	statAll.Tokens += tokens
+	if sessionID == "" {
+		return
+	}
+	st := statBySess[sessionID]
+	if st == nil {
+		st = &callStat{}
+		statBySess[sessionID] = st
+	}
+	st.Requests++
+	st.TotalMs += ms
+	st.LastMs = ms
+	st.Tokens += tokens
+}
+
+// totalTokensOf digs provider usage out of a complete response payload.
+func totalTokensOf(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var out struct {
+		Usage *Usage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.Usage == nil {
+		return 0
+	}
+	return out.Usage.TotalTokens
+}
+
 func main() {
 	s := pluginsdk.New()
 	// Hot-reload: never capture startup cfg in the complete closure (config set / reload
@@ -654,7 +706,10 @@ func main() {
 				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 			}
 		}
-		return complete(cfg, req.ID, s, in.SessionID, toWireMessages(in.Messages), toWireTools(in.Tools))
+		start := time.Now()
+		out, err := complete(cfg, req.ID, s, in.SessionID, toWireMessages(in.Messages), toWireTools(in.Tools))
+		noteCallStat(in.SessionID, time.Since(start).Milliseconds(), totalTokensOf(out))
+		return out, err
 	})
 	s.Handle("llm", "info", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		cfg := loadConfig()
@@ -663,6 +718,42 @@ func main() {
 			"model":         cfg.Model,
 			"provider":      "openai-compatible",
 		})
+	})
+	// llm.stats: model-call counters for the Host status bar (model name, total
+	// model time, request count). Process-local observation, not a truth source.
+	s.Handle("llm", "stats", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		cfg := loadConfig()
+		statMu.Lock()
+		all := statAll
+		var sess *callStat
+		if st := statBySess[in.SessionID]; st != nil {
+			cp := *st
+			sess = &cp
+		}
+		statMu.Unlock()
+		avg := int64(0)
+		if all.Requests > 0 {
+			avg = all.TotalMs / int64(all.Requests)
+		}
+		res := map[string]any{
+			"provider": "openai-compatible",
+			"model":    cfg.Model,
+			"requests": all.Requests,
+			"totalMs":  all.TotalMs,
+			"avgMs":    avg,
+			"lastMs":   all.LastMs,
+			"tokens":   all.Tokens,
+		}
+		if sess != nil {
+			res["session"] = sess
+		}
+		return json.Marshal(res)
 	})
 	s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		return handleConfigCap("get", req.Payload)

@@ -83,6 +83,7 @@ var toolSchemas = []map[string]any{
 		"name":        "read_file",
 		"description": "Read a file and return its contents with line numbers (cat -n style). Supports offset and limit for pagination.",
 		"readOnly":    true,
+		"severity":    "low",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -96,6 +97,7 @@ var toolSchemas = []map[string]any{
 	{
 		"name":        "write_file",
 		"description": "Write content to a file. Creates parent directories if needed. Overwrites existing files.",
+		"severity":    "medium",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -108,6 +110,7 @@ var toolSchemas = []map[string]any{
 	{
 		"name":        "edit_file",
 		"description": "Edit a file by replacing an exact substring. The old_string must appear exactly once in the file.",
+		"severity":    "medium",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -122,6 +125,7 @@ var toolSchemas = []map[string]any{
 		"name":        "grep",
 		"description": "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.",
 		"readOnly":    true,
+		"severity":    "low",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -136,6 +140,7 @@ var toolSchemas = []map[string]any{
 		"name":        "glob",
 		"description": "Find files matching a glob pattern. Returns matching file paths.",
 		"readOnly":    true,
+		"severity":    "low",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

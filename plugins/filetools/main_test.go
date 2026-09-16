@@ -124,7 +124,10 @@ func TestReadFilePaginationHint(t *testing.T) {
 }
 
 func TestReadFileNotFound(t *testing.T) {
-	_, err := callTool(t, "read_file", map[string]string{"path": "/nonexistent/file.txt"})
+	// Absolute and platform-correct: on Windows "/nonexistent/file.txt" has no
+	// volume, so it counts as a relative path and trips no_workspace instead.
+	missing := filepath.Join(t.TempDir(), "nonexistent.txt")
+	_, err := callTool(t, "read_file", map[string]string{"path": missing})
 	assertFrameError(t, err, "file_error")
 }
 
@@ -218,8 +221,9 @@ func TestEditFile(t *testing.T) {
 }
 
 func TestEditFileNotFound(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nonexistent.txt")
 	_, err := callTool(t, "edit_file", map[string]string{
-		"path":       "/nonexistent",
+		"path":       missing,
 		"old_string": "a",
 		"new_string": "b",
 	})

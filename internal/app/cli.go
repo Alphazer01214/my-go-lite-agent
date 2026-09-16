@@ -13,10 +13,12 @@ import (
 // (ADR-0011: the CLI Medium owns everything but the Web Medium).
 func CLI() {
 	progName = "liteagent-cli"
+	enableVirtualTerminal()
 	pluginPath := flag.String("plugin", "", "path to plugin executable (single Frame round-trip)")
 	discoverDir := flag.String("discover", "", "scan plugin directory and list discovered plugins (no mount)")
-	pluginsDir := flag.String("plugins", "", "plugin directory for assembly")
-	assemblyPath := flag.String("assembly", "", "assembly config path (JSON plugins list)")
+	pluginsDir := flag.String("plugins", "", "plugin directory for Discovery")
+	assemblyPath := flag.String("assembly", "", "deprecated (ADR-0021): ignored whitelist; Autostart+dependsOn is used")
+	schemeFlag := flag.String("scheme", "", "override agent defaultScheme for this run")
 	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
 	invokePlugin := flag.String("invoke", "", "after mount, Host-initiated req to this plugin (serve mode)")
 	callCap := flag.String("call-cap", "", "Capability name for the consumer to call via Host (default echo)")
@@ -51,12 +53,9 @@ func CLI() {
 		if err := runDiscover(*discoverDir); err != nil {
 			fatal(err)
 		}
-	case *assemblyPath != "":
-		if *pluginsDir == "" {
-			fatal(fmt.Errorf("-assembly requires -plugins"))
-		}
+	case *pluginsDir != "" && (*repl || *sessionAppend != "" || *sessionDerive || *sessionQuery || *agentRequest != "" || *agentInject != "" || *turnInput != "" || *cards || *contextList > 0 || *invokePlugin != "" || *callPlugin != "" || *dump):
 		if *repl {
-			if err := runREPL(*pluginsDir, *assemblyPath, dump, ws); err != nil {
+			if err := runREPL(*pluginsDir, *assemblyPath, dump, ws, *schemeFlag); err != nil {
 				fatal(err)
 			}
 			return
@@ -80,6 +79,7 @@ func CLI() {
 				contextList:   contextList,
 				cards:         cards,
 				workspace:     ws,
+				scheme:        *schemeFlag,
 			}
 			if err := runSessionAgent(opts); err != nil {
 				fatal(err)
@@ -95,12 +95,19 @@ func CLI() {
 		if err := runAssembly(*pluginsDir, *assemblyPath, *dump); err != nil {
 			fatal(err)
 		}
+	case *assemblyPath != "":
+		if *pluginsDir == "" {
+			fatal(fmt.Errorf("-assembly requires -plugins"))
+		}
+		if err := runAssembly(*pluginsDir, *assemblyPath, *dump); err != nil {
+			fatal(err)
+		}
 	case *pluginPath != "":
 		if err := runEchoRoundtrip(*pluginPath); err != nil {
 			fatal(err)
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "liteagent-cli: -plugin, -discover, or -assembly is required")
+		fmt.Fprintln(os.Stderr, "liteagent-cli: -plugin, -discover, or -plugins is required")
 		os.Exit(2)
 	}
 }

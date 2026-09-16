@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateURL(t *testing.T) {
@@ -48,6 +51,94 @@ func TestParseDDGHTML(t *testing.T) {
 	}
 	if !strings.Contains(hits[0].Title, "Example") {
 		t.Fatalf("title=%q", hits[0].Title)
+	}
+}
+
+func TestClampLimit(t *testing.T) {
+	if clampLimit(0) != 5 {
+		t.Fatalf("default limit want 5 got %d", clampLimit(0))
+	}
+	if clampLimit(3) != 3 {
+		t.Fatalf("want 3 got %d", clampLimit(3))
+	}
+	if clampLimit(99) != maxSearchHits {
+		t.Fatalf("want %d got %d", maxSearchHits, clampLimit(99))
+	}
+}
+
+func TestTruncateRunes(t *testing.T) {
+	if got := truncateRunes("一二三四五", 2); got != "一二…" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateRunes("short", 100); got != "short" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestFormatHits(t *testing.T) {
+	out := formatHits("茅台", "qianfan", []searchHit{
+		{Title: "T1", URL: "https://a.example", Snippet: "S1", Date: "2026-01-01"},
+		{Title: "T2", URL: "https://b.example", Snippet: "S2"},
+	})
+	for _, want := range []string{"qianfan", "茅台", "[1] T1", "内容: S1", "链接: https://a.example", "日期: 2026-01-01", "[2] T2"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestWebSearchDescriptionHasNow(t *testing.T) {
+	d := webSearchDescription()
+	if !strings.Contains(d, "Now: ") {
+		t.Fatalf("desc=%q", d)
+	}
+	if _, err := time.Parse("2006-01-02 15:04:05", strings.TrimPrefix(d[strings.Index(d, "Now: "):], "Now: ")); err != nil {
+		t.Fatalf("now parse: %v (desc=%q)", err, d)
+	}
+}
+
+func TestLoadConfigEnvWins(t *testing.T) {
+	// Point WEB_SEARCH_API_KEY; config.json next to the test binary is unlikely
+	// to exist, so env alone must set the key.
+	t.Setenv("WEB_SEARCH_API_KEY", "bce.test-key-123456")
+	cfg := loadConfig()
+	if cfg.APIKey != "bce.test-key-123456" {
+		t.Fatalf("apiKey=%q", cfg.APIKey)
+	}
+}
+
+func TestQianfanSearch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key-abcdef" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"references": []map[string]any{
+				{"title": "茅台日报", "content": "今日收盘上涨。", "url": "https://news.example/1", "date": "2026-01-02"},
+				{"title": "", "content": "", "url": ""},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	old := qianfanSearchURL
+	qianfanSearchURL = srv.URL
+	defer func() { qianfanSearchURL = old }()
+
+	hits, err := qianfanSearch("test-key-abcdef", "茅台", 5, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits=%+v", hits)
+	}
+	if hits[0].Title != "茅台日报" || hits[0].Date != "2026-01-02" {
+		t.Fatalf("hit=%+v", hits[0])
 	}
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/tomori/my-go-lite-agent/protocol"
@@ -29,15 +30,19 @@ type sessionAgentOpts struct {
 	contextList   *int
 	cards         *bool
 	workspace     string
+	scheme        string
 }
 
 // turnRenderer is the CLI Render Medium (CONTEXT.md).
 // Content is classified as markdown_text | message_text | summary_text.
+// Stream deltas carry channel (content|reasoning) so thinking never mixes
+// into the live answer preview (fixes repeated thinking print).
 type turnRenderer struct {
 	thinkingShown bool
 	gotContent    bool
 	started       bool
 	streamBuf     strings.Builder
+	reasonBuf     strings.Builder
 	streamedLive  bool
 }
 
@@ -46,6 +51,7 @@ func (r *turnRenderer) begin() {
 	r.gotContent = false
 	r.started = true
 	r.streamBuf.Reset()
+	r.reasonBuf.Reset()
 	r.streamedLive = false
 }
 
@@ -64,8 +70,19 @@ func (r *turnRenderer) onStatus(status string) {
 	}
 }
 
-func (r *turnRenderer) onStream(delta string) {
+func (r *turnRenderer) onStream(delta, channel string) {
 	if delta == "" {
+		return
+	}
+	// Reasoning is ephemeral presentation only — accumulate separately and
+	// show a short dim preview; never append into the answer streamBuf.
+	if channel == "reasoning" {
+		r.reasonBuf.WriteString(delta)
+		if !r.thinkingShown {
+			r.clearThinking()
+			r.renderMessageText("dim", "Thinking…")
+			r.thinkingShown = true
+		}
 		return
 	}
 	r.streamBuf.WriteString(delta)
@@ -90,6 +107,9 @@ func (r *turnRenderer) onStream(delta string) {
 func (r *turnRenderer) onTool(name string, args json.RawMessage) {
 	// Tool display is owned by message_text (start) + summary_text (end).
 	r.clearThinking()
+	// New tool hop: drop previous live preview so thinking/content don't pile up.
+	r.streamBuf.Reset()
+	r.streamedLive = false
 }
 
 func (r *turnRenderer) clearProgress() {
@@ -172,9 +192,12 @@ func wireRenderer(srv *serve.Server, r *turnRenderer) (restore func()) {
 	}
 }
 
-// cliToolApproval prompts on the CLI Medium for policy.ask (ADR-0019).
+// cliToolApproval is the CLI Medium face for agent.confirm (policy.ask).
+// Host/CLI stay plugin-agnostic: only the generic tool name + args are shown.
 func cliToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
-	fmt.Printf("⚠ sandbox: allow tool %s?\n", tool)
+	// Clear any live stream row so the prompt is not painted over.
+	fmt.Print("\r\x1b[2K")
+	fmt.Printf("⚠ allow tool %s?\n", tool)
 	if len(arguments) > 0 {
 		fmt.Printf("  arguments: %s\n", string(arguments))
 	}
@@ -182,6 +205,7 @@ func cliToolApproval(tool string, arguments json.RawMessage, workspace, sessionI
 		fmt.Printf("  workspace: %s\n", workspace)
 	}
 	fmt.Print("  [y/N] ")
+	_ = os.Stdout.Sync()
 	var line string
 	_, _ = fmt.Scanln(&line)
 	line = strings.ToLower(strings.TrimSpace(line))
@@ -194,7 +218,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	if err != nil {
 		return err
 	}
-	srv, err := serve.Start(plan.Mounted)
+	srv, err := startMounted(*opts.pluginsDir, plan)
 	if err != nil {
 		return err
 	}
@@ -214,6 +238,9 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 	}
 	srv.OnToolApproval = cliToolApproval
+	if opts.scheme != "" {
+		applyAgentScheme(srv, opts.scheme)
+	}
 
 	if *opts.appendJSON != "" {
 		var facts []map[string]any

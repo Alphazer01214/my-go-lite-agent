@@ -13,8 +13,12 @@ _Avoid_: 扩展、模块、组件（除非特指 Go module）
 _Avoid_: 宿主程序、主程序、kernel（正文可用，规范名词是 Host）
 
 **Assembly**:
-一次运行时对插件树的组装结果：哪些插件被挂载、以何序、何参数。发现 ≠ 挂载。
+一次运行时对插件树的组装结果：哪些插件被挂载、以何序、何参数。发现 ≠ 挂载。显式装配文件路径降级为内核/调试面；日常挂载真源是 Autostart 根集与插件声明的依赖闭包。
 _Avoid_: 配置加载（配置只是 Assembly 的输入之一）
+
+**Autostart**:
+Manifest 上的作者默认意图布尔：为真时该 Plugin 属于 Host 启动时的根挂载集（避免空树）。缺省 false。依赖闭包在根集之上展开；不是 Config 运行参数，也不是「已挂载」的同义词。
+_Avoid_: 默认插件、自动加载全部、config.autostart
 
 **Discovery**:
 扫描插件目录与清单，得到「机器上有哪些插件」的过程。只负责看见，不负责挂载。
@@ -49,8 +53,20 @@ Web Medium 暴露给 Panel Component 的作者 SDK 面（LiteAgent 全局与 /ap
 _Avoid_: 公共库、shared utils、Shell 内部模块
 
 **Current Session**:
-session Capability 上的媒介无关「当前会话」状态：current/select/list/create。id 恒为非空；空值统一映射为 `default`。create 默认铸新 id 并选中，但 `origin=subagent` 的创建不抢占 Current。Web Medium 不再自持专用真源。
+session Capability 上的媒介无关「当前会话」状态：current/select/list/create。id 恒为非空；空值统一映射为 `default`。create 默认铸新 id 并选中，但 `origin=subagent` 的创建不抢占 Current。Web Medium 不再自持专用真源。Web Shell 启动时不把 Current Session 当作「已进入」——初始面的内容归 Session View（见 New-session Face）。
 _Avoid_: 默认会话、活动会话 id（口语可用）
+
+**New-session Face**:
+Session View 的初始面：工作区选取（可留空）+ Agent Scheme 选择 + 聊天框。启动与「新建会话」都停在此面，不加载任何 Session；发出第一条消息时才 `session.create`（携带所选 Workspace）并进入会话。与「重放某个 Session」是两种面，切换由 UI Action/`__session` 公告驱动，不由 Current Session 隐式决定。
+_Avoid_: 欢迎页、空状态（规范名词是 New-session Face）
+
+**Status Bar**:
+Shell 底部的整宽信息栏（Layout 的 `statusbar` 槽位）。Shell 只负责几何与槽位，内容由各插件以 Panel Component 提供（如工作区、token 占用、模型名与模型总时长）。信息项是各插件对自身状态的观测投影，不是第二真源。
+_Avoid_: 状态栏插件、footer、ticker
+
+**Plugin Graph**:
+`/api/plugins` 暴露的插件关系图：节点为插件 / Capability / Host / UI 槽位，边为 provides、consumes、host-uses、ui-mount、dependsOn 与 scheme 拉取。节点带挂载状态（mounted / available / degraded / missing），真源是 Discovery 目录而非当前已挂载集——懒挂载（Autostart + Scheme ensure）下只有这样图才是完整的。调试面，不参与运行时决策。
+_Avoid_: 依赖树、拓扑图（可作口语）、assembly 图
 
 **Panel**:
 Web Render Medium 中一块可被插件填充的 UI 槽位，槽位集合由 Layout 定义。插件经 Panel Component 向 Panel 提供内容：静态挂载由 Manifest 声明，运行时变化经 PanelOp。Assembly 可禁用/覆盖 mount。
@@ -215,3 +231,19 @@ _Avoid_: 任务列表 UI、待办存储、task tracker
 **Plan Constraint**:
 对 Agent 在「先计划再动手」阶段的行为约束：仅由 System Prompt 与 Todo 可见性约定，不裁剪 tools 列表、不切换工具门禁。有意相对完整 Plan Mode 的 lite 取舍。
 _Avoid_: Plan Mode（若指工具子集门禁）、只读模式（语义不同）
+
+**Plugin Readme**:
+插件目录内作者自撰的 README：说明该插件是什么、命令与配置怎么用。内容与结构完全自由；开发规范推荐必写，缺失只在 Discovery 警告，不阻断挂载。
+_Avoid_: 插件文档规范、schema 文档（Readme 非机器校验契约）
+
+**Agent Scheme**:
+Agent 插件 config 中具名的一套 Loop 策略：`dependsPlugins`（进入 scheme 前 ensure 挂载的插件名）与 `allowedTools`（向模型暴露的 tool 名单；缺省不按名单过滤，空数组 = 无外部 tool）。无 readOnly/读写门禁——工具面完全由挂载与名单决定。用户可增删改方案；可热切换，当前 scheme 记入 Session Log。
+_Avoid_: agent 模式（口语可用）、profile、preset、装配方案（挂载真源是 Autostart/依赖闭包，Scheme 决定 Loop 工具面）
+
+**Plugin Dependency**:
+Manifest `dependsOn` 中按 **插件名** 声明的硬关系：Autostart 根集之上递归展开挂载闭包（防环）。与 `consumes`（Capability 名，弱校验）分工：名用于拉起谁，能力用于声明需要什么面。
+_Avoid_: 装配列表、assembly 点名（Assembly 文件已非日常真源）
+
+**Ensure Mount**:
+运行中向 Host 请求「把这组已发现插件挂上」的横切面：由 Agent 在选定 Scheme 时调用，Host 不解析业务 config。未发现的名字失败可见；已挂载则幂等。
+_Avoid_: 热插拔、按需 Assembly、config 闭包加载

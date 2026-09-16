@@ -15,6 +15,7 @@ func buildConsumerPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["demo"],
 		"consumes": ["echo"],
 		"entry": "`+name+`.exe"

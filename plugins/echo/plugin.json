@@ -1,0 +1,9 @@
+{
+  "name": "echo",
+  "version": "0.1.0",
+  "protocol": 3,
+  "provides": ["echo"],
+  "consumes": [],
+  "entry": "echo.exe",
+  "description": "Minimal Capability plugin used by the CLI/star-routing tests (no product surface)"
+}

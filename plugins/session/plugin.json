@@ -5,6 +5,7 @@
   "provides": ["session"],
   "consumes": [],
   "entry": "session.exe",
+  "autostart": true,
   "description": "File-backed session log plugin (JSONL) with the session Web faces",
   "commands": [
     {
@@ -39,7 +40,8 @@
     "mounts": [
       { "page": "main", "slot": "sidebar", "component": "session-rail" },
       { "page": "main", "slot": "chat", "component": "session-view" },
-      { "page": "main", "slot": "trace", "component": "session-trace" }
+      { "page": "main", "slot": "trace", "component": "session-trace" },
+      { "page": "main", "slot": "statusbar", "component": "session-status" }
     ]
   }
 }

@@ -50,6 +50,49 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// markAutostart sets autostart=true on a fixture plugin.json (ADR-0021 product path).
+func markAutostart(t *testing.T, pluginsDir, name string) {
+	t.Helper()
+	path := filepath.Join(pluginsDir, name, "plugin.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cheap inject: ensure the JSON object carries autostart true.
+	s := string(raw)
+	if !containsAutostart(s) {
+		// insert after first {
+		if i := indexByte(s, '{'); i >= 0 {
+			s = s[:i+1] + "\n  \"autostart\": true," + s[i+1:]
+		}
+	}
+	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func containsAutostart(s string) bool {
+	return len(s) > 0 && (indexOf(s, `"autostart"`) >= 0)
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
 // hostEnv isolates the Session Plugin data dir per test (avoids shared ./sessions pollution).
 func hostEnv(t *testing.T) []string {
 	t.Helper()

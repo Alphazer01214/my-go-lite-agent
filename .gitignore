@@ -10,3 +10,6 @@ plugins/**/config.json
 **/config.local.json
 .env
 .env.*
+
+# Agent working data (reports, memory) — not product
+.workbuddy/

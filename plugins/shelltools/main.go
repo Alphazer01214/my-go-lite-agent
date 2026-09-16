@@ -27,6 +27,7 @@ var toolSchemas = []map[string]any{
 	{
 		"name":        "shell",
 		"description": "Run a shell command in the Session Workspace. Prefer absolute clarity; output is truncated.",
+		"severity":    "high",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

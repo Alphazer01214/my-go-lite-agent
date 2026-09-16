@@ -38,7 +38,11 @@ func installToolsPlugin(t *testing.T, pluginsDir, name, bin string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(dir, name)
+	exe := name
+	if runtime.GOOS == "windows" {
+		exe = name + ".exe"
+	}
+	dst := filepath.Join(dir, exe)
 	data, err := os.ReadFile(bin)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +50,7 @@ func installToolsPlugin(t *testing.T, pluginsDir, name, bin string) {
 	if err := os.WriteFile(dst, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `{"name":"` + name + `","version":"0.1.0","protocol":3,"provides":["tools"],"consumes":[],"entry":"` + name + `"}`
+	manifest := `{"name":"` + name + `","version":"0.1.0","protocol":3,"autostart":true,"provides":["tools"],"consumes":[],"entry":"` + exe + `"}`
 	if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -61,10 +65,6 @@ func TestDuplicateToolNameFailsMount(t *testing.T) {
 	installToolsPlugin(t, pluginsDir, "echo-a", bin)
 	installToolsPlugin(t, pluginsDir, "echo-b", bin)
 
-	cfgPath := filepath.Join(t.TempDir(), "assembly.json")
-	if err := os.WriteFile(cfgPath, []byte(`{"plugins":["echo-a","echo-b"]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	res := discovery.Scan(pluginsDir)
 	plan := assembly.Resolve(assembly.Config{Plugins: []string{"echo-a", "echo-b"}}, res)
 	if len(plan.Mounted) != 2 {

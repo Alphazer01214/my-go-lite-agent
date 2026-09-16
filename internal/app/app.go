@@ -61,23 +61,33 @@ func plural(n int) string {
 	return "ies"
 }
 
-// resolveAssembly loads the assembly config, discovers plugins, resolves the
-// mount plan, and reports rejections/missing entries — the shared preamble
-// before callers mount or probe. dump prints the resolved tree.
-//
-// Soft-fail (ADR-0017): discovery errors and missing names are printed but do
-// not abort; Mount proceeds with whatever resolved. Callers that need a
-// Capability fail later at use time.
+// resolveAssembly loads plugins and builds the mount plan (ADR-0021).
+// Daily path: Autostart roots + dependsOn closure (no assembly file).
+// Legacy path: a non-empty -assembly plugins list still uses assembly.Resolve
+// (deprecated; retained for tests/reference only — not the daily product path).
+// Soft-fail (ADR-0017/0022): discovery errors print but do not abort.
 func resolveAssembly(pluginsDir, assemblyPath string, dump bool) (assembly.Plan, assembly.Config, error) {
-	cfg, err := assembly.Load(assemblyPath)
-	if err != nil {
-		return assembly.Plan{}, assembly.Config{}, err
+	cfg := assembly.Config{}
+	legacy := false
+	if assemblyPath != "" {
+		fmt.Fprintf(os.Stderr, "warn: -assembly is deprecated (ADR-0021); prefer Autostart+dependsOn (file: %s)\n", assemblyPath)
+		if loaded, err := assembly.Load(assemblyPath); err == nil {
+			cfg = loaded
+			if len(cfg.Plugins) > 0 {
+				legacy = true
+			}
+		}
 	}
 	res := discovery.Scan(pluginsDir)
 	for _, e := range res.Errors {
 		fmt.Fprintf(os.Stderr, "discover error: %v\n", e)
 	}
-	plan := assembly.Resolve(cfg, res)
+	var plan assembly.Plan
+	if legacy {
+		plan = assembly.Resolve(cfg, res)
+	} else {
+		plan = assembly.ResolveAutostart(res)
+	}
 	printRejected(plan.Rejected)
 	if len(plan.Missing) > 0 {
 		fmt.Fprintf(os.Stderr, "assembly references unknown plugins (continuing): %s\n", strings.Join(plan.Missing, ", "))
@@ -100,6 +110,19 @@ func runAssembly(pluginsDir, assemblyPath string, dump bool) error {
 		}
 	}
 	return nil
+}
+
+// startMounted starts the Server for plan and attaches the Discovery catalog
+// so ensurePlugins can mount later (ADR-0023).
+func startMounted(pluginsDir string, plan assembly.Plan) (*serve.Server, error) {
+	res := discovery.Scan(pluginsDir)
+	srv, err := serve.Start(plan.Mounted)
+	if err != nil {
+		return nil, err
+	}
+	srv.SetCatalog(res)
+	srv.SetPluginsDir(pluginsDir)
+	return srv, nil
 }
 
 func dumpAssembly(plan assembly.Plan) {
@@ -179,7 +202,7 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool) error {
 	if err != nil {
 		return err
 	}
-	srv, err := serve.Start(plan.Mounted)
+	srv, err := startMounted(pluginsDir, plan)
 	if err != nil {
 		return err
 	}

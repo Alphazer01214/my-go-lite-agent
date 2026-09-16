@@ -1,15 +1,23 @@
 // Floating plugin-relationship panel (shell overlay). Opened from Chat header
-// "Plugins". Graph: plugin —provides→ capability —host-uses→ Host, plus UI mounts.
-// Layered layout so edges always remain visible even when consumes is empty.
+// "Plugins". The graph is drawn from the whole Discovery catalog — every
+// discovered plugin gets a node, coloured by mount state — so it is complete at
+// page load: with Autostart+dependsOn (ADR-0021) most plugins mount lazily via
+// an Agent Scheme (ADR-0023), and a live-only graph would look half empty until
+// the first Turn.
+//
+// The snapshot is prefetched at Shell boot (prefetchPlugins) so opening the
+// panel paints synchronously from cache; a background refetch repaints when the
+// Host gained plugins (e.g. right after a scheme switch ensured them).
 
 function el(tag, attrs, children) {
   const n = document.createElement(tag);
   if (attrs) Object.keys(attrs).forEach(k => {
     if (k === 'text') n.textContent = attrs[k];
     else if (k === 'html') n.innerHTML = attrs[k];
+    else if (k === 'class') n.className = attrs[k];
     else n.setAttribute(k, attrs[k]);
   });
-  (children || []).forEach(c => n.appendChild(c));
+  (children || []).forEach(c => c && n.appendChild(c));
   return n;
 }
 
@@ -19,6 +27,8 @@ function svgEl(tag, attrs) {
   return n;
 }
 
+// Node palette per kind (frozen dark idiom of the shell: explicit fills, never
+// theme-class names).
 const KIND = {
   host: { fill: '#1a2438', stroke: '#7aa2f7', text: '#e8eaed' },
   plugin: { fill: '#161a22', stroke: '#9ece6a', text: '#e8eaed' },
@@ -26,11 +36,21 @@ const KIND = {
   slot: { fill: '#12161f', stroke: '#e0af68', text: '#e8eaed' }
 };
 
+// Mount states (server: StateMounted / StateAvailable / StateDegraded / StateMissing).
+const STATE = {
+  mounted: { stroke: '#9ece6a', fill: '#161a22', text: '#e8eaed', dash: '', label: 'mounted' },
+  available: { stroke: '#4b5563', fill: '#12161f', text: '#9aa0a6', dash: '5 3', label: 'available' },
+  degraded: { stroke: '#f7768e', fill: '#2a1620', text: '#f7768e', dash: '3 2', label: 'degraded' },
+  missing: { stroke: '#e0af68', fill: '#1a1620', text: '#e0af68', dash: '2 3', label: 'missing' }
+};
+
 const EDGE = {
   provides: { stroke: '#9ece6a', dash: '' },
   'host-uses': { stroke: '#7aa2f7', dash: '' },
   consumes: { stroke: '#bb9af7', dash: '4 3' },
-  'ui-mount': { stroke: '#e0af68', dash: '2 3' }
+  'ui-mount': { stroke: '#e0af68', dash: '2 3' },
+  'depends-on': { stroke: '#56b6c2', dash: '' },
+  scheme: { stroke: '#c678dd', dash: '1 4' }
 };
 
 function layeredLayout(nodes, W, H) {
@@ -140,7 +160,8 @@ function drawGraph(host, graph, selected, onSelect) {
     const title = svgEl('title');
     const cap = e.capability ? ` [${e.capability}]` : '';
     const comp = e.component ? ` (${e.component})` : '';
-    title.textContent = `${e.from} —${e.kind}→ ${e.to}${cap}${comp}`;
+    const sch = e.scheme ? ` scheme=${e.scheme}` : '';
+    title.textContent = `${e.from} —${e.kind}→ ${e.to}${cap}${comp}${sch}`;
     path.appendChild(title);
     svg.appendChild(path);
 
@@ -154,7 +175,9 @@ function drawGraph(host, graph, selected, onSelect) {
       'font-family': 'ui-monospace, Menlo, Consolas, monospace',
       'fill-opacity': selected && !hot ? 0.25 : 1
     });
-    lab.textContent = e.kind === 'ui-mount' ? (e.component || 'mount') : (e.capability || e.kind);
+    lab.textContent = e.kind === 'ui-mount' ? (e.component || 'mount')
+      : e.kind === 'scheme' ? ('scheme:' + (e.scheme || ''))
+        : (e.capability || e.kind);
     svg.appendChild(lab);
   });
 
@@ -162,7 +185,9 @@ function drawGraph(host, graph, selected, onSelect) {
     const p = pos[n.id];
     if (!p) return;
     const sz = nodeSize(n.kind);
-    const colors = KIND[n.kind] || KIND.plugin;
+    const base = KIND[n.kind] || KIND.plugin;
+    const st = n.kind === 'plugin' ? (STATE[n.state] || STATE.mounted) : null;
+    const colors = st || base;
     const hot = selected === n.id;
     const dim = selected && !hotSet.has(n.id);
     const g = svgEl('g', { style: 'cursor:pointer', opacity: dim ? 0.28 : 1 });
@@ -171,7 +196,9 @@ function drawGraph(host, graph, selected, onSelect) {
       width: sz.w, height: sz.h, rx: 8,
       fill: hot ? '#1a2438' : colors.fill,
       stroke: hot ? '#7aa2f7' : colors.stroke,
-      'stroke-width': hot ? 2 : 1.2
+      'stroke-width': hot ? 2 : (n.autostart && n.kind === 'plugin' ? 2 : 1.2),
+      'stroke-dasharray': (st && st.dash) || '',
+      'fill-opacity': st && n.state === 'available' ? 0.55 : 1
     }));
     const t = svgEl('text', {
       x: p.x, y: p.y, 'text-anchor': 'middle', 'dominant-baseline': 'central',
@@ -184,10 +211,15 @@ function drawGraph(host, graph, selected, onSelect) {
     g.appendChild(t);
     const title = svgEl('title');
     const lines = [n.label || n.id, 'kind: ' + n.kind];
+    if (n.state) lines.push('state: ' + n.state);
     if (n.version) lines.push('version: ' + n.version);
     if (n.description) lines.push(n.description);
+    if (n.autostart) lines.push('autostart: true（Host 启动根）');
     if (n.provides && n.provides.length) lines.push('provides: ' + n.provides.join(', '));
     if (n.consumes && n.consumes.length) lines.push('consumes: ' + n.consumes.join(', '));
+    if (n.dependsOn && n.dependsOn.length) lines.push('dependsOn: ' + n.dependsOn.join(', '));
+    if (n.schemes && n.schemes.length) lines.push('pulled by scheme: ' + n.schemes.join(', '));
+    if (n.tools && n.tools.length) lines.push('tools: ' + n.tools.join(', '));
     if (n.unmet && n.unmet.length) lines.push('unmet: ' + n.unmet.join(', '));
     if (n.mounts && n.mounts.length) {
       lines.push('ui: ' + n.mounts.map(m => m.page + '/' + m.slot + '→' + m.component).join('; '));
@@ -219,15 +251,44 @@ function chips(list, color, border) {
   return box;
 }
 
+function stateBadge(state) {
+  const st = STATE[state] || STATE.mounted;
+  return el('span', {
+    text: st.label,
+    style: `font-size:9px;font-family:var(--la-mono);text-transform:uppercase;letter-spacing:.05em;
+            padding:1px 5px;border-radius:4px;border:1px dashed ${st.stroke};color:${st.stroke};margin-left:6px`
+  });
+}
+
 function renderDetail(side, data, selected, onSelect) {
   const plugins = data.plugins || [];
   const graph = data.graph || { nodes: [], edges: [] };
+  const summary = data.summary || {};
   side.innerHTML = '';
 
   side.appendChild(el('div', {
     style: 'font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--la-dim);margin-bottom:8px;font-family:var(--la-mono)',
-    text: 'Mounted · ' + plugins.length
+    text: 'Mounted ' + (summary.mounted != null ? summary.mounted : plugins.length) +
+      ' / discovered ' + (summary.discovered != null ? summary.discovered : plugins.length)
   }));
+
+  if (data.scheme) {
+    const sch = el('div', {
+      style: 'border:1px solid var(--la-line);border-radius:8px;padding:8px 10px;margin-bottom:10px;background:var(--la-panel2)'
+    });
+    sch.appendChild(el('div', {
+      style: 'font-size:10px;color:var(--la-dim);font-family:var(--la-mono)', text: 'agent scheme'
+    }));
+    sch.appendChild(el('div', {
+      style: 'font-size:13px;color:#c678dd;font-weight:600;font-family:var(--la-mono)', text: data.scheme
+    }));
+    const pulls = (data.schemePulls || {})[data.scheme] || [];
+    sch.appendChild(el('div', {
+      style: 'font-size:10px;color:var(--la-dim);margin-top:4px;font-family:var(--la-mono)',
+      text: pulls.length ? 'pulls: ' + pulls.join(', ') : 'pulls: (no extra plugin)'
+    }));
+    side.appendChild(sch);
+  }
 
   plugins.forEach(p => {
     const isSel = selected === p.name;
@@ -235,13 +296,18 @@ function renderDetail(side, data, selected, onSelect) {
       style: 'border:1px solid ' + (isSel ? 'var(--la-accent)' : 'var(--la-line)') +
         ';border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--la-panel);cursor:pointer'
     });
-    const name = el('div', { style: 'font-weight:600;font-size:13px' });
-    name.appendChild(document.createTextNode(p.name));
-    if (p.version) name.appendChild(el('span', {
+    const nameRow = el('div', { style: 'font-weight:600;font-size:13px;display:flex;align-items:center' });
+    nameRow.appendChild(document.createTextNode(p.name));
+    if (p.version) nameRow.appendChild(el('span', {
       style: 'color:var(--la-dim);font-size:11px;font-family:var(--la-mono);margin-left:6px;font-weight:400',
       text: 'v' + p.version
     }));
-    card.appendChild(name);
+    nameRow.appendChild(stateBadge(p.state));
+    if (p.autostart) nameRow.appendChild(el('span', {
+      text: 'autostart',
+      style: 'font-size:9px;font-family:var(--la-mono);padding:1px 5px;border-radius:4px;border:1px solid #7aa2f766;color:#7aa2f7;margin-left:6px'
+    }));
+    card.appendChild(nameRow);
     if (p.description) {
       card.appendChild(el('div', { style: 'font-size:11px;color:var(--la-dim);margin-top:4px;line-height:1.35', text: p.description }));
     }
@@ -251,6 +317,18 @@ function renderDetail(side, data, selected, onSelect) {
     card.appendChild(chips(p.consumes, 'var(--la-accent)', '#7aa2f744'));
 
     const node = (graph.nodes || []).find(n => n.id === p.name);
+    if (node && node.dependsOn && node.dependsOn.length) {
+      card.appendChild(el('div', { style: 'font-size:10px;color:var(--la-dim);margin-top:6px;font-family:var(--la-mono)', text: 'dependsOn' }));
+      card.appendChild(chips(node.dependsOn, '#56b6c2', '#56b6c255'));
+    }
+    if (p.schemes && p.schemes.length) {
+      card.appendChild(el('div', { style: 'font-size:10px;color:var(--la-dim);margin-top:6px;font-family:var(--la-mono)', text: 'pulled by scheme' }));
+      card.appendChild(chips(p.schemes, '#c678dd', '#c678dd55'));
+    }
+    if (p.tools && p.tools.length) {
+      card.appendChild(el('div', { style: 'font-size:10px;color:var(--la-dim);margin-top:6px;font-family:var(--la-mono)', text: 'tools' }));
+      card.appendChild(chips(p.tools, '#e0af68', '#e0af6855'));
+    }
     if (node && node.unmet && node.unmet.length) {
       card.appendChild(el('div', { style: 'font-size:10px;color:var(--la-dim);margin-top:6px;font-family:var(--la-mono)', text: 'unmet' }));
       card.appendChild(chips(node.unmet, 'var(--la-err)', '#f7768e55'));
@@ -291,7 +369,7 @@ function renderDetail(side, data, selected, onSelect) {
     rel.forEach(e => {
       const dir = e.from === selected ? '→' : '←';
       const other = e.from === selected ? e.to : e.from;
-      const meta = [e.kind, e.capability, e.component].filter(Boolean).join(' · ');
+      const meta = [e.kind, e.capability, e.scheme, e.component].filter(Boolean).join(' · ');
       box.appendChild(el('div', {
         style: 'font-size:11px;font-family:var(--la-mono);color:var(--la-ink);margin-bottom:4px;line-height:1.35',
         text: dir + ' ' + other + (meta ? '  (' + meta + ')' : '')
@@ -308,15 +386,23 @@ function renderDetail(side, data, selected, onSelect) {
 
   const legend = el('div', { style: 'display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--la-dim);margin-top:12px;font-family:var(--la-mono)' });
   legend.innerHTML =
+    '<span style="color:var(--la-dim)">state</span>' +
+    '<span><i style="display:inline-block;width:10px;height:10px;border:1px solid #9ece6a;background:#161a22;vertical-align:middle;margin-right:5px"></i>mounted（已挂载）</span>' +
+    '<span><i style="display:inline-block;width:10px;height:10px;border:1px dashed #4b5563;background:#12161f;vertical-align:middle;margin-right:5px"></i>available（待 scheme 拉起）</span>' +
+    '<span><i style="display:inline-block;width:10px;height:10px;border:1px dashed #f7768e;background:#2a1620;vertical-align:middle;margin-right:5px"></i>degraded（consumes 未满足）</span>' +
+    '<span style="color:var(--la-dim);margin-top:4px">edges</span>' +
     '<span><i style="display:inline-block;width:18px;height:2px;background:#9ece6a;vertical-align:middle;margin-right:4px"></i>provides (plugin → cap)</span>' +
     '<span><i style="display:inline-block;width:18px;height:2px;background:#7aa2f7;vertical-align:middle;margin-right:4px"></i>host-uses (cap → Host)</span>' +
     '<span><i style="display:inline-block;width:18px;height:0;border-top:2px dashed #bb9af7;vertical-align:middle;margin-right:4px"></i>consumes (cap → plugin)</span>' +
+    '<span><i style="display:inline-block;width:18px;height:2px;background:#56b6c2;vertical-align:middle;margin-right:4px"></i>depends-on (plugin → plugin)</span>' +
+    '<span><i style="display:inline-block;width:18px;height:0;border-top:2px dotted #c678dd;vertical-align:middle;margin-right:4px"></i>scheme (agent → plugin)</span>' +
     '<span><i style="display:inline-block;width:18px;height:0;border-top:2px dotted #e0af68;vertical-align:middle;margin-right:4px"></i>ui-mount (plugin → slot)</span>';
   side.appendChild(legend);
 }
 
-function paint(root, data) {
+function paint(root, data, close) {
   const graph = data.graph || { nodes: [], edges: [] };
+  const summary = data.summary || {};
   let selected = null;
 
   const body = el('div', { class: 'pg-modal-body' });
@@ -333,28 +419,95 @@ function paint(root, data) {
     renderDetail(side, data, selected, (id) => { selected = id; refresh(); });
     drawGraph(canvas, graph, selected, (id) => { selected = id; refresh(); });
   }
-  refresh();
 
   root.innerHTML = '';
   const backdrop = el('div', { class: 'pg-backdrop' });
   const modal = el('div', { class: 'pg-modal', style: 'width:min(1080px,100%)' });
   const head = el('div', { class: 'pg-modal-head' });
-  head.appendChild(el('span', { text: 'Plugins · capabilities · Host' }));
+  const title = el('span', { style: 'display:flex;align-items:center;gap:8px' });
+  title.appendChild(document.createTextNode('Plugins · capabilities · Host'));
+  title.appendChild(el('span', {
+    style: 'font-size:11px;font-weight:400;color:var(--la-dim);font-family:var(--la-mono)',
+    text: 'mounted ' + (summary.mounted != null ? summary.mounted : '?') +
+      ' / ' + (summary.discovered != null ? summary.discovered : '?') +
+      (data.scheme ? ' · scheme ' + data.scheme : '')
+  }));
   const btnClose = el('button', { type: 'button', text: 'Close' });
-  btnClose.onclick = () => { root.innerHTML = ''; };
+  btnClose.onclick = close;
+  head.appendChild(title);
   head.appendChild(btnClose);
   modal.appendChild(head);
   modal.appendChild(body);
   backdrop.appendChild(modal);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) root.innerHTML = ''; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   root.appendChild(backdrop);
+
+  try {
+    refresh();
+  } catch (e) {
+    // A render bug must never leave a blank canvas behind.
+    canvas.innerHTML = '';
+    canvas.appendChild(el('div', {
+      style: 'padding:16px;color:var(--la-err);font-size:12px;font-family:var(--la-mono);white-space:pre-wrap',
+      text: 'graph render failed: ' + ((e && e.message) || e)
+    }));
+  }
+}
+
+// The last /api/plugins snapshot, prefetched at Shell boot so the panel paints
+// synchronously when opened.
+let snapshot = null;
+let keyHandler = null;
+
+function fetchPlugins(force) {
+  if (snapshot && !force) return Promise.resolve(snapshot);
+  return fetch('/api/plugins').then(r => r.json()).then(data => {
+    if (data && data.graph) snapshot = data;
+    return snapshot;
+  });
+}
+
+// prefetchPlugins warms the cache during Shell boot: the dependency graph is
+// ready before the first Turn, not after it.
+export function prefetchPlugins() {
+  return fetchPlugins(true).catch(() => null);
+}
+
+// invalidatePluginsCache drops the snapshot so the next open/refresh refetches.
+// Called when scheme or session changes — ensurePlugins may have mounted more.
+export function invalidatePluginsCache() {
+  snapshot = null;
+}
+
+// Live invalidation: scheme switch / session select can mount plugins.
+if (window.LiteAgent && window.LiteAgent.on) {
+  window.LiteAgent.on('__scheme', () => { invalidatePluginsCache(); prefetchPlugins(); });
+  window.LiteAgent.on('__session', () => { invalidatePluginsCache(); prefetchPlugins(); });
 }
 
 export function openPluginsPanel() {
   const root = document.getElementById('main-overlay');
   if (!root) return;
-  if (root.querySelector('.pg-backdrop')) {
+  const closePanel = () => {
     root.innerHTML = '';
+    if (keyHandler) document.removeEventListener('keydown', keyHandler);
+    keyHandler = null;
+  };
+  if (root.querySelector('.pg-backdrop')) {
+    closePanel();
+    return;
+  }
+  keyHandler = (e) => { if (e.key === 'Escape') closePanel(); };
+  document.addEventListener('keydown', keyHandler);
+
+  // Paint from the prefetched snapshot immediately; refresh in the background
+  // so newly ensured plugins show up without waiting for a reload.
+  if (snapshot) {
+    paint(root, snapshot, closePanel);
+    fetchPlugins(true).then(fresh => {
+      if (!fresh || !root.querySelector('.pg-backdrop')) return;
+      paint(root, fresh, closePanel);
+    }).catch(() => { });
     return;
   }
   root.innerHTML = '';
@@ -366,14 +519,14 @@ export function openPluginsPanel() {
       ])
     ])
   ]));
-  fetch('/api/plugins').then(r => r.json()).then(data => {
-    paint(root, data);
+  fetchPlugins(true).then(data => {
+    if (data) paint(root, data, closePanel);
   }).catch(e => {
     root.innerHTML = '';
     const backdrop = el('div', { class: 'pg-backdrop' });
     const modal = el('div', { class: 'pg-modal' });
     const close = el('button', { type: 'button', text: 'Close' });
-    close.onclick = () => { root.innerHTML = ''; };
+    close.onclick = closePanel;
     modal.appendChild(el('div', { class: 'pg-modal-head' }, [
       el('span', { text: 'Plugins · capabilities · Host' }), close
     ]));

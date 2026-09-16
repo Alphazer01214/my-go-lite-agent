@@ -10,11 +10,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/assembly"
+	"github.com/tomori/my-go-lite-agent/discovery"
 	"github.com/tomori/my-go-lite-agent/plugin"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
@@ -64,9 +66,9 @@ type Server struct {
 	// defaultWorkspace is applied to new Sessions when the client omits one.
 	defaultWorkspace string
 	// pending tool approvals (policy.ask → Render Medium).
-	apprMu     sync.Mutex
-	apprNext   int
-	apprWait   map[string]chan bool
+	apprMu   sync.Mutex
+	apprNext int
+	apprWait map[string]chan bool
 }
 
 // currentSession resolves the Current Session from the session Capability
@@ -144,7 +146,6 @@ func New(opts Options) *Server {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/trace", s.handleTracePage)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/api/message", s.handleMessage)
 	mux.HandleFunc("/api/command", s.handleCommand)
@@ -157,6 +158,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("/api/sessions", s.handleSessionsList)
 	mux.HandleFunc("/api/session/select", s.handleSessionSelect)
 	mux.HandleFunc("/api/session/workspace", s.handleSessionWorkspace)
+	mux.HandleFunc("/api/workspace/resolve", s.handleWorkspaceResolve)
 	mux.HandleFunc("/api/tool-approval", s.handleToolApproval)
 	mux.HandleFunc("/api/turn/cancel", s.handleTurnCancel)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
@@ -218,11 +220,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(shellHTML))
-}
-
-func (s *Server) handleTracePage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(traceHTML))
 }
 
 func (s *Server) handleSDK(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +420,111 @@ func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]any{"ok": true, "sessionId": sid, "workspace": in.Workspace})
 }
 
+// workspaceResolveMaxDirs caps the directory walk so a pick never hangs the Host.
+const workspaceResolveMaxDirs = 20000
+
+// skipWalkDirs are directory names never searched for a picked workspace.
+var skipWalkDirs = map[string]bool{
+	"node_modules": true, "AppData": true, "$RECYCLE.BIN": true,
+	"System Volume Information": true, "Windows": true, "ProgramData": true,
+}
+
+// handleWorkspaceResolve maps a folder chosen in the browser to an absolute path.
+//
+// The File System Access API (showDirectoryPicker) deliberately never reveals a
+// path — only the directory NAME. The Web Workspace (ADR-0020) needs a real
+// path, so the Host resolves the name against its own working directory
+// (descendants, depth<=3) and its ancestors' immediate children, so picking a
+// sibling project also works. Exactly one match wins; several become candidates
+// the UI can offer; zero means the user types the path.
+func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Name) == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	raw := strings.TrimSpace(in.Name)
+	// An absolute (or otherwise usable) path is taken at face value.
+	if abs, err := filepath.Abs(raw); err == nil {
+		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+			writeJSON(w, map[string]any{"ok": true, "name": raw, "path": abs, "candidates": []string{abs}})
+			return
+		}
+	}
+	base := filepath.Base(filepath.Clean(raw))
+	cwd, err := os.Getwd()
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": true, "name": raw, "path": "", "candidates": []string{}})
+		return
+	}
+	type scope struct {
+		root  string
+		depth int
+	}
+	scopes := []scope{{cwd, 3}}
+	up := cwd
+	for i := 0; i < 3; i++ {
+		parent := filepath.Dir(up)
+		if parent == up {
+			break
+		}
+		scopes = append(scopes, scope{parent, 1})
+		up = parent
+	}
+	visited := 0
+	seen := map[string]bool{}
+	var found []string
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if visited > workspaceResolveMaxDirs || len(found) > 32 {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || skipWalkDirs[e.Name()] {
+				continue
+			}
+			visited++
+			full := filepath.Join(dir, e.Name())
+			if e.Name() == base && !seen[full] {
+				seen[full] = true
+				found = append(found, full)
+			}
+			if depth > 1 {
+				walk(full, depth-1)
+			}
+		}
+	}
+	for _, sc := range scopes {
+		// The scope root itself may be the picked directory.
+		if filepath.Base(sc.root) == base && !seen[sc.root] {
+			seen[sc.root] = true
+			found = append(found, sc.root)
+		}
+		walk(sc.root, sc.depth)
+	}
+	sort.Strings(found)
+	path := ""
+	if len(found) == 1 {
+		path = found[0]
+	}
+	if found == nil {
+		found = []string{}
+	}
+	writeJSON(w, map[string]any{"ok": true, "name": raw, "path": path, "candidates": found})
+}
+
 // requestToolApproval implements Host OnToolApproval for the Web Medium (ADR-0019).
+// Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
 // Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
 func (s *Server) requestToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
 	s.apprMu.Lock()
@@ -632,13 +733,28 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.opts.Layout)
 }
 
+// Node/edge mount states for the plugin graph.
+const (
+	// StateMounted is a Plugin whose process/UI is live in the Host right now.
+	StateMounted = "mounted"
+	// StateAvailable is a discovered Plugin that is not mounted yet: it can be
+	// pulled in later by a dependsOn closure or an Agent Scheme dependsPlugins.
+	StateAvailable = "available"
+	// StateDegraded is a mounted Plugin whose consumes are unmet (ADR-0022).
+	StateDegraded = "degraded"
+	// StateMissing is a name referenced by dependsOn that Discovery never saw.
+	StateMissing = "missing"
+)
+
 // graphEdge is one directed dependency in the plugin graph.
-// kind: provides | host-uses | consumes | ui-mount
+// kind: provides | host-uses | consumes | ui-mount | depends-on | scheme
 type graphEdge struct {
 	From       string `json:"from"`
 	To         string `json:"to"`
 	Kind       string `json:"kind"`
 	Capability string `json:"capability,omitempty"`
+	// Scheme is the Agent Scheme that pulls To (kind=scheme).
+	Scheme string `json:"scheme,omitempty"`
 	// UI mount extras
 	Page      string `json:"page,omitempty"`
 	Slot      string `json:"slot,omitempty"`
@@ -654,10 +770,28 @@ type graphNode struct {
 	Description string   `json:"description,omitempty"`
 	Provides    []string `json:"provides,omitempty"`
 	Consumes    []string `json:"consumes,omitempty"`
+	// State is the mount state (mounted|available|degraded|missing).
+	State string `json:"state,omitempty"`
+	// Autostart marks a Host startup root (ADR-0021).
+	Autostart bool `json:"autostart,omitempty"`
+	// DependsOn lists plugin names this node pulls in.
+	DependsOn []string `json:"dependsOn,omitempty"`
+	// Schemes lists Agent Schemes whose dependsPlugins include this plugin.
+	Schemes []string `json:"schemes,omitempty"`
+	// Tools are the tool names this plugin owns (tools Capability providers).
+	Tools []string `json:"tools,omitempty"`
 	// Unmet lists consumed capabilities no mounted plugin provides.
 	Unmet []string `json:"unmet,omitempty"`
 	// UI mount summary for plugin nodes
 	Mounts []map[string]string `json:"mounts,omitempty"`
+}
+
+// agentSchemeFace is the slice of the agent plugin's config face the graph needs.
+type agentSchemeFace struct {
+	DefaultScheme string `json:"defaultScheme"`
+	Schemes       map[string]struct {
+		DependsPlugins []string `json:"dependsPlugins,omitempty"`
+	} `json:"schemes"`
 }
 
 // hostUsedCapabilities are Capabilities the Host star-routes (Agent Loop / media).
@@ -666,8 +800,13 @@ var hostUsedCapabilities = []string{
 	serve.SystemPromptCap, serve.ContextCap, serve.LoopCap,
 }
 
-// handlePlugins reports mounted plugins, Assembly-adjudicated UI mounts,
-// and a relationship graph: plugin → capability → host, plus UI mounts.
+// handlePlugins reports the plugin catalog and its relationship graph.
+//
+// The graph is drawn from the whole Discovery catalog, not just the live set:
+// under Autostart+dependsOn (ADR-0021) most plugins mount lazily (Agent Scheme
+// → ensurePlugins, ADR-0023), so a live-only graph would stay half-empty until
+// the first Turn. Every plugin node carries its state (mounted|available|
+// degraded|missing) and the Agent Scheme edges that will pull it in.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	type uiItem struct {
 		Entry  string                    `json:"entry"`
@@ -681,14 +820,110 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		Description string               `json:"description,omitempty"`
 		Provides    []string             `json:"provides,omitempty"`
 		Consumes    []string             `json:"consumes,omitempty"`
+		DependsOn   []string             `json:"dependsOn,omitempty"`
+		Autostart   bool                 `json:"autostart,omitempty"`
+		State       string               `json:"state"`
+		Tools       []string             `json:"tools,omitempty"`
+		Schemes     []string             `json:"schemes,omitempty"`
 		Commands    []plugin.CommandSpec `json:"commands,omitempty"`
+		Degraded    bool                 `json:"degraded,omitempty"`
 		UI          *uiItem              `json:"ui,omitempty"`
 	}
 
-	providers := map[string][]string{}
+	live := map[string]bool{}
+	degraded := map[string]bool{}
+	toolOwner := map[string]string{}
+	if s.opts.Srv != nil {
+		for _, n := range s.opts.Srv.MountedPluginNames() {
+			live[n] = true
+		}
+		for _, n := range s.opts.Srv.DegradedNames() {
+			degraded[n] = true
+		}
+		toolOwner = s.opts.Srv.ToolOwners()
+	}
+
+	// Catalog = mount plan ∪ everything Discovery sees under -plugins.
+	byName := map[string]discovery.Found{}
+	var order []string
+	addFound := func(p discovery.Found) {
+		name := p.Manifest.Name
+		if _, ok := byName[name]; !ok {
+			order = append(order, name)
+		}
+		byName[name] = p
+	}
 	for _, p := range s.opts.Plan.Mounted {
-		for _, c := range p.Manifest.Provides {
-			providers[c] = append(providers[c], p.Manifest.Name)
+		addFound(p)
+		live[p.Manifest.Name] = true
+	}
+	if s.opts.PluginsDir != "" {
+		if res := discovery.Scan(s.opts.PluginsDir); len(res.Plugins) > 0 {
+			for _, p := range res.Plugins {
+				addFound(p)
+			}
+		}
+	}
+
+	// Agent Scheme face: which plugins each scheme pulls in (ADR-0023).
+	schemeName := ""
+	schemeNames := []string{}
+	schemePulls := map[string][]string{} // scheme -> plugin names
+	if s.opts.Srv != nil {
+		if out, err := s.opts.Srv.CallByPlugin("agent", "config", "get", json.RawMessage(`{}`)); err == nil && len(out) > 0 {
+			var face agentSchemeFace
+			_ = json.Unmarshal(out, &face)
+			schemeName = face.DefaultScheme
+			for name, sc := range face.Schemes {
+				schemeNames = append(schemeNames, name)
+				schemePulls[name] = sc.DependsPlugins
+			}
+		}
+	}
+	sort.Strings(schemeNames)
+	pulledBy := map[string][]string{} // plugin -> schemes that pull it
+	for _, name := range schemeNames {
+		for _, p := range schemePulls[name] {
+			pulledBy[p] = append(pulledBy[p], name)
+		}
+	}
+
+	stateOf := func(name string) string {
+		if degraded[name] {
+			return StateDegraded
+		}
+		if live[name] {
+			return StateMounted
+		}
+		return StateAvailable
+	}
+	// Catalog order: mounted first, then degraded, then available; stable by name.
+	rank := map[string]int{StateMounted: 0, StateDegraded: 1, StateAvailable: 2}
+	sort.SliceStable(order, func(i, j int) bool {
+		ri, rj := rank[stateOf(order[i])], rank[stateOf(order[j])]
+		if ri != rj {
+			return ri < rj
+		}
+		return order[i] < order[j]
+	})
+
+	// Capability owners come from the manifest declares of every catalog plugin;
+	// degraded plugins are excluded so "unmet" stays honest (ADR-0022).
+	providers := map[string][]string{}
+	for _, name := range order {
+		if degraded[name] {
+			continue
+		}
+		for _, c := range byName[name].Manifest.Provides {
+			providers[c] = append(providers[c], name)
+		}
+	}
+	// A provider that is discovered but not mounted yet still counts as declared:
+	// the capability will exist as soon as the plugin is ensured.
+	declared := map[string][]string{}
+	for _, name := range order {
+		for _, c := range byName[name].Manifest.Provides {
+			declared[c] = append(declared[c], name)
 		}
 	}
 
@@ -697,6 +932,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	var edges []graphEdge
 	seenNode := map[string]bool{}
 	seenEdge := map[string]bool{}
+	missing := []string{}
 
 	addNode := func(n graphNode) {
 		if seenNode[n.ID] {
@@ -706,45 +942,82 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, n)
 	}
 	addEdge := func(e graphEdge) {
-		key := e.From + "\x00" + e.To + "\x00" + e.Kind + "\x00" + e.Capability + "\x00" + e.Component
+		key := e.From + "\x00" + e.To + "\x00" + e.Kind + "\x00" + e.Capability + "\x00" + e.Component + "\x00" + e.Scheme
 		if seenEdge[key] {
 			return
 		}
 		seenEdge[key] = true
 		edges = append(edges, e)
 	}
+	// ensurePluginNode registers a dependency target that Discovery never saw.
+	ensurePluginNode := func(name string) {
+		if _, ok := byName[name]; ok {
+			return
+		}
+		if seenNode[name] {
+			return
+		}
+		missing = append(missing, name)
+		addNode(graphNode{ID: name, Kind: "plugin", Label: name, State: StateMissing,
+			Description: "referenced by dependsOn but not discovered"})
+		seenNode[name] = true
+	}
 
 	// Host vertex: always present — the star-router that uses Capabilities.
-	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", Description: "Plugin host: assembly, routing, session invariant"})
+	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", State: StateMounted,
+		Description: "Plugin host: discovery, routing, session invariant, ensurePlugins"})
 
-	for _, p := range s.opts.Plan.Mounted {
-		it := item{Name: p.Manifest.Name, Version: p.Manifest.Version,
+	for _, name := range order {
+		p := byName[name]
+		st := stateOf(name)
+		var tools []string
+		for tool, owner := range toolOwner {
+			if owner == name {
+				tools = append(tools, tool)
+			}
+		}
+		sort.Strings(tools)
+		it := item{
+			Name: p.Manifest.Name, Version: p.Manifest.Version,
 			Description: p.Manifest.Description,
 			Provides:    p.Manifest.Provides, Consumes: p.Manifest.Consumes,
-			Commands: p.Manifest.Commands}
+			DependsOn: p.Manifest.DependsOn, Autostart: p.Manifest.Autostart,
+			State: st, Tools: tools, Schemes: pulledBy[name],
+			Commands: p.Manifest.Commands, Degraded: degraded[p.Manifest.Name],
+		}
 		node := graphNode{
 			ID: p.Manifest.Name, Kind: "plugin", Label: p.Manifest.Name,
 			Version: p.Manifest.Version, Description: p.Manifest.Description,
 			Provides: p.Manifest.Provides, Consumes: p.Manifest.Consumes,
+			State: st, Autostart: p.Manifest.Autostart, DependsOn: p.Manifest.DependsOn,
+			Schemes: pulledBy[name], Tools: tools,
 		}
 		// provides: plugin → capability
 		for _, capName := range p.Manifest.Provides {
 			capID := "cap:" + capName
-			addNode(graphNode{ID: capID, Kind: "capability", Label: capName})
+			capState := StateAvailable
+			for _, owner := range providers[capName] {
+				if live[owner] && !degraded[owner] {
+					capState = StateMounted
+					break
+				}
+			}
+			addNode(graphNode{ID: capID, Kind: "capability", Label: capName, State: capState})
 			addEdge(graphEdge{From: p.Manifest.Name, To: capID, Kind: "provides", Capability: capName})
 		}
 		// consumes: capability → plugin (plugin depends on the capability)
 		for _, need := range p.Manifest.Consumes {
 			capID := "cap:" + need
-			owners := providers[need]
-			if len(owners) == 0 {
-				node.Unmet = append(node.Unmet, need)
-				addNode(graphNode{ID: capID, Kind: "capability", Label: need})
-				addEdge(graphEdge{From: capID, To: p.Manifest.Name, Kind: "consumes", Capability: need})
-				continue
-			}
-			addNode(graphNode{ID: capID, Kind: "capability", Label: need})
+			addNode(graphNode{ID: capID, Kind: "capability", Label: need, State: StateAvailable})
 			addEdge(graphEdge{From: capID, To: p.Manifest.Name, Kind: "consumes", Capability: need})
+			if len(declared[need]) == 0 {
+				node.Unmet = append(node.Unmet, need)
+			}
+		}
+		// dependsOn: plugin → plugin (hard pull closure)
+		for _, dep := range p.Manifest.DependsOn {
+			ensurePluginNode(dep)
+			addEdge(graphEdge{From: p.Manifest.Name, To: dep, Kind: "depends-on"})
 		}
 		// UI mounts: plugin → slot
 		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
@@ -770,7 +1043,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, m := range mounts {
 				slotID := "ui:" + m.Page + "/" + m.Slot
-				addNode(graphNode{ID: slotID, Kind: "slot", Label: m.Page + " · " + m.Slot})
+				addNode(graphNode{ID: slotID, Kind: "slot", Label: m.Page + " · " + m.Slot, State: StateMounted})
 				addEdge(graphEdge{
 					From: p.Manifest.Name, To: slotID, Kind: "ui-mount",
 					Page: m.Page, Slot: m.Slot, Component: m.Component,
@@ -790,13 +1063,28 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		list = append(list, it)
 	}
 
-	// Host uses each Capability that some mounted plugin provides.
+	// Agent Scheme edges: which plugin each scheme will ensure (ADR-0023).
+	for _, sch := range schemeNames {
+		for _, dep := range schemePulls[sch] {
+			ensurePluginNode(dep)
+			addEdge(graphEdge{From: "agent", To: dep, Kind: "scheme", Scheme: sch})
+		}
+	}
+
+	// Host uses each Capability that some catalog plugin declares or provides.
 	for _, capName := range hostUsedCapabilities {
-		if len(providers[capName]) == 0 {
+		if len(declared[capName]) == 0 {
 			continue
 		}
 		capID := "cap:" + capName
-		addNode(graphNode{ID: capID, Kind: "capability", Label: capName})
+		capState := StateAvailable
+		for _, owner := range providers[capName] {
+			if live[owner] && !degraded[owner] {
+				capState = StateMounted
+				break
+			}
+		}
+		addNode(graphNode{ID: capID, Kind: "capability", Label: capName, State: capState})
 		addEdge(graphEdge{From: capID, To: "host", Kind: "host-uses", Capability: capName})
 	}
 
@@ -806,11 +1094,39 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	if edges == nil {
 		edges = []graphEdge{}
 	}
+	if missing == nil {
+		missing = []string{}
+	}
+	mountedNames := []string{}
+	for _, name := range order {
+		if stateOf(name) == StateMounted {
+			mountedNames = append(mountedNames, name)
+		}
+	}
 	writeJSON(w, map[string]any{
 		"plugins": list,
 		"graph": map[string]any{
 			"nodes": nodes,
 			"edges": edges,
+		},
+		"scheme":  schemeName,
+		"schemes": schemeNames,
+		"schemePulls": func() map[string][]string {
+			out := map[string][]string{}
+			for _, n := range schemeNames {
+				out[n] = schemePulls[n]
+				if out[n] == nil {
+					out[n] = []string{}
+				}
+			}
+			return out
+		}(),
+		"summary": map[string]any{
+			"discovered":   len(order),
+			"mounted":      len(mountedNames),
+			"mountedNames": mountedNames,
+			"degraded":     len(degraded),
+			"missing":      missing,
 		},
 	})
 }

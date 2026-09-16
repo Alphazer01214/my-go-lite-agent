@@ -18,6 +18,7 @@ func TestUIOnlyPluginMountsWithoutProcess(t *testing.T) {
 		"name": "uifix",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": [],
 		"consumes": [],
 		"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "uifix-panel", "props": {"n": 1}}]}
@@ -64,6 +65,7 @@ func TestManifestWithoutEntryOrUIRejected(t *testing.T) {
 		"name": "hollow",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": []
 	}`)
 

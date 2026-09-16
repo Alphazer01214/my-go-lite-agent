@@ -33,6 +33,7 @@ var toolSchemas = []map[string]any{
 		"name":        "load_skill",
 		"description": "Load a Workspace skill by name and return its full text.",
 		"readOnly":    true,
+		"severity":    "low",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

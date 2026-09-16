@@ -302,8 +302,8 @@ func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow i
 		return nil, nil, nil, err
 	}
 	var out struct {
-		Messages    []message    `json:"messages"`
-		Tools       []toolSchema `json:"tools"`
+		Messages    []message      `json:"messages"`
+		Tools       []toolSchema   `json:"tools"`
 		CompactHint map[string]any `json:"compactHint"`
 	}
 	_ = json.Unmarshal(raw, &out)
@@ -402,13 +402,18 @@ func (a *agent) sessionWorkspace(sessionID string) string {
 }
 
 // policyDecide asks the policy Capability (ADR-0019). Missing provider → allow.
-func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace string) (string, string) {
-	raw, err := callJSON(a.s, "policy", "decide", map[string]any{
+// severity is the tool author's declared risk (low|medium|high) from tools.list.
+func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace, severity string) (string, string) {
+	payload := map[string]any{
 		"tool":      tool,
 		"arguments": args,
 		"workspace": workspace,
 		"sessionId": sessionID,
-	})
+	}
+	if severity != "" {
+		payload["severity"] = severity
+	}
+	raw, err := callJSON(a.s, "policy", "decide", payload)
 	if err != nil {
 		return "allow", "no policy provider"
 	}
@@ -561,18 +566,21 @@ func (a *agent) logPolicyDecision(sessionID, tool, action, reason string) {
 	})
 }
 
-func (a *agent) callTool(sessionID string, tc toolCall) (string, []message, error) {
+func (a *agent) callTool(sessionID string, tc toolCall, severity string) (string, []message, error) {
 	args := tc.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
 	workspace := a.sessionWorkspace(sessionID)
-	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace)
+	// Policy plugin owns the full verdict (including ask → Medium round-trip).
+	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace, severity)
 	if action == "deny" {
 		a.logPolicyDecision(sessionID, tc.Name, "deny", reason)
 		return "error: denied by policy: " + reason, nil, nil
 	}
 	if action == "ask" {
+		// Fallback only: a policy provider that returns ask without resolving
+		// the Medium itself. Default sandbox resolves ask inside decide.
 		ok := a.confirmTool(sessionID, tc.Name, args, workspace)
 		if !ok {
 			a.logPolicyDecision(sessionID, tc.Name, "ask-denied", reason)
@@ -690,6 +698,32 @@ func main() {
 		return json.RawMessage(`{"ok":true}`), nil
 	})
 
+	a.s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("get", req.Payload)
+	})
+	a.s.Handle("config", "set", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("set", req.Payload)
+	})
+	a.s.Handle("config", "schema", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("schema", req.Payload)
+	})
+	a.s.Handle("config", "reload", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return handleConfigCap("reload", req.Payload)
+	})
+	a.s.Handle("commands", "call", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Command string `json:"command"`
+			Args    string `json:"args"`
+		}
+		if len(req.Payload) > 0 {
+			_ = json.Unmarshal(req.Payload, &in)
+		}
+		if in.Command != "config" {
+			return nil, &protocol.FrameError{Code: "unknown_command", Message: "/agent " + in.Command}
+		}
+		return handleConfigCommand(in.Args)
+	})
+
 	_ = a.s.Serve()
 }
 
@@ -706,11 +740,22 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	// Nested subagent turns share the parent's cancel only via Host.
 	a.refreshSkillCatalog(workspace)
 
+	schemeName, sc := a.activeScheme()
+	if err := a.ensureSchemePlugins(sc.DependsPlugins); err != nil {
+		return nil, &protocol.FrameError{
+			Code:    "scheme_ensure_failed",
+			Message: fmt.Sprintf("scheme %s: %v", schemeName, err),
+		}
+	}
+	maxSteps := schemeMaxSteps(sc)
+	offerSubagentPolicy := allowSubagent && schemeBool(sc.RunSubagent, true)
+	offerTodoPolicy := schemeBool(sc.Todo, true)
+
 	turnN := a.nextTurnNumber(sessionID)
 	if err := a.appendOne(sessionID, map[string]any{
 		"type": "turn_start",
 		"role": "host",
-		"meta": map[string]any{"turn": turnN},
+		"meta": map[string]any{"turn": turnN, "scheme": schemeName},
 	}); err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
@@ -738,6 +783,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	}
 
 	schemas, toolsOK := a.collectToolSchemas()
+	schemas = filterTools(schemas, sc)
 	hasTools := toolsOK
 	if !hasTools {
 		note := "No tools are mounted in this assembly. Do not claim to use tools, browse the workspace, or run commands. Answer from the conversation only, or ask the user to use the agent assembly if they need file tools."
@@ -756,7 +802,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 
 	// Soft policy when the tool is offered this turn: models overuse
 	// under-specified "spawn helper" tools unless told when not to.
-	offerSubagent := allowSubagent && hasTools
+	offerSubagent := offerSubagentPolicy && hasTools
 	if offerSubagent {
 		if sysText != "" {
 			sysText += "\n\n"
@@ -818,8 +864,8 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	if offerSubagent {
 		schemas = append(schemas, subagentToolSchema())
 	}
-	// Todo only when real external tools exist (not emptytools/subagent-only).
-	if hasExternalTools(schemas) {
+	// Todo only when real external tools exist and the scheme allows it.
+	if offerTodoPolicy && hasExternalTools(schemas) {
 		schemas = append(schemas, todoToolSchema())
 	}
 
@@ -830,7 +876,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	subagentUsed := 0
 	autoCompacted := false
 
-	for step := 0; step < MaxSteps; step++ {
+	for step := 0; step < maxSteps; step++ {
 		if a.cancel.take(sessionID) {
 			_ = a.appendOne(sessionID, map[string]any{
 				"type": "step_end",
@@ -877,13 +923,13 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 					}
 				}
 				if len(prepTools) > 0 {
-					schemas = prepTools
+					schemas = filterTools(prepTools, sc)
 					// Drop the tool once the turn budget is spent so the model
 					// stops seeing it as an available next step.
 					if offerSubagent && subagentUsed < MaxSubagentsPerTurn {
 						schemas = append(schemas, subagentToolSchema())
 					}
-					if hasExternalTools(prepTools) {
+					if offerTodoPolicy && hasExternalTools(schemas) {
 						schemas = append(schemas, todoToolSchema())
 					}
 				}
@@ -1004,18 +1050,24 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		}
 
 		// Partition: read-only tools may run in parallel; writes stay serial.
+		// Capture author-declared severity from tools.list for policy.decide.
 		readOnlyTools := map[string]bool{}
+		toolSeverity := map[string]string{}
 		if raw, err := callJSON(a.s, "tools", "list", map[string]any{}); err == nil {
 			var listed struct {
 				Tools []struct {
 					Name     string `json:"name"`
 					ReadOnly bool   `json:"readOnly"`
+					Severity string `json:"severity"`
 				} `json:"tools"`
 			}
 			_ = json.Unmarshal(raw, &listed)
 			for _, t := range listed.Tools {
 				if t.ReadOnly {
 					readOnlyTools[t.Name] = true
+				}
+				if t.Severity != "" {
+					toolSeverity[t.Name] = t.Severity
 				}
 			}
 		}
@@ -1040,7 +1092,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 					"text":      "Running " + tc.Name + "…",
 					"sessionId": sessionID,
 				}))
-				out, addCtx, callErr := a.callTool(sessionID, tc)
+				out, addCtx, callErr := a.callTool(sessionID, tc, toolSeverity[tc.Name])
 				if callErr != nil {
 					outcomes[i].content = "error: " + callErr.Error()
 				} else {
@@ -1143,7 +1195,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 						"text":      "Running " + tc.Name + "…",
 						"sessionId": sessionID,
 					}))
-					out, addCtx, callErr := a.callTool(sessionID, tc)
+					out, addCtx, callErr := a.callTool(sessionID, tc, toolSeverity[tc.Name])
 					if callErr != nil {
 						resultContent = "error: " + callErr.Error()
 					} else {

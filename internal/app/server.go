@@ -12,9 +12,11 @@ import (
 // CLI-Medium-only surfaces live in liteagent-cli.
 func Server() {
 	progName = "liteagent-server"
-	pluginsDir := flag.String("plugins", "", "plugin directory for assembly")
-	assemblyPath := flag.String("assembly", "", "assembly config path (JSON plugins list)")
-	dump := flag.Bool("dump", false, "dump assembly tree after resolve")
+	enableVirtualTerminal()
+	pluginsDir := flag.String("plugins", "", "plugin directory for Discovery")
+	assemblyPath := flag.String("assembly", "", "deprecated (ADR-0021): ignored whitelist; Autostart+dependsOn is used")
+	schemeFlag := flag.String("scheme", "", "override agent defaultScheme for this run")
+	dump := flag.Bool("dump", false, "dump mount plan after resolve")
 	repl := flag.Bool("repl", false, "interactive multi-turn REPL alongside the Web Medium")
 	serveAddr := flag.String("serve", "", "start Web Medium on this address (e.g. 127.0.0.1:7788); combine with -repl")
 	layoutPath := flag.String("layout", "", "layout.json path (default: layout.json beside cwd); required (ADR-0012)")
@@ -24,16 +26,13 @@ func Server() {
 		serve.SetDebug(true)
 	}
 
-	if *assemblyPath == "" {
-		fatal(fmt.Errorf("-assembly is required"))
-	}
 	if *pluginsDir == "" {
-		fatal(fmt.Errorf("-assembly requires -plugins"))
+		fatal(fmt.Errorf("-plugins is required"))
 	}
 	if *serveAddr == "" {
 		fatal(fmt.Errorf("-serve is required — liteagent-server is the Web Medium entry; the CLI Medium lives in liteagent-cli"))
 	}
-	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *layoutPath, *repl, dump); err != nil {
+	if err := runWebAndOptionalREPL(*pluginsDir, *assemblyPath, *serveAddr, *layoutPath, *repl, dump, *schemeFlag); err != nil {
 		fatal(err)
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/layout"
-	"github.com/tomori/my-go-lite-agent/serve"
 	"github.com/tomori/my-go-lite-agent/web"
 )
 
@@ -24,7 +23,7 @@ func (w webCommandPlane) HandleOut(line string) (string, bool, error) {
 func (w webCommandPlane) Complete(prefix string) []string { return w.cp.completeSlash(prefix) }
 
 // runWebAndOptionalREPL mounts Plugins, starts the Web Medium, and optionally the CLI REPL.
-func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool) error {
+func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool, scheme string) error {
 	plan, cfg, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
@@ -58,11 +57,15 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 		return err
 	}
 
-	srv, err := serve.Start(plan.Mounted)
+	srv, err := startMounted(pluginsDir, plan)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = srv.Close() }()
+
+	if scheme != "" {
+		applyAgentScheme(srv, scheme)
+	}
 
 	defaultWS := ""
 	if cwd, err := os.Getwd(); err == nil {
@@ -109,6 +112,12 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 	}()
 
 	if withREPL {
+		// Combined Web+REPL: web.New already bound OnToolApproval to the Web
+		// Medium (SSE + /api/tool-approval). Rebind to the CLI prompt so an
+		// interactive REPL turn is not stuck waiting for a browser confirm.
+		// Web-initiated turns still get the Web face via the same hook when
+		// the REPL is not the one asking — CLI answers first when stdin is a TTY.
+		srv.OnToolApproval = cliToolApproval
 		return runREPLLoop(srv, cp)
 	}
 	select {}

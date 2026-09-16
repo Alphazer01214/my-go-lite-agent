@@ -103,6 +103,10 @@ type Manifest struct {
 	Description string        `json:"description,omitempty"`
 	Commands    []CommandSpec `json:"commands,omitempty"`
 	UI          *UISpec       `json:"ui,omitempty"`
+	// Autostart marks this Plugin as a Host startup root (ADR-0021). Default false.
+	Autostart bool `json:"autostart,omitempty"`
+	// DependsOn names other Plugins to pull into the mount closure (ADR-0021).
+	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
 // CurrentProtocol is the highest plugin.json "protocol" (manifest + UI
@@ -173,6 +177,17 @@ func (m *Manifest) Validate() error {
 	for i, c := range m.Consumes {
 		if strings.TrimSpace(c) == "" {
 			return fmt.Errorf("consumes[%d] is empty", i)
+		}
+	}
+	for i, d := range m.DependsOn {
+		if strings.TrimSpace(d) == "" {
+			return fmt.Errorf("dependsOn[%d] is empty", i)
+		}
+		if !namePattern.MatchString(d) {
+			return fmt.Errorf("dependsOn[%d] %q must match [a-z0-9-]+", i, d)
+		}
+		if d == m.Name {
+			return fmt.Errorf("dependsOn[%d] %q must not reference the plugin itself", i, d)
 		}
 	}
 	for i, c := range m.Commands {

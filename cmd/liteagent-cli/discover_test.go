@@ -16,6 +16,7 @@ func TestDiscoverListsPlugins(t *testing.T) {
 		"name": "echo",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["echo"],
 		"consumes": [],
 		"entry": "echo.exe"
@@ -41,7 +42,8 @@ func TestDiscoverInvalidManifestFails(t *testing.T) {
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
 
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "bad", "plugin.json"), `{"version":"1","protocol": 2,"entry":"x"}`)
+	writeFile(t, filepath.Join(dir, "bad", "plugin.json"), `{"version":"1","protocol": 2,
+		"autostart": true,"entry":"x"}`)
 	writeFile(t, filepath.Join(dir, "bad", "x"), "bin")
 
 	cmd := exec.Command(hostBin, "-discover", dir)

@@ -14,6 +14,7 @@ func buildSlowPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["slow"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
@@ -36,10 +37,12 @@ func buildAgentPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["loop"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
-		"timeoutMs": 180000
+		"timeoutMs": 180000,
+		"dependsOn": ["session", "llm-openai", "context-manager"]
 	}`)
 	b, err := os.ReadFile(bin)
 	if err != nil {
@@ -58,6 +61,7 @@ func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["session"],
 		"consumes": [],
 		"entry": "`+name+`.exe",
@@ -85,6 +89,7 @@ func buildAgentProbePluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["demo"],
 		"consumes": ["session"],
 		"entry": "`+name+`.exe"
@@ -106,6 +111,7 @@ func buildEchoToolPluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["tools"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
@@ -127,6 +133,7 @@ func buildCrashOncePluginDir(t *testing.T, root, pluginsDir, name string) {
 		"name": "`+name+`",
 		"version": "0.1.0",
 		"protocol": 2,
+		"autostart": true,
 		"provides": ["crashy"],
 		"consumes": [],
 		"entry": "`+name+`.exe"
