@@ -26,10 +26,12 @@ func TestManifestValidate(t *testing.T) {
 	}{
 		{"missing name", Manifest{Version: "1", Protocol: 2, Entry: "x"}},
 		{"missing version", Manifest{Name: "a", Protocol: 2, Entry: "x"}},
-		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 4, Entry: "x"}},
+		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 5, Entry: "x"}},
 		{"missing entry and ui", Manifest{Name: "a", Version: "1", Protocol: 2}},
 		{"empty provides item", Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "x", Provides: []string{""}}},
 		{"bad name chars", Manifest{Name: "Help", Version: "1", Protocol: 2, Entry: "x"}},
+		{"bad hostFace", Manifest{Name: "a", Version: "1", Protocol: 4, Entry: "x", HostFaces: []string{"wat"}}},
+		{"duplicate hostFace", Manifest{Name: "a", Version: "1", Protocol: 4, Entry: "x", HostFaces: []string{"config", "config"}}},
 	}
 	for _, tc := range cases {
 		if err := tc.m.Validate(); err == nil {

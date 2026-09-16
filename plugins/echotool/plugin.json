@@ -1,8 +1,10 @@
 {
   "name": "echotool",
   "version": "0.1.0",
-  "protocol": 3,
-  "provides": ["tools"],
+  "protocol": 4,
+  "provides": [
+    "tools"
+  ],
   "consumes": [],
   "entry": "echotool.exe",
   "description": "Reference tools plugin: one `echo` tool returning a Presentation Card"

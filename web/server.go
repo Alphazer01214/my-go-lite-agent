@@ -769,6 +769,8 @@ type graphNode struct {
 	State string `json:"state,omitempty"`
 	// Autostart marks a Host startup root (ADR-0021).
 	Autostart bool `json:"autostart,omitempty"`
+	// HostFaces lists the Host-addressed faces this plugin serves (ADR-0027).
+	HostFaces []string `json:"hostFaces,omitempty"`
 	// DependsOn lists plugin names this node pulls in.
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Schemes lists Agent Schemes whose dependsPlugins include this plugin.
@@ -790,9 +792,12 @@ type agentSchemeFace struct {
 }
 
 // hostUsedCapabilities are Capabilities the Host star-routes (Agent Loop / media).
+// The Plugin Graph draws a host-uses edge for each declared-and-routed cap.
+// "system-prompt" is deliberately absent: Host never calls it — the Agent Loop
+// (agent plugin) does — so an edge here would be a fake host dependency.
 var hostUsedCapabilities = []string{
 	serve.SessionCap, serve.LLMCap, serve.ToolsCap,
-	serve.SystemPromptCap, serve.ContextCap, serve.LoopCap,
+	serve.ContextCap, serve.LoopCap,
 }
 
 // handlePlugins reports the plugin catalog and its relationship graph.
@@ -818,6 +823,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		DependsOn   []string             `json:"dependsOn,omitempty"`
 		Autostart   bool                 `json:"autostart,omitempty"`
 		State       string               `json:"state"`
+		HostFaces   []string             `json:"hostFaces,omitempty"`
 		Tools       []string             `json:"tools,omitempty"`
 		Schemes     []string             `json:"schemes,omitempty"`
 		Commands    []plugin.CommandSpec `json:"commands,omitempty"`
@@ -828,14 +834,20 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	live := map[string]bool{}
 	degraded := map[string]bool{}
 	toolOwner := map[string]string{}
+	reconcileGen := 0
+	registryProvides := map[string]string{}
 	if s.opts.Srv != nil {
+		reg := s.opts.Srv.Registry()
+		reconcileGen = reg.ReconcileGen
+		degraded = map[string]bool{}
+		for _, n := range reg.Degraded {
+			degraded[n] = true
+		}
+		toolOwner = reg.ToolOwners
+		registryProvides = reg.Provides
 		for _, n := range s.opts.Srv.MountedPluginNames() {
 			live[n] = true
 		}
-		for _, n := range s.opts.Srv.DegradedNames() {
-			degraded[n] = true
-		}
-		toolOwner = s.opts.Srv.ToolOwners()
 	}
 
 	// Catalog = mount plan ∪ everything Discovery sees under -plugins.
@@ -861,11 +873,13 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Agent Scheme face: which plugins each scheme pulls in (ADR-0023).
+	// Read through the agent-presets Capability (ADR-0027): Host never reaches
+	// into agent config; when no Agent Plugin provides it, no scheme edges.
 	schemeName := ""
 	schemeNames := []string{}
 	schemePulls := map[string][]string{} // scheme -> plugin names
 	if s.opts.Srv != nil {
-		if out, err := s.opts.Srv.CallByPlugin("agent", "config", "get", json.RawMessage(`{}`)); err == nil && len(out) > 0 {
+		if out, err := s.opts.Srv.CallByCap("agent-presets", "get", json.RawMessage(`{}`)); err == nil && len(out) > 0 {
 			var face agentSchemeFace
 			_ = json.Unmarshal(out, &face)
 			schemeName = face.DefaultScheme
@@ -902,19 +916,18 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		return order[i] < order[j]
 	})
 
-	// Capability owners come from the manifest declares of every catalog plugin;
-	// degraded plugins are excluded so "unmet" stays honest (ADR-0022).
+	// Capability owners come from the actual Host registry (ADR-0027): what
+	// routes today. Degraded plugins are excluded so "unmet" stays honest.
 	providers := map[string][]string{}
-	for _, name := range order {
-		if degraded[name] {
+	for cap, owner := range registryProvides {
+		if degraded[owner] {
 			continue
 		}
-		for _, c := range byName[name].Manifest.Provides {
-			providers[c] = append(providers[c], name)
-		}
+		providers[cap] = append(providers[cap], owner)
 	}
-	// A provider that is discovered but not mounted yet still counts as declared:
-	// the capability will exist as soon as the plugin is ensured.
+	// Declared capability owners come from the manifest of every catalog plugin;
+	// a capability declared but with no live registry owner is the "declared vs
+	// actual" delta the graph exposes through node state (ADR-0025).
 	declared := map[string][]string{}
 	for _, name := range order {
 		for _, c := range byName[name].Manifest.Provides {
@@ -977,15 +990,16 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			Description: p.Manifest.Description,
 			Provides:    p.Manifest.Provides, Consumes: p.Manifest.Consumes,
 			DependsOn: p.Manifest.DependsOn, Autostart: p.Manifest.Autostart,
-			State: st, Tools: tools, Schemes: pulledBy[name],
+			State: st, HostFaces: p.Manifest.HostFaces, Tools: tools, Schemes: pulledBy[name],
 			Commands: p.Manifest.Commands, Degraded: degraded[p.Manifest.Name],
 		}
 		node := graphNode{
 			ID: p.Manifest.Name, Kind: "plugin", Label: p.Manifest.Name,
 			Version: p.Manifest.Version, Description: p.Manifest.Description,
 			Provides: p.Manifest.Provides, Consumes: p.Manifest.Consumes,
-			State: st, Autostart: p.Manifest.Autostart, DependsOn: p.Manifest.DependsOn,
-			Schemes: pulledBy[name], Tools: tools,
+			State: st, Autostart: p.Manifest.Autostart, HostFaces: p.Manifest.HostFaces,
+			DependsOn: p.Manifest.DependsOn,
+			Schemes:   pulledBy[name], Tools: tools,
 		}
 		// provides: plugin → capability
 		for _, capName := range p.Manifest.Provides {
@@ -1008,6 +1022,12 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			if len(declared[need]) == 0 {
 				node.Unmet = append(node.Unmet, need)
 			}
+		}
+		// hostFaces: plugin → face (Host addresses the plugin by name, ADR-0027)
+		for _, face := range p.Manifest.HostFaces {
+			faceID := "face:" + face
+			addNode(graphNode{ID: faceID, Kind: "face", Label: face, State: st})
+			addEdge(graphEdge{From: p.Manifest.Name, To: faceID, Kind: "hostface", Capability: face})
 		}
 		// dependsOn: plugin → plugin (hard pull closure)
 		for _, dep := range p.Manifest.DependsOn {
@@ -1122,6 +1142,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			"mountedNames": mountedNames,
 			"degraded":     len(degraded),
 			"missing":      missing,
+			"reconcileGen": reconcileGen,
 		},
 	})
 }

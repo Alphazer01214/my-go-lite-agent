@@ -1,9 +1,14 @@
 {
   "name": "sandbox",
   "version": "0.2.0",
-  "protocol": 3,
-  "provides": ["policy"],
+  "protocol": 4,
+  "provides": [
+    "policy"
+  ],
   "consumes": [],
   "entry": "sandbox.exe",
-  "description": "Sandbox / permission rules: policy.decide allow/ask/deny (ADR-0019)"
+  "description": "Sandbox / permission rules: policy.decide allow/ask/deny (ADR-0019)",
+  "hostFaces": [
+    "config"
+  ]
 }

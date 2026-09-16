@@ -1,7 +1,7 @@
 {
   "name": "uidemo",
   "version": "0.4.0",
-  "protocol": 3,
+  "protocol": 4,
   "provides": [],
   "consumes": [],
   "entry": "uidemo.exe",
@@ -9,9 +9,22 @@
   "ui": {
     "entry": "main.js",
     "trust": "full",
-    "assets": ["panels.css", "mode-panel.html", "echo-panel.html"],
+    "assets": [
+      "panels.css",
+      "mode-panel.html",
+      "echo-panel.html"
+    ],
     "mounts": [
-      { "slot": "sidebar", "component": "uidemo-mode-panel", "props": { "initial": "chat" } }
+      {
+        "slot": "sidebar",
+        "component": "uidemo-mode-panel",
+        "props": {
+          "initial": "chat"
+        }
+      }
     ]
-  }
+  },
+  "hostFaces": [
+    "ui"
+  ]
 }

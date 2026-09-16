@@ -1,7 +1,7 @@
 {
   "name": "agent",
   "version": "0.1.0",
-  "protocol": 3,
+  "protocol": 4,
   "autostart": true,
   "dependsOn": [
     "session",
@@ -9,9 +9,16 @@
     "context-manager"
   ],
   "provides": [
-    "loop"
+    "loop",
+    "agent-presets"
   ],
-  "consumes": [],
+  "consumes": [
+    "system-prompt",
+    "context",
+    "session",
+    "llm",
+    "tools"
+  ],
   "entry": "agent.exe",
   "timeoutMs": 180000,
   "description": "Default Agent Plugin: composes llm/session/tools via the star (ADR-0016)",
@@ -37,5 +44,9 @@
         "component": "agent-status"
       }
     ]
-  }
+  },
+  "hostFaces": [
+    "config",
+    "commands"
+  ]
 }

@@ -78,6 +78,8 @@ type Server struct {
 	mountedUI map[string]bool
 	// degraded marks plugins whose consumes are unmet (ADR-0022): not in provides registry.
 	degraded map[string]bool
+	// reconcileGen counts full registry re-evaluations (observability, /api/plugins).
+	reconcileGen int
 	pending  map[string]*wait
 	closed   bool
 	seq      int
@@ -175,6 +177,50 @@ func (s *Server) ToolOwners() map[string]string {
 	for k, v := range s.toolOwners {
 		out[k] = v
 	}
+	return out
+}
+
+// RegistrySnapshot is the Host Capability registry as read by observability
+// surfaces (Plugin Graph /api/plugins, /lp). It shows what actually routes
+// today, not what manifests declare.
+type RegistrySnapshot struct {
+	// Provides is the unique-owner Capability registry (cap → plugin).
+	Provides map[string]string
+	// ToolOwners is the tool-name → providing-plugin map.
+	ToolOwners map[string]string
+	// Faces maps plugin name → its declared hostFaces (config|commands|ui).
+	Faces map[string][]string
+	// Degraded lists plugins whose consumes are currently unmet (ADR-0022).
+	Degraded []string
+	// ReconcileGen counts registry re-evaluations since Start.
+	ReconcileGen int
+}
+
+// Registry returns a consistent snapshot of the Capability registry.
+func (s *Server) Registry() RegistrySnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := RegistrySnapshot{
+		Provides:     make(map[string]string, len(s.provides)),
+		ToolOwners:   make(map[string]string, len(s.toolOwners)),
+		Faces:        make(map[string][]string, len(s.plugins)),
+		ReconcileGen: s.reconcileGen,
+	}
+	for k, v := range s.provides {
+		out.Provides[k] = v
+	}
+	for k, v := range s.toolOwners {
+		out.ToolOwners[k] = v
+	}
+	for name, p := range s.plugins {
+		if f := p.found.Manifest.HostFaces; len(f) > 0 {
+			out.Faces[name] = append([]string(nil), f...)
+		}
+	}
+	for n := range s.degraded {
+		out.Degraded = append(out.Degraded, n)
+	}
+	sort.Strings(out.Degraded)
 	return out
 }
 
@@ -285,7 +331,7 @@ func Start(mounted []discovery.Found) (*Server, error) {
 			return nil, err
 		}
 	}
-	s.softCheckConsumes(mounted)
+	s.reconcileConsumes()
 	if err := s.discoverTools(); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -331,12 +377,14 @@ func (s *Server) registerProvides(mounted []discovery.Found) error {
 }
 
 // discoverTools asks every tools Provider for its schema list and builds the
-// tool-name → plugin map (ADR-0018). Duplicate tool names fail Assembly.
+// tool-name → plugin map (ADR-0018). The new map is built locally and swapped
+// only on full success: any provider failure keeps the previous map. Duplicate
+// tool names fail (same policy as toolsListMerged).
 func (s *Server) discoverTools() error {
 	s.mu.Lock()
 	providers := append([]string(nil), s.toolsProviders...)
-	s.toolOwners = make(map[string]string)
 	s.mu.Unlock()
+	next := make(map[string]string)
 	for _, name := range providers {
 		payload, err := s.CallByPlugin(name, ToolsCap, "list", json.RawMessage(`{}`))
 		if err != nil {
@@ -350,19 +398,19 @@ func (s *Server) discoverTools() error {
 		if len(payload) > 0 {
 			_ = json.Unmarshal(payload, &out)
 		}
-		s.mu.Lock()
 		for _, t := range out.Tools {
 			if t.Name == "" {
 				continue
 			}
-			if prev, ok := s.toolOwners[t.Name]; ok && prev != name {
-				s.mu.Unlock()
+			if prev, ok := next[t.Name]; ok && prev != name {
 				return fmt.Errorf("tool %q provided by both %s and %s", t.Name, prev, name)
 			}
-			s.toolOwners[t.Name] = name
+			next[t.Name] = name
 		}
-		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	s.toolOwners = next
+	s.mu.Unlock()
 	return nil
 }
 
@@ -413,8 +461,12 @@ func (s *Server) toolsListMerged() (json.RawMessage, error) {
 				Name string `json:"name"`
 			}
 			_ = json.Unmarshal(t, &meta)
-			if meta.Name == "" || seen[meta.Name] {
+			if meta.Name == "" {
 				continue
+			}
+			// Same duplicate policy as discoverTools: fail loud, no silent first-wins.
+			if seen[meta.Name] {
+				return nil, fmt.Errorf("tool %q provided by multiple plugins", meta.Name)
 			}
 			seen[meta.Name] = true
 			merged = append(merged, json.RawMessage(t))
@@ -431,35 +483,96 @@ func (s *Server) toolsOwnerFor(toolName string) (string, bool) {
 	return owner, ok
 }
 
-// softCheckConsumes warns and marks plugins degraded when consumes are unmet (ADR-0022).
-// Degraded plugins keep their process but are removed from the Capability registry so
-// routing fails honestly at use time.
-func (s *Server) softCheckConsumes(mounted []discovery.Found) {
+// reconcileConsumes recomputes the Capability registry and degraded set from
+// the live mount set (ADR-0022). It is idempotent and full-graph: provides can
+// regress (a provider becomes degraded) or return (a dependency is mounted),
+// and degraded can clear. The next state is built locally, then swapped
+// atomically; reconcileGen increments for observability (/api/plugins).
+func (s *Server) reconcileConsumes() {
 	s.mu.Lock()
-	var degraded []string
-	for _, p := range mounted {
-		if p.Manifest.Entry == "" {
+	defer s.mu.Unlock()
+
+	next := make(map[string]string, len(s.provides))
+	var nextTools []string
+	for name, p := range s.plugins {
+		if !p.healthy {
 			continue
 		}
-		unmet := false
-		for _, need := range p.Manifest.Consumes {
-			if _, ok := s.provides[need]; !ok {
-				fmt.Fprintf(os.Stderr, "warn: plugin %s consumes %q but no mounted plugin provides it (degraded)\n", p.Manifest.Name, need)
-				unmet = true
-			}
-		}
-		if unmet {
-			s.degraded[p.Manifest.Name] = true
-			degraded = append(degraded, p.Manifest.Name)
-			for _, capName := range p.Manifest.Provides {
-				if owner, ok := s.provides[capName]; ok && owner == p.Manifest.Name {
-					delete(s.provides, capName)
+		for _, capName := range p.found.Manifest.Provides {
+			if capName == ToolsCap {
+				if _, ok := next[ToolsCap]; !ok {
+					next[ToolsCap] = name
 				}
+				if !containsString(nextTools, name) {
+					nextTools = append(nextTools, name)
+				}
+				continue
+			}
+			if _, ok := next[capName]; !ok {
+				next[capName] = name
 			}
 		}
 	}
-	s.mu.Unlock()
-	_ = degraded
+
+	degraded := make(map[string]bool, len(s.degraded))
+	// Iterate to a fixpoint: a plugin whose consumes are all provided stays;
+	// otherwise it is degraded and its provides are withdrawn, which may
+	// degrade transitive consumers.
+	for {
+		changed := false
+		for name, p := range s.plugins {
+			if !p.healthy {
+				continue
+			}
+			unmet := false
+			for _, need := range p.found.Manifest.Consumes {
+				if _, ok := next[need]; !ok {
+					fmt.Fprintf(os.Stderr, "warn: plugin %s consumes %q but no mounted plugin provides it (degraded)\n", name, need)
+					unmet = true
+					break
+				}
+			}
+			if unmet {
+				if !degraded[name] {
+					degraded[name] = true
+					changed = true
+				}
+				for _, capName := range p.found.Manifest.Provides {
+					if owner, ok := next[capName]; ok && owner == name {
+						delete(next, capName)
+					}
+				}
+			} else if degraded[name] {
+				delete(degraded, name)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	// Swap atomically: provides may regress, degraded may clear (ADR-0022).
+	s.provides = next
+	s.toolsProviders = nextTools
+	for name := range s.degraded {
+		if !degraded[name] {
+			delete(s.degraded, name)
+		}
+	}
+	for name := range degraded {
+		s.degraded[name] = true
+	}
+	s.reconcileGen++
+}
+
+func containsString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) launch(found discovery.Found) error {
@@ -570,6 +683,9 @@ func (s *Server) markUnhealthy(pluginName string, gen int) {
 			Error: &protocol.FrameError{Code: "plugin_down", Message: pluginName + " closed"},
 		})
 	}
+	// A dead plugin can no longer serve its provides: re-register the registry
+	// so its consumers degrade and routing fails honestly (ADR-0022).
+	s.reconcileConsumes()
 }
 
 func (s *Server) ensureAlive(name string) error {
@@ -599,7 +715,16 @@ func (s *Server) ensureAlive(name string) error {
 		return nil
 	}
 	s.mu.Unlock()
-	return s.launch(found)
+	if err := s.launch(found); err != nil {
+		return err
+	}
+	// The revived plugin may now satisfy consumes and its tools may differ
+	// after the crash-restart: reconcile the registry and re-discover tools.
+	go func() {
+		s.reconcileConsumes()
+		_ = s.discoverTools()
+	}()
+	return nil
 }
 
 func (s *Server) handleFromPlugin(from string, f *protocol.Frame) {
@@ -874,20 +999,6 @@ func (s *Server) routeToolsFromPlugin(from string, f *protocol.Frame) {
 		}
 		owner, ok := s.toolsOwnerFor(in.Name)
 		if !ok {
-			// Fallback: try every provider (tool list may be stale after crash-restart).
-			s.mu.Lock()
-			providers := append([]string(nil), s.toolsProviders...)
-			s.mu.Unlock()
-			for _, name := range providers {
-				if name == from {
-					continue
-				}
-				if payload, err := s.CallByPlugin(name, ToolsCap, "call", f.Payload); err == nil {
-					res.Payload = payload
-					_ = s.writeTo(from, res)
-					return
-				}
-			}
 			res.Error = &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
 			_ = s.writeTo(from, res)
 			return
@@ -2068,7 +2179,7 @@ func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
 		}
 		out.Mounted = append(out.Mounted, p.Manifest.Name)
 	}
-	s.softCheckConsumes(toLaunch)
+	s.reconcileConsumes()
 	if err := s.discoverTools(); err != nil {
 		fmt.Fprintf(os.Stderr, "ensurePlugins: discoverTools: %v\n", err)
 	}

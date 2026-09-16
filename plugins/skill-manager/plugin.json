@@ -1,8 +1,11 @@
 {
   "name": "skill-manager",
   "version": "0.1.0",
-  "protocol": 3,
-  "provides": ["tools", "skills"],
+  "protocol": 4,
+  "provides": [
+    "tools",
+    "skills"
+  ],
   "consumes": [],
   "entry": "skill-manager.exe",
   "description": "Discover and load Workspace skills; expand $skill triggers"

@@ -60,9 +60,15 @@ func (cp *commandPlane) refresh() error {
 			cp.manifests[name] = m
 		}
 	}
-	// Broadcast config.reload so running plugins re-read disk config (ADR / plugin-config).
-	// Plugins without the method fail the Frame; that is expected and ignored.
+	// Broadcast config.reload only to Plugins that declared the config hostFace
+	// (ADR-0027). Failures are surfaced instead of swallowed: the command tells
+	// the user which Plugin failed to reload, so config drift stays visible.
+	var failed []string
 	for _, name := range cp.mounted {
+		m, ok := cp.manifests[name]
+		if !ok || !hasHostFace(m, "config") {
+			continue
+		}
 		out, err := cp.srv.Call(name, &protocol.Frame{
 			V:       protocol.Version,
 			Type:    protocol.TypeReq,
@@ -71,10 +77,22 @@ func (cp *commandPlane) refresh() error {
 			Payload: json.RawMessage(`{}`),
 		})
 		if err != nil || (out != nil && out.Error != nil) {
-			continue
+			failed = append(failed, name)
 		}
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("config.reload failed for: %s", strings.Join(failed, ", "))
+	}
 	return nil
+}
+
+func hasHostFace(m plugin.Manifest, face string) bool {
+	for _, f := range m.HostFaces {
+		if f == face {
+			return true
+		}
+	}
+	return false
 }
 
 // handle runs a slash line for the CLI (prints to stdout).

@@ -690,6 +690,17 @@ func main() {
 		return json.RawMessage(`{"ok":true}`), nil
 	})
 
+	// agent-presets: the public contract for Agent Scheme observation
+	// (ADR-0027). The Plugin Graph reads defaultScheme + scheme dependsPlugins
+	// through this Capability instead of Host reaching into agent config.
+	a.s.Handle("agent-presets", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		cfg := loadConfig()
+		return marshal(map[string]any{
+			"defaultScheme": cfg.DefaultScheme,
+			"schemes":       cfg.Schemes,
+		}), nil
+	})
+
 	a.s.Handle("config", "get", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		return handleConfigCap("get", req.Payload)
 	})

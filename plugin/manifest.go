@@ -107,12 +107,25 @@ type Manifest struct {
 	Autostart bool `json:"autostart,omitempty"`
 	// DependsOn names other Plugins to pull into the mount closure (ADR-0021).
 	DependsOn []string `json:"dependsOn,omitempty"`
+	// HostFaces are Host-addressed faces served by this Plugin (ADR-0027):
+	// config | commands | ui. Unlike provides they are not Capabilities —
+	// every Plugin may implement them, and Host addresses them by plugin name.
+	HostFaces []string `json:"hostFaces,omitempty"`
 }
 
 // CurrentProtocol is the highest plugin.json "protocol" (manifest + UI
 // contract, ADR-0012) this Host accepts. It is not the Frame wire version —
-// Frame.V carries protocol.Version.
-const CurrentProtocol = 3
+// Frame.V carries protocol.Version. Protocol 4 carries hostFaces (ADR-0027).
+const CurrentProtocol = 4
+
+// ValidHostFace reports whether name is a declared hostFace (ADR-0027).
+func ValidHostFace(name string) bool {
+	switch name {
+	case "config", "commands", "ui":
+		return true
+	}
+	return false
+}
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
@@ -178,6 +191,16 @@ func (m *Manifest) Validate() error {
 		if strings.TrimSpace(c) == "" {
 			return fmt.Errorf("consumes[%d] is empty", i)
 		}
+	}
+	seenFaces := map[string]bool{}
+	for i, f := range m.HostFaces {
+		if !ValidHostFace(f) {
+			return fmt.Errorf("hostFaces[%d] %q must be config|commands|ui", i, f)
+		}
+		if seenFaces[f] {
+			return fmt.Errorf("hostFaces[%d] %q duplicated", i, f)
+		}
+		seenFaces[f] = true
 	}
 	for i, d := range m.DependsOn {
 		if strings.TrimSpace(d) == "" {

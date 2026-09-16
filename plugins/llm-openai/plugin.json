@@ -1,9 +1,11 @@
 {
   "name": "llm-openai",
   "version": "0.2.0",
-  "protocol": 3,
+  "protocol": 4,
   "autostart": true,
-  "provides": ["llm"],
+  "provides": [
+    "llm"
+  ],
   "consumes": [],
   "entry": "llm-openai.exe",
   "timeoutMs": 120000,
@@ -19,7 +21,15 @@
     "entry": "main.js",
     "trust": "full",
     "mounts": [
-      { "page": "main", "slot": "statusbar", "component": "llm-openai-status" }
+      {
+        "page": "main",
+        "slot": "statusbar",
+        "component": "llm-openai-status"
+      }
     ]
-  }
+  },
+  "hostFaces": [
+    "config",
+    "commands"
+  ]
 }

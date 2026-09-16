@@ -1,8 +1,10 @@
 {
   "name": "session",
   "version": "0.4.0",
-  "protocol": 3,
-  "provides": ["session"],
+  "protocol": 4,
+  "provides": [
+    "session"
+  ],
   "consumes": [],
   "entry": "session.exe",
   "autostart": true,
@@ -38,10 +40,30 @@
     "entry": "main.js",
     "trust": "full",
     "mounts": [
-      { "page": "main", "slot": "sidebar", "component": "session-rail" },
-      { "page": "main", "slot": "chat", "component": "session-view" },
-      { "page": "main", "slot": "trace", "component": "session-trace" },
-      { "page": "main", "slot": "statusbar", "component": "session-status" }
+      {
+        "page": "main",
+        "slot": "sidebar",
+        "component": "session-rail"
+      },
+      {
+        "page": "main",
+        "slot": "chat",
+        "component": "session-view"
+      },
+      {
+        "page": "main",
+        "slot": "trace",
+        "component": "session-trace"
+      },
+      {
+        "page": "main",
+        "slot": "statusbar",
+        "component": "session-status"
+      }
     ]
-  }
+  },
+  "hostFaces": [
+    "config",
+    "commands"
+  ]
 }
