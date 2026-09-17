@@ -94,9 +94,14 @@ func indexOf(s, sub string) int {
 }
 
 // hostEnv isolates the Session Plugin data dir per test (avoids shared ./sessions pollution).
+// L0_TEST_COMPAT=1 enables the test-only domain argv shims (ADR-0030 removed
+// those flags from product startup).
 func hostEnv(t *testing.T) []string {
 	t.Helper()
-	return append(os.Environ(), "SESSION_DATA_DIR="+t.TempDir())
+	return append(os.Environ(),
+		"SESSION_DATA_DIR="+t.TempDir(),
+		"L0_TEST_COMPAT=1",
+	)
 }
 
 // stubLLMMain is a deterministic test-only LLM: streams chunks, then one assistant reply.

@@ -128,8 +128,8 @@ func TestLLMOpenAIRealTurn(t *testing.T) {
 		"-session-derive",
 	)
 	cmd.Env = hostEnv(t)
-	// Ensure env does not override fixture config.
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=", "OPENAI_BASE_URL=", "OPENAI_MODEL=")
+	// Ensure env does not override fixture config (keep L0_TEST_COMPAT + SESSION_DATA_DIR).
+	cmd.Env = append(cmd.Env, "OPENAI_API_KEY=", "OPENAI_BASE_URL=", "OPENAI_MODEL=")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("llm-openai turn: %v\n%s", err, out)
@@ -165,7 +165,7 @@ func TestLLMOpenAIForwardsTools(t *testing.T) {
 		"-assembly", cfg,
 		"-turn", "use tools",
 	)
-	cmd.Env = filterEnv(os.Environ(), "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
+	cmd.Env = filterEnv(hostEnv(t), "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("tools forward turn: %v\n%s", err, out)
