@@ -1,13 +1,13 @@
 # Host ↔ Plugin 边界判据
 
-**Status: accepted**
+**Status: accepted（被 ADR-0030 Tightens）** — L1 对 Host 与 Medium 同时禁止；本 ADR 的 L0/L2 分层与三条机械规则仍有效。
 
 Host 只提供通用方法，不对任何插件做特化。为让「特化」可机械判定（而非靠直觉），按下表划分知识边界：
 
 | 层 | 内容 | Host |
 |----|------|------|
 | L0 通用路由原语 | Frame 转发与 `fwd-id`、pending 表、超时、进程生命周期、`host.*` 横切面、发送原语 | 应拥有 |
-| L1 公开契约能力名 | `session` `llm` `loop` `tools` `context` `system-prompt` `policy` `skills` `presentation` 及各自方法 | 可作为消费者调用；名字是公开契约，任何插件均可实现 |
+| L1 公开契约能力名 | `session` `llm` `loop` `tools` `context` `system-prompt` `policy` `skills` `presentation` 及各自方法 | **不得调用、不得解析、不得出现常量名**（ADR-0030 收紧；原「可作为消费者调用」作废） |
 | L2 插件私有 | 插件名字面量、payload 字段语义、业务决策、展示规则 | 绝不能知道 |
 
 `config` / `commands` / `ui` 不属于以上任何一层：它们是**面名**（hostFaces），按插件寻址而非按能力名路由，由 ADR-0027 单独管辖。Host 知道面名不违反本判据。

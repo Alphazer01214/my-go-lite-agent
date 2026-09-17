@@ -9,7 +9,7 @@
 _Avoid_: 扩展、模块、组件（除非特指 Go module）
 
 **Host**:
-插件树的宿主进程：Discovery、Assembly、生命周期、Frame 路由、Session 不变量与 `agent.request`/`agent.inject`。不实现 Agent Loop；装配/插件错误可见但进程继续。
+插件树的宿主进程：Discovery、Assembly、生命周期、按**插件名**的 Frame 转发（`to` + 不透明 payload）、通用事件/应答总线、`host.ensurePlugins` 与 hostFaces。不认识能力名，不解析领域 payload，不实现 Agent Loop；装配/插件错误可见但进程继续。Session 不变量、锁/cancel 与 tools 合并不在 Host（ADR-0030）。
 _Avoid_: 宿主程序、主程序、kernel（正文可用，规范名词是 Host）
 
 **Assembly**:
@@ -141,7 +141,7 @@ _Avoid_: 附加上下文、注入内容（规范名词是 Additional Contexts）
 _Avoid_: 智能体实例、机器人、bot、agent 组装（规范名词是 Agent）
 
 **Agent Loop**:
-驱动 Turn/Step 的执行策略：组装 Model Context、调用 LLM、调度工具、写回 Session Log 边界事实（turn/step/request_header/llm_usage）。由提供 `loop` 的 Agent 插件实现；Host 只做路由、锁/Cancel/状态与 `agent.request`/`agent.inject` 横切面。
+驱动 Turn/Step 的执行策略：组装 Model Context、调用 LLM、调度工具、写回 Session Log 边界事实（turn/step/request_header/llm_usage）。由提供 `loop` 的 Agent 插件实现；Host 只按插件名转发 Frame（ADR-0030），锁/Cancel 状态由 loop 插件自持。
 _Avoid_: 主循环、orchestrator、执行器（规范名词是 Agent Loop，简称 Loop）
 
 **Turn**:
