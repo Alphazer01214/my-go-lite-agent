@@ -1,4 +1,5 @@
-// Command consumer is a fixture Plugin: it provides demo and calls another Capability only through Host.
+// Command consumer is a fixture Plugin: it provides demo and calls another
+// Plugin only through Host point-named addressing (ADR-0030 Frame.to).
 package main
 
 import (
@@ -10,17 +11,17 @@ import (
 func main() {
 	s := pluginsdk.New()
 	s.Handle("demo", "invoke", func(req *pluginsdk.Request) (json.RawMessage, error) {
-		capName := "echo"
+		target := "echo"
 		var body struct {
 			Cap string `json:"cap"`
 		}
 		if len(req.Payload) > 0 {
 			_ = json.Unmarshal(req.Payload, &body)
 			if body.Cap != "" {
-				capName = body.Cap
+				target = body.Cap
 			}
 		}
-		return s.Call(capName, "echo", json.RawMessage(`{"via":"host"}`))
+		return s.CallTo(target, "echo", "echo", json.RawMessage(`{"via":"host"}`))
 	})
 	_ = s.Serve()
 }

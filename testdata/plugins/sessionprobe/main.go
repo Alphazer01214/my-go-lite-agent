@@ -13,13 +13,13 @@ func main() {
 	s := pluginsdk.New()
 	s.Handle("demo", "invoke", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		for _, id := range []string{"alpha", "beta"} {
-			if _, err := s.Call("session", "create", mustJSON(map[string]any{
+			if _, err := s.CallTo("session", "session", "create", mustJSON(map[string]any{
 				"sessionId": id,
 			})); err != nil {
 				return nil, err
 			}
 		}
-		if _, err := s.Call("session", "append", mustJSON(map[string]any{
+		if _, err := s.CallTo("session", "session", "append", mustJSON(map[string]any{
 			"sessionId": "alpha",
 			"type":      "message",
 			"role":      "user",
@@ -27,7 +27,7 @@ func main() {
 		})); err != nil {
 			return nil, err
 		}
-		if _, err := s.Call("session", "append", mustJSON(map[string]any{
+		if _, err := s.CallTo("session", "session", "append", mustJSON(map[string]any{
 			"sessionId": "beta",
 			"type":      "message",
 			"role":      "user",
@@ -35,11 +35,11 @@ func main() {
 		})); err != nil {
 			return nil, err
 		}
-		rawA, err := s.Call("session", "derive", mustJSON(map[string]any{"sessionId": "alpha"}))
+		rawA, err := s.CallTo("session", "session", "derive", mustJSON(map[string]any{"sessionId": "alpha"}))
 		if err != nil {
 			return nil, err
 		}
-		rawB, err := s.Call("session", "derive", mustJSON(map[string]any{"sessionId": "beta"}))
+		rawB, err := s.CallTo("session", "session", "derive", mustJSON(map[string]any{"sessionId": "beta"}))
 		if err != nil {
 			return nil, err
 		}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/render/mdansi"
 	"github.com/tomori/my-go-lite-agent/serve"
 )
@@ -260,9 +261,9 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	// diagnostics must not insert session_meta facts that shift seq coverage.
 	if opts.workspace != "" && opts.turnInput != nil && *opts.turnInput != "" {
 		// Soft: session plugin may be absent in bare assemblies.
-		_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+		_, _ = callPlugin(srv, "session", "session", "create", map[string]any{
 			"sessionId": "default", "workspace": opts.workspace,
-		}))
+		})
 	}
 	serve.RegisterApproval(srv, cliToolApproval)
 
@@ -273,7 +274,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		}
 		last := 0
 		for _, fact := range facts {
-			out, err := srv.CallByCap(serve.SessionCap, "append", serve.MarshalPayload(fact))
+			out, err := callPlugin(srv, "session", "session", "append", fact)
 			if err != nil {
 				return err
 			}
@@ -319,7 +320,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		if opts.frameMethod != nil && *opts.frameMethod != "" {
 			methodName = *opts.frameMethod
 		}
-		out, err := srv.CallByCap(capName, methodName, rawPayload)
+		out, err := srv.CallByPlugin(*opts.invokePlugin, capName, methodName, rawPayload)
 		if err != nil {
 			return fmt.Errorf("invoke %s: %w", *opts.invokePlugin, err)
 		}
@@ -330,7 +331,7 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		r := &turnRenderer{}
 		restore := wireRenderer(srv, r)
 		r.begin()
-		out, err := srv.RunTurn(*opts.turnInput)
+		out, err := runLoopTurn(srv, "", *opts.turnInput)
 		if err != nil {
 			r.end("")
 			restore()
@@ -346,32 +347,32 @@ func runSessionAgent(opts sessionAgentOpts) error {
 		for i, name := range out.ToolCalls {
 			fmt.Printf("tool_call[%d]=%s\n", i, name)
 		}
-		if u, err := srv.CallByCap("context", "usage", json.RawMessage(`{}`)); err == nil && len(u) > 0 {
+		if u, err := callPlugin(srv, "context-manager", "context", "usage", map[string]any{}); err == nil && len(u) > 0 {
 			body, _ := json.Marshal(json.RawMessage(u))
 			fmt.Printf("context usage=%s\n", body)
 		}
 	}
 
 	if *opts.derive {
-		out, err := srv.CallByCap(serve.SessionCap, "derive", json.RawMessage(`{}`))
+		out, err := callPlugin(srv, "session", "session", "derive", map[string]any{})
 		if err != nil {
 			return err
 		}
 		var res struct {
-			Messages []serve.Message `json:"messages"`
+			Messages []pluginsdk.Message `json:"messages"`
 		}
 		if len(out) > 0 {
 			_ = json.Unmarshal(out, &res)
 		}
 		if res.Messages == nil {
-			res.Messages = []serve.Message{}
+			res.Messages = []pluginsdk.Message{}
 		}
 		body, _ := json.Marshal(res.Messages)
 		fmt.Printf("derive ok messages=%s\n", body)
 	}
 
 	if *opts.query {
-		out, err := srv.CallByCap(serve.SessionCap, "query", serve.MarshalPayload(map[string]any{"afterSeq": 0, "limit": 0}))
+		out, err := callPlugin(srv, "session", "session", "query", map[string]any{"afterSeq": 0, "limit": 0})
 		if err != nil {
 			return err
 		}
@@ -389,18 +390,18 @@ func runSessionAgent(opts sessionAgentOpts) error {
 	}
 
 	if opts.contextList != nil && *opts.contextList > 0 {
-		out, err := srv.CallByCap("context", "listContext", serve.MarshalPayload(map[string]any{"n": *opts.contextList}))
+		out, err := callPlugin(srv, "context-manager", "context", "listContext", map[string]any{"n": *opts.contextList})
 		if err != nil {
 			return err
 		}
 		var res struct {
-			Messages []serve.Message `json:"messages"`
+			Messages []pluginsdk.Message `json:"messages"`
 		}
 		if len(out) > 0 {
 			_ = json.Unmarshal(out, &res)
 		}
 		if res.Messages == nil {
-			res.Messages = []serve.Message{}
+			res.Messages = []pluginsdk.Message{}
 		}
 		body, _ := json.Marshal(res.Messages)
 		fmt.Printf("context list count=%d messages=%s\n", len(res.Messages), body)

@@ -209,12 +209,8 @@ func (s *Server) ensureAlive(name string) error {
 	if err := s.launch(found); err != nil {
 		return err
 	}
-	// The revived plugin may now satisfy consumes and its tools may differ
-	// after the crash-restart: reconcile the registry and re-discover tools.
-	go func() {
-		s.reconcileConsumes()
-		_ = s.discoverTools()
-	}()
+	// The revived plugin may now satisfy consumes: reconcile the registry.
+	go s.reconcileConsumes()
 	return nil
 }
 

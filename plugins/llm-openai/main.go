@@ -260,7 +260,7 @@ func noteUsage(s *pluginsdk.Server, sessionID string, usage *Usage) {
 	if err != nil {
 		return
 	}
-	_, _ = s.Call("context", "noteUsage", body)
+	_, _ = s.CallTo("context-manager", "context", "noteUsage", body)
 }
 
 func complete(cfg config, reqID string, s *pluginsdk.Server, sessionID string, messages []chatMessage, tools []chatTool) (json.RawMessage, error) {
@@ -476,7 +476,7 @@ func appendReasoningFact(s *pluginsdk.Server, sessionID, content string) {
 	if err != nil {
 		return
 	}
-	_, _ = s.Call("session", "append", payload)
+	_, _ = s.CallTo("session", "session", "append", payload)
 }
 
 func configPath() string {

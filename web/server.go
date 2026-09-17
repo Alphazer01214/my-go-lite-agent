@@ -65,19 +65,17 @@ type Server struct {
 	sessID string
 	// defaultWorkspace is applied to new Sessions when the client omits one.
 	defaultWorkspace string
-	// pending tool approvals (policy.ask → Render Medium).
+	// pending tool approvals (policy.ask 鈫?Render Medium).
 	apprMu   sync.Mutex
 	apprNext int
 	apprWait map[string]chan bool
 }
 
-// currentSession resolves the Current Session from the session Capability
-// (ADR-0012), falling back to the medium cache when the Capability is absent.
-// CallByCap returns the plugin's raw payload ({sessionId}), not the /api/call
-// {ok,result} envelope.
+// currentSession resolves the Current Session from the session plugin
+// (point-named, ADR-0030), falling back to the medium cache when absent.
 func (s *Server) currentSession() string {
 	if s.opts.Srv != nil {
-		out, err := s.opts.Srv.CallByCap(serve.SessionCap, "current", json.RawMessage(`{}`))
+		out, err := s.opts.Srv.CallByPlugin("session", "session", "current", json.RawMessage(`{}`))
 		if err == nil && out != nil {
 			var res struct {
 				SessionID string `json:"sessionId"`
@@ -98,7 +96,7 @@ func (s *Server) setCurrentSession(id string) {
 	s.sessMu.Unlock()
 	if s.opts.Srv != nil && id != "" {
 		payload, _ := json.Marshal(map[string]string{"sessionId": id})
-		_, _ = s.opts.Srv.CallByCap(serve.SessionCap, "select", payload)
+		_, _ = s.opts.Srv.CallByPlugin("session", "session", "select", payload)
 	}
 }
 
@@ -137,7 +135,7 @@ func New(opts Options) *Server {
 				s.broadcast(Event{Topic: e.Topic, Data: e.Data})
 			},
 		})
-		// policy.ask → Web Medium (ADR-0019/0029): register the approval face;
+		// policy.ask 鈫?Web Medium (ADR-0019/0029): register the approval face;
 		// CLI and Web can both be registered without overwriting each other.
 		serve.RegisterApproval(opts.Srv, s.requestToolApproval)
 		// Seed replay with panels emitted during mount (before Subscribe).
@@ -317,19 +315,11 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = s.currentSession()
 	}
-	// Parallel turns across Sessions; reject only when THIS Session is busy.
-	if s.opts.Srv.IsRunningOn(sid) {
-		writeJSON(w, map[string]any{
-			"ok":               false,
-			"error":            "this session already has a running turn",
-			"runningSessionId": sid,
-			"sessionId":        sid,
-		})
-		return
-	}
 	// Run turn asynchronously so the request returns; events stream on /events.
+	// Busy/lock enforcement lives in the loop plugin (ADR-0030).
 	go func() {
-		_, err := s.opts.Srv.RunTurnOn(sid, in.Text)
+		payload, _ := json.Marshal(map[string]any{"input": in.Text, "sessionId": sid, "allowSubagent": true})
+		_, err := s.opts.Srv.CallByPlugin("agent", "loop", "turn", payload)
 		if err != nil {
 			s.broadcast(Event{Topic: "status", Data: map[string]string{
 				"status":    "error:" + err.Error(),
@@ -387,7 +377,7 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 	payload, _ := json.Marshal(map[string]any{
 		"sessionId": id, "origin": "web", "workspace": workspace,
 	})
-	if _, err := s.opts.Srv.CallByCap(serve.SessionCap, "create", payload); err != nil {
+	if _, err := s.opts.Srv.CallByPlugin("session", "session", "create", payload); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -420,7 +410,7 @@ func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) 
 	// Session metadata including Workspace is read via the public session.info
 	// contract; setting Workspace upserts via session.create (ADR-0020).
 	payload, _ := json.Marshal(map[string]any{"sessionId": sid, "workspace": in.Workspace})
-	if _, err := s.opts.Srv.CallByCap(serve.SessionCap, "create", payload); err != nil {
+	if _, err := s.opts.Srv.CallByPlugin("session", "session", "create", payload); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -439,10 +429,10 @@ var skipWalkDirs = map[string]bool{
 // handleWorkspaceResolve maps a folder chosen in the browser to an absolute path.
 //
 // The File System Access API (showDirectoryPicker) deliberately never reveals a
-// path — only the directory NAME. The Web Workspace (ADR-0020) needs a real
+// path 鈥?only the directory NAME. The Web Workspace (ADR-0020) needs a real
 // path. The directory walk lives in the workspace Capability provider (a
 // Plugin, ADR-0026: Host does not traverse the filesystem for plugin business);
-// this handler only relays name → {path, candidates}.
+// this handler only relays name 鈫?{path, candidates}.
 func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -460,7 +450,9 @@ func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(in.Name)})
-	out, err := s.opts.Srv.CallByCap("workspace", "resolve", payload)
+	// workspace.resolve was a Host L1 face; under ADR-0030 no provider is
+	// guaranteed — fall back to empty so the picker still works.
+	out, err := s.opts.Srv.CallByPlugin("filetools", "workspace", "resolve", payload)
 	if err != nil {
 		// No provider: fall back to "type the path" (empty result), do not fail
 		// the whole picker.
@@ -546,8 +538,8 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	status := "idle"
 	var running []string
 	if s.opts.Srv != nil {
-		status = s.opts.Srv.StatusForSession(sid)
-		running = s.opts.Srv.RunningSessions()
+		status = "idle"
+		running = nil
 	}
 	writeJSON(w, map[string]any{
 		"sessionId": sid,
@@ -562,7 +554,7 @@ func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"sessions": []any{}, "current": s.currentSession()})
 		return
 	}
-	out, err := s.opts.Srv.CallByCap(serve.SessionCap, "list", json.RawMessage(`{}`))
+	out, err := s.opts.Srv.CallByPlugin("session", "session", "list", json.RawMessage(`{}`))
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error(), "sessions": []any{}, "current": s.currentSession()})
 		return
@@ -595,7 +587,7 @@ func (s *Server) handleSessionSelect(w http.ResponseWriter, r *http.Request) {
 	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + in.SessionID, "sessionId": in.SessionID}})
 	status := "idle"
 	if s.opts.Srv != nil {
-		status = s.opts.Srv.StatusForSession(in.SessionID)
+		status = "idle"
 	}
 	writeJSON(w, map[string]any{"ok": true, "sessionId": in.SessionID, "status": status})
 }
@@ -618,7 +610,7 @@ func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {
 		sid = in.SessionID
 	}
 	// Cancel only the target Session so parallel turns keep running.
-	s.opts.Srv.CancelTurnOn(sid)
+	cancelLoop(s.opts.Srv, sid)
 	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "cancelling", "sessionId": sid}})
 	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
 }
@@ -659,8 +651,8 @@ func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "result": json.RawMessage(orEmptyJSON(out))})
 }
 
-// handleCall is LiteAgent.call: route cap.method to the plugin that provides cap.
-// Optional "plugin" targets a named Plugin directly (config settings per plugin).
+// handleCall is LiteAgent.call: point-named plugin invocation (ADR-0030).
+// Body: {to, cap, method, payload} or legacy {plugin, cap, method} for hostFaces.
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -671,33 +663,52 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		To      string          `json:"to"`
 		Cap     string          `json:"cap"`
 		Method  string          `json:"method"`
 		Payload json.RawMessage `json:"payload"`
 		Plugin  string          `json:"plugin"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Cap == "" || in.Method == "" {
-		http.Error(w, "cap and method required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	target := in.To
+	if target == "" {
+		target = in.Plugin
+	}
+	if target == "" || in.Method == "" {
+		http.Error(w, "to and method required", http.StatusBadRequest)
 		return
 	}
 	if len(in.Payload) == 0 {
 		in.Payload = json.RawMessage(`{}`)
 	}
+	capName := in.Cap
+	if capName == "" {
+		capName = target
+	}
 	var out json.RawMessage
 	var err error
-	if in.Plugin != "" {
-		// Named targeting is restricted to the plugin's declared hostFaces
-		// (config|commands|ui, ADR-0027). A non-face cap is rejected so nothing
-		// bypasses the registry.
-		out, err = serve.CallByFace(s.opts.Srv, in.Plugin, in.Cap, in.Method, in.Payload)
+	// hostFaces (config|commands|ui) go through CallByFace validation.
+	if capName == "config" || capName == "commands" || capName == "ui" {
+		out, err = serve.CallByFace(s.opts.Srv, target, capName, in.Method, in.Payload)
 	} else {
-		out, err = s.opts.Srv.CallByCap(in.Cap, in.Method, in.Payload)
+		out, err = s.opts.Srv.CallByPlugin(target, capName, in.Method, in.Payload)
 	}
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "result": json.RawMessage(orEmptyJSON(out))})
+}
+
+func cancelLoop(srv *serve.Server, sessionID string) {
+	if srv == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"sessionId": sessionID})
+	_, _ = srv.CallByPlugin("agent", "loop", "cancel", payload)
 }
 
 func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
@@ -771,20 +782,15 @@ type agentSchemeFace struct {
 	} `json:"schemes"`
 }
 
-// hostUsedCapabilities are Capabilities the Host star-routes (Agent Loop / media).
-// The Plugin Graph draws a host-uses edge for each declared-and-routed cap.
-// "system-prompt" is deliberately absent: Host never calls it — the Agent Loop
-// (agent plugin) does — so an edge here would be a fake host dependency.
-var hostUsedCapabilities = []string{
-	serve.SessionCap, serve.LLMCap, serve.ToolsCap,
-	serve.ContextCap, serve.LoopCap,
-}
+// Host no longer star-routes capabilities (ADR-0030). Graph host-uses edges
+// stay empty; provides/consumes remain declaration data only.
+var hostUsedCapabilities = []string{}
 
 // handlePlugins reports the plugin catalog and its relationship graph.
 //
 // The graph is drawn from the whole Discovery catalog, not just the live set:
 // under Autostart+dependsOn (ADR-0021) most plugins mount lazily (Agent Scheme
-// → ensurePlugins, ADR-0023), so a live-only graph would stay half-empty until
+// 鈫?ensurePlugins, ADR-0023), so a live-only graph would stay half-empty until
 // the first Turn. Every plugin node carries its state (mounted|available|
 // degraded|missing) and the Agent Scheme edges that will pull it in.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
@@ -813,7 +819,6 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 
 	live := map[string]bool{}
 	degraded := map[string]bool{}
-	toolOwner := map[string]string{}
 	reconcileGen := 0
 	registryProvides := map[string]string{}
 	if s.opts.Srv != nil {
@@ -823,14 +828,13 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		for _, n := range reg.Degraded {
 			degraded[n] = true
 		}
-		toolOwner = reg.ToolOwners
 		registryProvides = reg.Provides
 		for _, n := range s.opts.Srv.MountedPluginNames() {
 			live[n] = true
 		}
 	}
 
-	// Catalog = mount plan ∪ everything Discovery sees under -plugins.
+	// Catalog = mount plan 鈭?everything Discovery sees under -plugins.
 	byName := map[string]discovery.Found{}
 	var order []string
 	addFound := func(p discovery.Found) {
@@ -859,7 +863,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	schemeNames := []string{}
 	schemePulls := map[string][]string{} // scheme -> plugin names
 	if s.opts.Srv != nil {
-		if out, err := s.opts.Srv.CallByCap("agent-presets", "get", json.RawMessage(`{}`)); err == nil && len(out) > 0 {
+		if out, err := s.opts.Srv.CallByPlugin("agent", "agent-presets", "get", json.RawMessage(`{}`)); err == nil && len(out) > 0 {
 			var face agentSchemeFace
 			_ = json.Unmarshal(out, &face)
 			schemeName = face.DefaultScheme
@@ -951,7 +955,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		seenNode[name] = true
 	}
 
-	// Host vertex: always present — the star-router that uses Capabilities.
+	// Host vertex: always present 鈥?the star-router that uses Capabilities.
 	addNode(graphNode{ID: "host", Kind: "host", Label: "Host", State: StateMounted,
 		Description: "Plugin host: discovery, routing, session invariant, ensurePlugins"})
 
@@ -959,12 +963,6 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		p := byName[name]
 		st := stateOf(name)
 		var tools []string
-		for tool, owner := range toolOwner {
-			if owner == name {
-				tools = append(tools, tool)
-			}
-		}
-		sort.Strings(tools)
 		it := item{
 			Name: p.Manifest.Name, Version: p.Manifest.Version,
 			Description: p.Manifest.Description,
@@ -981,7 +979,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			DependsOn: p.Manifest.DependsOn,
 			Schemes:   pulledBy[name], Tools: tools,
 		}
-		// provides: plugin → capability
+		// provides: plugin 鈫?capability
 		for _, capName := range p.Manifest.Provides {
 			capID := "cap:" + capName
 			capState := StateAvailable
@@ -994,7 +992,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			addNode(graphNode{ID: capID, Kind: "capability", Label: capName, State: capState})
 			addEdge(graphEdge{From: p.Manifest.Name, To: capID, Kind: "provides", Capability: capName})
 		}
-		// consumes: capability → plugin (plugin depends on the capability)
+		// consumes: capability 鈫?plugin (plugin depends on the capability)
 		for _, need := range p.Manifest.Consumes {
 			capID := "cap:" + need
 			addNode(graphNode{ID: capID, Kind: "capability", Label: need, State: StateAvailable})
@@ -1003,18 +1001,18 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 				node.Unmet = append(node.Unmet, need)
 			}
 		}
-		// hostFaces: plugin → face (Host addresses the plugin by name, ADR-0027)
+		// hostFaces: plugin 鈫?face (Host addresses the plugin by name, ADR-0027)
 		for _, face := range p.Manifest.HostFaces {
 			faceID := "face:" + face
 			addNode(graphNode{ID: faceID, Kind: "face", Label: face, State: st})
 			addEdge(graphEdge{From: p.Manifest.Name, To: faceID, Kind: "hostface", Capability: face})
 		}
-		// dependsOn: plugin → plugin (hard pull closure)
+		// dependsOn: plugin 鈫?plugin (hard pull closure)
 		for _, dep := range p.Manifest.DependsOn {
 			ensurePluginNode(dep)
 			addEdge(graphEdge{From: p.Manifest.Name, To: dep, Kind: "depends-on"})
 		}
-		// UI mounts: plugin → slot
+		// UI mounts: plugin 鈫?slot
 		if ui := p.Manifest.UI; ui != nil && ui.Entry != "" {
 			entry := strings.TrimPrefix(p.Manifest.UI.NormalizedEntry(), "ui/")
 			var mounts []assembly.EffectiveMount
@@ -1038,7 +1036,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, m := range mounts {
 				slotID := "ui:" + m.Page + "/" + m.Slot
-				addNode(graphNode{ID: slotID, Kind: "slot", Label: m.Page + " · " + m.Slot, State: StateMounted})
+				addNode(graphNode{ID: slotID, Kind: "slot", Label: m.Page + " 路 " + m.Slot, State: StateMounted})
 				addEdge(graphEdge{
 					From: p.Manifest.Name, To: slotID, Kind: "ui-mount",
 					Page: m.Page, Slot: m.Slot, Component: m.Component,

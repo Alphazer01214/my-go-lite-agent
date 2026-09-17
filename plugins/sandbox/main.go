@@ -210,7 +210,7 @@ func confirmViaHost(s *pluginsdk.Server, tool string, args json.RawMessage, work
 		"workspace": workspace,
 		"sessionId": sessionID,
 	})
-	raw, err := s.Call("agent", "confirm", payload)
+	raw, err := s.CallTo("agent", "agent", "confirm", payload)
 	if err != nil {
 		return false
 	}

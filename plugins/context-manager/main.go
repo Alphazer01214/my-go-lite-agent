@@ -259,20 +259,22 @@ func main() {
 	st.loadBaseFile()
 
 	listTools := func() []map[string]any {
-		raw, err := s.Call("tools", "list", json.RawMessage(`{}`))
-		if err != nil {
-			return nil
+		// Fan-out over known tools plugins (Host no longer merges, ADR-0030).
+		merged := []map[string]any{}
+		for _, name := range []string{"filetools", "shelltools", "skill-manager", "webtools", "echotool"} {
+			raw, err := s.CallTo(name, "tools", "list", json.RawMessage(`{}`))
+			if err != nil {
+				continue
+			}
+			var out struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &out)
+			}
+			merged = append(merged, out.Tools...)
 		}
-		var out struct {
-			Tools []map[string]any `json:"tools"`
-		}
-		if len(raw) > 0 {
-			_ = json.Unmarshal(raw, &out)
-		}
-		if out.Tools == nil {
-			return []map[string]any{}
-		}
-		return out.Tools
+		return merged
 	}
 
 	s.Handle("system-prompt", "registerSegment", func(req *pluginsdk.Request) (json.RawMessage, error) {

@@ -200,9 +200,8 @@ func runCallPlugin(pluginsDir, assemblyPath, name string, dump bool, method stri
 	}
 	defer func() { _ = srv.Close() }()
 
-	// -call-plugin is a diagnostic surface: route by the capability name the
-	// user asked for (ADR-0027 — Host addresses capabilities, not plugin names).
-	payload, err := srv.CallByCap(name, method, json.RawMessage(`{"hello":"lifecycle"}`))
+	// -call-plugin is a diagnostic surface: address the plugin by name (L0).
+	payload, err := srv.CallByPlugin(name, name, method, json.RawMessage(`{"hello":"lifecycle"}`))
 	if err != nil {
 		return err
 	}

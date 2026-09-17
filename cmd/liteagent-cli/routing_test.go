@@ -54,7 +54,7 @@ func TestUnknownCapabilityStructuredError(t *testing.T) {
 		t.Fatalf("want error for unknown capability: %s", out)
 	}
 	s := string(out)
-	if !strings.Contains(s, "capability_unavailable") && !strings.Contains(s, "unknown capability") {
-		t.Fatalf("want structured capability error: %s", s)
+	if !strings.Contains(s, "to_required") && !strings.Contains(s, "not mounted") && !strings.Contains(s, "route_failed") {
+		t.Fatalf("want structured route error: %s", s)
 	}
 }

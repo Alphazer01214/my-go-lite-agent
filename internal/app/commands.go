@@ -68,7 +68,7 @@ func (cp *commandPlane) refresh() error {
 		if !ok || !hasHostFace(m, "config") {
 			continue
 		}
-		_, err := cp.srv.CallByCap("config", "reload", json.RawMessage(`{}`))
+		_, err := serve.CallByFace(cp.srv, name, "config", "reload", json.RawMessage(`{}`))
 		if err != nil {
 			failed = append(failed, name)
 		}
@@ -286,7 +286,7 @@ func agentSchemeLabel(srv *serve.Server) string {
 	if srv == nil {
 		return ""
 	}
-	out, err := srv.CallByCap("agent-presets", "get", json.RawMessage(`{}`))
+	out, err := srv.CallByPlugin("agent", "agent-presets", "get", json.RawMessage(`{}`))
 	if err != nil {
 		return ""
 	}

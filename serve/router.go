@@ -27,55 +27,48 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 		return
 	}
 
-	// L0 point-named addressing (ADR-0030): Frame.To is the target plugin name.
-	// Cap/Method are carried for the receiving Plugin's dispatch only.
-	if f.To != "" {
-		if f.To == from {
+	// Host cross-cutting L0 faces (ADR-0023/0030) — not domain capabilities.
+	if f.To == HostCap || f.Cap == HostCap {
+		switch f.Method {
+		case "ensurePlugins":
+			s.handleEnsurePlugins(from, f)
+		case "plugins":
+			s.handleHostPlugins(from, f)
+		default:
 			_ = s.writeTo(from, &protocol.Frame{
-				V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap, Method: f.Method,
-				Error: &protocol.FrameError{Code: "route_failed", Message: "cannot call self by name"},
+				V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap,
+				Error: &protocol.FrameError{Code: "method_not_found", Message: "no handler for host." + f.Method},
 			})
-			return
 		}
-		s.forwardTo(from, f, f.To)
 		return
 	}
 
-	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
-	// Temporary retained special case until Deferred #3 is reopened (ADR-0030).
-	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
+	// Deferred special case (ADR-0030): agent.request|inject|confirm stay on
+	// Host until #3 is reopened. Only business-cap branch allowed in Host.
+	if f.Cap == pluginsdk.AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
 		s.handleAgentFromPlugin(from, f)
 		return
 	}
 
-	// Host owns ensurePlugins (ADR-0023).
-	if f.Cap == HostCap && f.Method == "ensurePlugins" {
-		s.handleEnsurePlugins(from, f)
-		return
-	}
-
-	// Multi-provider tools (ADR-0018): merge list / route call by tool name.
-	// Scheduled for removal in Z2 (tools leave Host, ADR-0030).
-	if f.Cap == ToolsCap {
-		s.routeToolsFromPlugin(from, f)
-		return
-	}
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
-	owner, ok := s.provides[f.Cap]
-	s.mu.Unlock()
-	if !ok || owner == from {
+	// L0 point-named addressing is the only plugin-to-plugin path (ADR-0030).
+	if f.To == "" {
 		_ = s.writeTo(from, &protocol.Frame{
-			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap,
-			Error: &protocol.FrameError{Code: "capability_unavailable", Message: fmt.Sprintf("unknown capability %q", f.Cap)},
+			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+			Error: &protocol.FrameError{
+				Code:    "to_required",
+				Message: "frame.to (target plugin name) is required; Host does not route by capability",
+			},
 		})
 		return
 	}
-	s.forwardTo(from, f, owner)
+	if f.To == from {
+		_ = s.writeTo(from, &protocol.Frame{
+			V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap, Method: f.Method,
+			Error: &protocol.FrameError{Code: "route_failed", Message: "cannot call self by name"},
+		})
+		return
+	}
+	s.forwardTo(from, f, f.To)
 }
 
 // forwardTo sends f to the named plugin process with fwd-id rewriting,
@@ -89,9 +82,6 @@ func (s *Server) forwardTo(from string, f *protocol.Frame, owner string) {
 	}
 	if p := s.plugins[owner]; p != nil {
 		to = p.timeout
-	} else if _, ui := s.mountedUI[owner]; !ui {
-		// Not mounted as a process; still allow if it will be launched below
-		// via ensureAlive (process plugins only).
 	}
 	s.seq++
 	fwdID := fmt.Sprintf("fwd-%d", s.seq)
@@ -147,109 +137,7 @@ func (s *Server) forwardTo(from string, f *protocol.Frame, owner string) {
 		})
 		_ = w
 	})
-	// timer stopped in complete when pending is removed; leak-once acceptable for lite host if not stopped.
 	_ = timer
-}
-
-// routeToolsFromPlugin handles star-routed tools.list/call with multi-provider merge (ADR-0018).
-func (s *Server) routeToolsFromPlugin(from string, f *protocol.Frame) {
-	res := &protocol.Frame{
-		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
-	}
-	switch f.Method {
-	case "list":
-		payload, err := s.toolsListMerged()
-		if err != nil {
-			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
-		} else {
-			res.Payload = payload
-		}
-		_ = s.writeTo(from, res)
-	case "call":
-		var in struct {
-			Name string `json:"name"`
-		}
-		if len(f.Payload) > 0 {
-			_ = json.Unmarshal(f.Payload, &in)
-		}
-		owner, ok := s.toolsOwnerFor(in.Name)
-		if !ok {
-			res.Error = &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
-			_ = s.writeTo(from, res)
-			return
-		}
-		if owner == from {
-			// Self-call of an owned tool: execute via Call (bypass star self-block).
-			payload, err := s.callByPlugin(owner, ToolsCap, "call", f.Payload)
-			if err != nil {
-				res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
-			} else {
-				res.Payload = payload
-			}
-			_ = s.writeTo(from, res)
-			return
-		}
-		// Forward like a normal star call to the owning tools Plugin.
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			return
-		}
-		to := DefaultCallTimeout
-		if p := s.plugins[owner]; p != nil {
-			to = p.timeout
-		}
-		s.seq++
-		fwdID := fmt.Sprintf("fwd-%d", s.seq)
-		s.pending[fwdID] = &wait{
-			kind:       waitPlugin,
-			caller:     from,
-			target:     owner,
-			origID:     f.ID,
-			cap:        f.Cap,
-			method:     f.Method,
-			reqPayload: append(json.RawMessage(nil), f.Payload...),
-		}
-		s.mu.Unlock()
-		if err := s.ensureAlive(owner); err != nil {
-			s.mu.Lock()
-			delete(s.pending, fwdID)
-			s.mu.Unlock()
-			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
-			_ = s.writeTo(from, res)
-			return
-		}
-		fwd := *f
-		fwd.ID = fwdID
-		if err := s.writeTo(owner, &fwd); err != nil {
-			s.mu.Lock()
-			delete(s.pending, fwdID)
-			s.mu.Unlock()
-			res.Error = &protocol.FrameError{Code: "route_failed", Message: err.Error()}
-			_ = s.writeTo(from, res)
-			return
-		}
-		timer := time.AfterFunc(to, func() {
-			s.mu.Lock()
-			w, ok := s.pending[fwdID]
-			if ok {
-				delete(s.pending, fwdID)
-			}
-			s.mu.Unlock()
-			if !ok {
-				return
-			}
-			_ = s.writeTo(from, &protocol.Frame{
-				Type: protocol.TypeRes, ID: f.ID, Cap: f.Cap,
-				Error: &protocol.FrameError{Code: "timeout", Message: fmt.Sprintf("call to %s timed out after %s", owner, to)},
-			})
-			_ = w
-		})
-		_ = timer
-	default:
-		res.Error = &protocol.FrameError{Code: "method_not_found", Message: "unknown tools." + f.Method}
-		_ = s.writeTo(from, res)
-	}
 }
 
 func (s *Server) complete(f *protocol.Frame) {
@@ -296,10 +184,7 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	}
 	// Stream signals are relayed as-is: Host does not interpret payload fields
 	// (ADR-0026) — the Render Medium parses the public stream contract itself.
-	// Both presentation.stream (typed emitter) and the legacy llm.chunk signal
-	// are forwarded so external Agents and test stubs stay live.
-	if (f.Cap == PresentationCap && f.Method == PresentationStreamMethod) ||
-		(f.Cap == LLMCap && f.Method == LLMChunkMethod) {
+	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod {
 		s.publish(Event{Topic: "stream", Data: f.Payload})
 	}
 	if f.ID == "" {
@@ -386,6 +271,37 @@ func (s *Server) rejectPanel(from, reason string) {
 	}})
 }
 
+// handleHostPlugins returns the live mount snapshot (L0 observability).
+// Payload shape: {plugins:[{name, provides:[...], healthy, ui}]}
+func (s *Server) handleHostPlugins(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method, To: HostCap,
+	}
+	s.mu.Lock()
+	type plug struct {
+		Name     string   `json:"name"`
+		Provides []string `json:"provides,omitempty"`
+		Healthy  bool     `json:"healthy"`
+		UI       bool     `json:"ui,omitempty"`
+	}
+	out := struct {
+		Plugins []plug `json:"plugins"`
+	}{Plugins: []plug{}}
+	for name, p := range s.plugins {
+		item := plug{Name: name, Healthy: p != nil && p.healthy}
+		if p != nil {
+			item.Provides = append([]string(nil), p.found.Manifest.Provides...)
+		}
+		out.Plugins = append(out.Plugins, item)
+	}
+	for name := range s.mountedUI {
+		out.Plugins = append(out.Plugins, plug{Name: name, UI: true, Healthy: true})
+	}
+	s.mu.Unlock()
+	res.Payload = MarshalPayload(out)
+	_ = s.writeTo(from, res)
+}
+
 // handleEnsurePlugins mounts discovered plugins by name (and their dependsOn closure).
 func (s *Server) handleEnsurePlugins(from string, f *protocol.Frame) {
 	res := &protocol.Frame{
@@ -462,9 +378,6 @@ func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
 		out.Mounted = append(out.Mounted, p.Manifest.Name)
 	}
 	s.reconcileConsumes()
-	if err := s.discoverTools(); err != nil {
-		fmt.Fprintf(os.Stderr, "ensurePlugins: discoverTools: %v\n", err)
-	}
 	return out, nil
 }
 

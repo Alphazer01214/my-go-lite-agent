@@ -10,7 +10,6 @@ import (
 
 	"github.com/tomori/my-go-lite-agent/assembly"
 	"github.com/tomori/my-go-lite-agent/layout"
-	"github.com/tomori/my-go-lite-agent/serve"
 	"github.com/tomori/my-go-lite-agent/web"
 )
 
@@ -69,9 +68,9 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 		defaultWS = cwd
 	}
 	// default Workspace is the Session 初值 (ADR-0020), not a Host path walk.
-	_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+	_, _ = callPlugin(srv, "session", "session", "create", map[string]any{
 		"sessionId": "default", "workspace": defaultWS,
-	}))
+	})
 
 	probeCommandFaces(srv, plan.Mounted)
 	cp := newCommandPlane(srv, pluginsDir, plan)

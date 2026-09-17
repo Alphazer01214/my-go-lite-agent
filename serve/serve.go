@@ -1,4 +1,4 @@
-// Package serve keeps mounted Plugins alive and routes Capabilities star-through Host.
+// Package serve keeps mounted Plugins alive and forwards Frames by plugin name (ADR-0030).
 package serve
 
 import (
@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/discovery"
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -20,15 +19,11 @@ const DefaultCallTimeout = 30 * time.Second
 // DefaultShutdownGrace is how long Close waits after stdin EOF before killing.
 const DefaultShutdownGrace = 2 * time.Second
 
-// Server owns Plugin processes and the Capability registry.
+// Server owns Plugin processes and the lifecycle registry.
 type Server struct {
 	mu       sync.Mutex
 	plugins  map[string]*proc
 	provides map[string]string
-	// toolsProviders lists Plugins that provide the multi-owner tools Capability (ADR-0018).
-	toolsProviders []string
-	// toolOwners maps a tool name to the Plugin that registered it via tools.list.
-	toolOwners map[string]string
 	// catalog is the Discovery result (all known plugins) for ensurePlugins (ADR-0023).
 	catalog discovery.Result
 	// pluginsDir lets ensurePlugins re-scan when the catalog is stale (new binaries on disk).
@@ -46,9 +41,6 @@ type Server struct {
 	cards        []PresentationCard
 	panels       []PanelOp
 	subs         []*Subscriber
-	// turnStates serializes turns per Session id (parallel across sessions).
-	turnStatesMu sync.Mutex
-	turnStates   map[string]*sessionTurn
 	job          *jobHolder
 	// approvals are the registered Render Medium faces for policy.ask
 	// (agent.confirm, ADR-0029). All registered faces are asked in parallel;
@@ -102,32 +94,19 @@ func (s *Server) DegradedNames() []string {
 	return names
 }
 
-// ToolOwners returns a copy of the tool-name → providing-plugin map (ADR-0018),
-// for observability surfaces such as the Web plugin graph.
-func (s *Server) ToolOwners() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make(map[string]string, len(s.toolOwners))
-	for k, v := range s.toolOwners {
-		out[k] = v
-	}
-	return out
-}
-
 // Start launches every mounted Plugin, reconciles consumes, and builds the
-// Capability registry. Soft-fail (ADR-0017): a single Plugin launch failure
-// never takes down the whole Host — the failure is surfaced on stderr and the
-// remaining Plugins still start. Capability conflicts and tool discovery
-// errors are likewise visible but non-fatal.
+// provides registry (observability / degraded only — routing is by plugin name).
+// Soft-fail (ADR-0017): a single Plugin launch failure never takes down the
+// whole Host — the failure is surfaced on stderr and the remaining Plugins
+// still start. Capability conflicts are likewise visible but non-fatal.
 func Start(mounted []discovery.Found) (*Server, error) {
 	s := &Server{
-		plugins:    make(map[string]*proc, len(mounted)),
-		provides:   make(map[string]string),
-		toolOwners: make(map[string]string),
-		pending:    make(map[string]*wait),
-		gen:        make(map[string]int),
-		mountedUI:  make(map[string]bool),
-		degraded:   make(map[string]bool),
+		plugins:   make(map[string]*proc, len(mounted)),
+		provides:  make(map[string]string),
+		pending:   make(map[string]*wait),
+		gen:       make(map[string]int),
+		mountedUI: make(map[string]bool),
+		degraded:  make(map[string]bool),
 	}
 	job, err := newJob()
 	if err != nil {
@@ -156,9 +135,6 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		}
 	}
 	s.reconcileConsumes()
-	if err := s.discoverTools(); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: tools discovery failed: %v\n", err)
-	}
 	return s, nil
 }
 
@@ -209,54 +185,6 @@ func (s *Server) CallByPlugin(pluginName, cap, method string, payload json.RawMe
 	return s.callByPlugin(pluginName, cap, method, payload)
 }
 
-// CallByCap routes cap.method to the Plugin that provides cap.
-// For tools (multi-provider, ADR-0018), list merges and call routes by tool name.
-// DEPRECATED for Medium/plugin use under ADR-0030: prefer CallByPlugin / Frame.To.
-// Still used during the Z1→Z2 transition and by tests.
-func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
-	if cap == ToolsCap {
-		if method == "list" {
-			return s.toolsListMerged()
-		}
-		if method == "call" {
-			var in struct {
-				Name string `json:"name"`
-			}
-			if len(payload) > 0 {
-				_ = json.Unmarshal(payload, &in)
-			}
-			owner, ok := s.toolsOwnerFor(in.Name)
-			if !ok {
-				return nil, &protocol.FrameError{Code: "unknown_tool", Message: "unknown tool " + in.Name}
-			}
-			return s.callByPlugin(owner, ToolsCap, method, payload)
-		}
-	}
-	s.mu.Lock()
-	owner, ok := s.provides[cap]
-	s.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("no plugin provides %q", cap)
-	}
-	if len(payload) == 0 {
-		payload = json.RawMessage(`{}`)
-	}
-	out, err := s.call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     cap,
-		Method:  method,
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if out.Error != nil {
-		return nil, out.Error
-	}
-	return out.Payload, nil
-}
-
 // MarshalPayload JSON-encodes v for a Call payload.
 func MarshalPayload(v any) json.RawMessage {
 	b, err := json.Marshal(v)
@@ -265,22 +193,3 @@ func MarshalPayload(v any) json.RawMessage {
 	}
 	return b
 }
-
-// Capability names: aliases of the pluginsdk contract (ADR-0016/0026).
-// Host references these instead of literal capability names so plugin
-// directory names never appear in Host code.
-const (
-	SessionCap      = pluginsdk.SessionCap
-	AgentCap        = pluginsdk.AgentCap
-	LLMCap          = pluginsdk.LLMCap
-	SystemPromptCap = pluginsdk.SystemPromptCap
-	ContextCap      = pluginsdk.ContextCap
-	LoopCap         = pluginsdk.LoopCap
-	ToolsCap        = pluginsdk.ToolsCap
-)
-
-// LLMChunkMethod is the evt method LLM Plugins use to stream a delta.
-const LLMChunkMethod = "chunk"
-
-// LLMCompleteMethod is the req/res method LLM Plugins implement.
-const LLMCompleteMethod = "complete"

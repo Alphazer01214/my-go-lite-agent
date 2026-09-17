@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
-// callByCapOwner routes cap.method to its unique owner (internal helper for
-// the Host's own contract consumption; public Medium callers use CallByCap).
+// callByCapOwner looks up the unique provides owner and point-names it
+// (Host-internal helper for the deferred agent.* special case only).
 func (s *Server) callByCapOwner(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	s.mu.Lock()
 	owner, ok := s.provides[cap]
@@ -16,23 +17,7 @@ func (s *Server) callByCapOwner(cap, method string, payload json.RawMessage) (js
 	if !ok {
 		return nil, fmt.Errorf("no plugin provides %q", cap)
 	}
-	if len(payload) == 0 {
-		payload = json.RawMessage(`{}`)
-	}
-	out, err := s.call(owner, &protocol.Frame{
-		V:       protocol.Version,
-		Type:    protocol.TypeReq,
-		Cap:     cap,
-		Method:  method,
-		Payload: payload,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if out.Error != nil {
-		return nil, out.Error
-	}
-	return out.Payload, nil
+	return s.callByPlugin(owner, cap, method, payload)
 }
 
 // agentDerive rebuilds Model Context through the Session Plugin's public
@@ -42,7 +27,7 @@ func (s *Server) agentDerive(sessionID string) ([]Message, error) {
 	if sessionID != "" {
 		payload = MarshalPayload(map[string]string{"sessionId": sessionID})
 	}
-	out, err := s.callByCapOwner(SessionCap, "derive", payload)
+	out, err := s.callByCapOwner(pluginsdk.SessionCap, "derive", payload)
 	if err != nil {
 		return nil, fmt.Errorf("session.derive: %w", err)
 	}
@@ -61,7 +46,7 @@ func (s *Server) agentDerive(sessionID string) ([]Message, error) {
 // agentAppend appends one fact through the Session Plugin's public
 // session.append contract and returns the new seq.
 func (s *Server) agentAppend(sessionID string, fact map[string]any) (int, error) {
-	out, err := s.callByCapOwner(SessionCap, "append", MarshalPayload(fact))
+	out, err := s.callByCapOwner(pluginsdk.SessionCap, "append", MarshalPayload(fact))
 	if err != nil {
 		return 0, fmt.Errorf("session.append: %w", err)
 	}

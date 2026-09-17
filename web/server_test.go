@@ -248,12 +248,13 @@ func TestPluginDependencyGraph(t *testing.T) {
 		}
 		return false
 	}
-	// Bipartite: plugin provides capability; Host uses that capability.
+	// Bipartite: plugin provides capability. Host no longer draws host-uses
+	// edges (ADR-0030: Host does not consume L1 capabilities).
 	if !hasEdge("session", "cap:session", "provides", "session") {
 		t.Fatalf("want session provides cap:session, edges=%+v", payload.Graph.Edges)
 	}
-	if !hasEdge("cap:session", "host", "host-uses", "session") {
-		t.Fatalf("want cap:session host-uses host, edges=%+v", payload.Graph.Edges)
+	if hasEdge("cap:session", "host", "host-uses", "session") {
+		t.Fatalf("host-uses edges must be gone under ADR-0030, edges=%+v", payload.Graph.Edges)
 	}
 	// Consumer edge: capability → plugin.
 	if !hasEdge("cap:session", "agentprobe", "consumes", "session") {

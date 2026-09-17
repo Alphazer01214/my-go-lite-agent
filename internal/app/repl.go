@@ -24,9 +24,9 @@ func runREPL(pluginsDir, assemblyPath string, dump *bool, workspace string) erro
 
 	if workspace != "" {
 		// Session 初值 (ADR-0020): soft — session plugin may be absent.
-		_, _ = srv.CallByCap(serve.SessionCap, "create", serve.MarshalPayload(map[string]any{
+		_, _ = callPlugin(srv, "session", "session", "create", map[string]any{
 			"sessionId": "default", "workspace": workspace,
-		}))
+		})
 	}
 	serve.RegisterApproval(srv, cliToolApproval)
 
@@ -93,7 +93,7 @@ func runREPLLoop(srv *serve.Server, cp *commandPlane) error {
 		if sch := agentSchemeLabel(srv); sch != "" {
 			fmt.Printf("[scheme: %s]\n", sch)
 		}
-		out, err := srv.RunTurn(line)
+		out, err := runLoopTurn(srv, "", line)
 		if err != nil {
 			r.end("")
 			restore()

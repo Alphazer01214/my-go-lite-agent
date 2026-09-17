@@ -26,7 +26,7 @@ func main() {
 		if body.Text == "" {
 			body.Text = "DYNAMIC_SEGMENT_MARKER"
 		}
-		return s.Call("system-prompt", "registerSegment", mustJSON(map[string]any{
+		return s.CallTo("context-manager", "system-prompt", "registerSegment", mustJSON(map[string]any{
 			"name":  body.Name,
 			"order": body.Order,
 			"text":  body.Text,

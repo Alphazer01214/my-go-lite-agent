@@ -210,7 +210,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 
 	// History rehydrates through the session Capability via the star route
 	// (ADR-0011): /api/history and /api/trace are both retired.
-	callBody := strings.NewReader(`{"cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
+	callBody := strings.NewReader(`{"to":"session","cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
 	hres, err := http.Post(base+"/api/call", "application/json", callBody)
 	if err != nil {
 		t.Fatal(err)

@@ -216,8 +216,8 @@ func main() {
 			return nil, err
 		}
 		// Prefer context.registerSkill (CM skills table); fall back to segment.
-		if _, err := s.Call("context", "registerSkill", payload); err != nil {
-			if _, err2 := s.Call("system-prompt", "registerSegment", payload); err2 != nil {
+		if _, err := s.CallTo("context-manager", "context", "registerSkill", payload); err != nil {
+			if _, err2 := s.CallTo("context-manager", "system-prompt", "registerSegment", payload); err2 != nil {
 				return json.Marshal(map[string]any{"ok": false, "error": err.Error()})
 			}
 		}

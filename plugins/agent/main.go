@@ -22,7 +22,7 @@ const MaxSteps = 128
 
 // MaxSubagentsPerTurn caps run_subagent spawns inside one parent Turn.
 // Subagent turns re-run the full Loop (system/tools/prepare/llm) on a child
-// Session — each spawn is roughly another complete conversation, so the
+// Session 鈥?each spawn is roughly another complete conversation, so the
 // default is deliberately tight.
 const MaxSubagentsPerTurn = 1
 
@@ -31,7 +31,7 @@ const todoToolName = "todo"
 
 // subagentToolDescription steers the model away from last-resort spawns.
 // Keep this conservative: vague copy is what made the tool look free.
-const subagentToolDescription = "LAST RESORT: spawn one focused subagent on a child session (full isolated Loop) and return its final reply. Prefer answering directly or using existing tools (read/edit/search). Use only for a self-contained subtask that benefits from a clean context — e.g. broad multi-file survey that would pollute the parent chat. Do NOT use for simple questions, single file reads, or tasks you can finish in this turn. Budget: at most once per turn."
+const subagentToolDescription = "LAST RESORT: spawn one focused subagent on a child session (full isolated Loop) and return its final reply. Prefer answering directly or using existing tools (read/edit/search). Use only for a self-contained subtask that benefits from a clean context 鈥?e.g. broad multi-file survey that would pollute the parent chat. Do NOT use for simple questions, single file reads, or tasks you can finish in this turn. Budget: at most once per turn."
 
 var subagentSchema = map[string]any{
 	"name":        subagentToolName,
@@ -128,7 +128,7 @@ type turnResult struct {
 	Messages  []message `json:"messages,omitempty"`
 }
 
-// cancelState is Host→agent cancel for an in-flight turn (ADR-0016).
+// cancelState is Host鈫抋gent cancel for an in-flight turn (ADR-0016).
 type cancelState struct {
 	mu sync.Mutex
 	m  map[string]bool
@@ -173,16 +173,134 @@ func marshal(v any) json.RawMessage {
 	return raw
 }
 
+// defaultPluginFor maps a contract capability name to the factory plugin that
+// implements it (L0 point-named addressing, ADR-0030). Overridable via config.
+var defaultPluginFor = map[string]string{
+	"session":         "session",
+	"llm":             "llm-openai",
+	"system-prompt":   "context-manager",
+	"context":         "context-manager",
+	"policy":          "sandbox",
+	"skills":          "skill-manager",
+	"project-context": "project-context",
+	"agent":           "agent",
+	"host":            "host",
+}
+
+// defaultToolsPlugins are fan-out targets for tools.list / tools.call.
+// Host no longer merges multi-provider tools (ADR-0030). Live providers are
+// discovered via host.plugins; this list is the factory fallback.
+var defaultToolsPlugins = []string{"filetools", "shelltools", "skill-manager", "webtools", "echotool", "emptytools"}
+
+func (a *agent) toolsPluginNames() []string {
+	raw, err := callToJSON(a.s, "host", "host", "plugins", map[string]any{})
+	if err != nil {
+		return defaultToolsPlugins
+	}
+	var out struct {
+		Plugins []struct {
+			Name     string   `json:"name"`
+			Provides []string `json:"provides"`
+			Healthy  bool     `json:"healthy"`
+			UI       bool     `json:"ui"`
+		} `json:"plugins"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	var names []string
+	for _, p := range out.Plugins {
+		if p.UI || !p.Healthy {
+			continue
+		}
+		for _, c := range p.Provides {
+			if c == "tools" {
+				names = append(names, p.Name)
+				break
+			}
+		}
+	}
+	if len(names) == 0 {
+		return defaultToolsPlugins
+	}
+	return names
+}
+
+func resolvePlugin(cap string) string {
+	if p, ok := defaultPluginFor[cap]; ok {
+		return p
+	}
+	return cap
+}
+
+// liveProviderFor asks Host which mounted plugin provides cap (L0 host.plugins).
+// Falls back to the factory default name when the snapshot is unavailable.
+func (a *agent) liveProviderFor(cap string) string {
+	raw, err := callToJSON(a.s, "host", "host", "plugins", map[string]any{})
+	if err != nil {
+		return resolvePlugin(cap)
+	}
+	var out struct {
+		Plugins []struct {
+			Name     string   `json:"name"`
+			Provides []string `json:"provides"`
+			Healthy  bool     `json:"healthy"`
+			UI       bool     `json:"ui"`
+		} `json:"plugins"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	def := resolvePlugin(cap)
+	for _, p := range out.Plugins {
+		if p.UI || !p.Healthy {
+			continue
+		}
+		for _, c := range p.Provides {
+			if c == cap {
+				return p.Name
+			}
+		}
+	}
+	return def
+}
+
 func callJSON(s *pluginsdk.Server, cap, method string, payload any) (json.RawMessage, error) {
+	return callToJSON(s, resolvePlugin(cap), cap, method, payload)
+}
+
+// callCapJSON resolves the live provider for cap then invokes it.
+func (a *agent) callCapJSON(cap, method string, payload any) (json.RawMessage, error) {
+	return callToJSON(a.s, a.liveProviderFor(cap), cap, method, payload)
+}
+
+func callToJSON(s *pluginsdk.Server, plugin, cap, method string, payload any) (json.RawMessage, error) {
 	raw := marshal(payload)
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
-	out, err := s.Call(cap, method, raw)
+	out, err := s.CallTo(plugin, cap, method, raw)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// toolsOwnerFor picks the plugin that listed the named tool (agent-local map).
+func (a *agent) toolsOwnerFor(tool string) string {
+	a.toolsMu.Lock()
+	defer a.toolsMu.Unlock()
+	return a.toolOwners[tool]
+}
+
+func (a *agent) rememberTools(plugin string, tools []toolSchema) {
+	a.toolsMu.Lock()
+	defer a.toolsMu.Unlock()
+	if a.toolOwners == nil {
+		a.toolOwners = map[string]string{}
+	}
+	for _, t := range tools {
+		if t.Name == "" {
+			continue
+		}
+		a.toolOwners[t.Name] = plugin
+	}
 }
 
 func (a *agent) appendOne(sessionID string, fact map[string]any) error {
@@ -194,7 +312,7 @@ func (a *agent) appendOne(sessionID string, fact map[string]any) error {
 		cp["sessionId"] = sessionID
 		fact = cp
 	}
-	_, err := callJSON(a.s, "session", "append", fact)
+	_, err := a.callCapJSON("session", "append", fact)
 	return err
 }
 
@@ -203,7 +321,7 @@ func (a *agent) deriveMessages(sessionID string) ([]message, error) {
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	raw, err := callJSON(a.s, "session", "derive", payload)
+	raw, err := a.callCapJSON("session", "derive", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +355,7 @@ func (a *agent) agentRequest(sessionID string) ([]message, error) {
 }
 
 func (a *agent) assembleSystemPrompt() string {
-	raw, err := callJSON(a.s, "system-prompt", "assemble", map[string]any{})
+	raw, err := a.callCapJSON("system-prompt", "assemble", map[string]any{})
 	if err != nil || len(raw) == 0 {
 		return ""
 	}
@@ -253,24 +371,30 @@ func (a *agent) assembleSystemPrompt() string {
 }
 
 func (a *agent) collectToolSchemas() ([]toolSchema, bool) {
-	raw, err := callJSON(a.s, "tools", "list", map[string]any{})
-	if err != nil {
-		return nil, false
+	merged := []toolSchema{}
+	foundAny := false
+	for _, name := range a.toolsPluginNames() {
+		raw, err := callToJSON(a.s, name, "tools", "list", map[string]any{})
+		if err != nil {
+			continue
+		}
+		var out struct {
+			Tools []toolSchema `json:"tools"`
+		}
+		if len(raw) > 0 && raw[0] == '[' {
+			_ = json.Unmarshal(raw, &out.Tools)
+		} else {
+			_ = json.Unmarshal(raw, &out)
+		}
+		foundAny = true
+		a.rememberTools(name, out.Tools)
+		merged = append(merged, out.Tools...)
 	}
-	var out struct {
-		Tools []toolSchema `json:"tools"`
-	}
-	if len(raw) > 0 && raw[0] == '[' {
-		_ = json.Unmarshal(raw, &out.Tools)
-	} else {
-		_ = json.Unmarshal(raw, &out)
-	}
-	// toolsOK means a tools Provider is mounted (even if it registered zero tools).
-	return out.Tools, true
+	return merged, foundAny
 }
 
 func (a *agent) llmInfoContextWindow() int {
-	raw, err := callJSON(a.s, "llm", "info", map[string]any{})
+	raw, err := a.callCapJSON("llm", "info", map[string]any{})
 	if err != nil || len(raw) == 0 {
 		return 0
 	}
@@ -289,7 +413,7 @@ func (a *agent) prepareContext(sessionID string, msgs []message, contextWindow i
 	if contextWindow > 0 {
 		payload["contextWindow"] = contextWindow
 	}
-	raw, err := callJSON(a.s, "context", "prepare", payload)
+	raw, err := a.callCapJSON("context", "prepare", payload)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -312,7 +436,7 @@ func (a *agent) maybeAutoCompact(sessionID string, msgs []message, hint map[stri
 		return
 	}
 	covers := 0
-	if raw, err := callJSON(a.s, "session", "query", map[string]any{
+	if raw, err := a.callCapJSON("session", "query", map[string]any{
 		"sessionId": sessionID, "afterSeq": 0, "limit": 0,
 	}); err == nil {
 		var q struct {
@@ -326,7 +450,7 @@ func (a *agent) maybeAutoCompact(sessionID string, msgs []message, hint map[stri
 			covers = q.Facts[n-1].Seq
 		}
 	}
-	raw, err := callJSON(a.s, "context", "compact", map[string]any{
+	raw, err := a.callCapJSON("context", "compact", map[string]any{
 		"sessionId":        sessionID,
 		"messages":         msgs,
 		"coversThroughSeq": covers,
@@ -359,7 +483,7 @@ func (a *agent) nextTurnNumber(sessionID string) int {
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	raw, err := callJSON(a.s, "session", "query", payload)
+	raw, err := a.callCapJSON("session", "query", payload)
 	if err != nil {
 		return 1
 	}
@@ -382,7 +506,7 @@ func (a *agent) nextTurnNumber(sessionID string) int {
 }
 
 func (a *agent) sessionWorkspace(sessionID string) string {
-	raw, err := callJSON(a.s, "session", "info", map[string]any{"sessionId": sessionID})
+	raw, err := a.callCapJSON("session", "info", map[string]any{"sessionId": sessionID})
 	if err != nil {
 		return ""
 	}
@@ -393,7 +517,7 @@ func (a *agent) sessionWorkspace(sessionID string) string {
 	return out.Workspace
 }
 
-// policyDecide asks the policy Capability (ADR-0019). Missing provider → allow.
+// policyDecide asks the policy Capability (ADR-0019). Missing provider 鈫?allow.
 // severity is the tool author's declared risk (low|medium|high) from tools.list.
 func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace, severity string) (string, string) {
 	payload := map[string]any{
@@ -405,7 +529,7 @@ func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, works
 	if severity != "" {
 		payload["severity"] = severity
 	}
-	raw, err := callJSON(a.s, "policy", "decide", payload)
+	raw, err := a.callCapJSON("policy", "decide", payload)
 	if err != nil {
 		return "allow", "no policy provider"
 	}
@@ -438,7 +562,7 @@ func (a *agent) confirmTool(sessionID, tool string, args json.RawMessage, worksp
 }
 
 func (a *agent) expandSkillTriggers(sessionID, workspace, input string) string {
-	raw, err := callJSON(a.s, "skills", "expand", map[string]any{
+	raw, err := a.callCapJSON("skills", "expand", map[string]any{
 		"workspace": workspace,
 		"text":      input,
 	})
@@ -460,7 +584,7 @@ func (a *agent) loadProjectContext(workspace, extra string) string {
 	if workspace == "" {
 		return extra
 	}
-	raw, err := callJSON(a.s, "project-context", "load", map[string]any{"workspace": workspace})
+	raw, err := a.callCapJSON("project-context", "load", map[string]any{"workspace": workspace})
 	if err != nil {
 		return extra
 	}
@@ -479,7 +603,7 @@ func (a *agent) loadProjectContext(workspace, extra string) string {
 		"order": 30,
 		"text":  block,
 	})
-	if _, err := callJSON(a.s, "system-prompt", "registerSegment", json.RawMessage(seg)); err != nil {
+	if _, err := a.callCapJSON("system-prompt", "registerSegment", json.RawMessage(seg)); err != nil {
 		if extra == "" {
 			return block
 		}
@@ -489,7 +613,7 @@ func (a *agent) loadProjectContext(workspace, extra string) string {
 }
 
 func (a *agent) refreshSkillCatalog(workspace string) {
-	_, _ = callJSON(a.s, "skills", "refreshCatalog", map[string]any{"workspace": workspace})
+	_, _ = a.callCapJSON("skills", "refreshCatalog", map[string]any{"workspace": workspace})
 }
 
 func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
@@ -506,7 +630,7 @@ func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 		}
 	}
 	if in.Action == "list" || (in.Action == "" && len(in.Items) == 0) {
-		raw, err := callJSON(a.s, "session", "query", map[string]any{"sessionId": sessionID, "afterSeq": 0, "limit": 0})
+		raw, err := a.callCapJSON("session", "query", map[string]any{"sessionId": sessionID, "afterSeq": 0, "limit": 0})
 		if err != nil {
 			return "", err
 		}
@@ -517,7 +641,7 @@ func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 			} `json:"facts"`
 		}
 		_ = json.Unmarshal(raw, &q)
-		last := "(no todo yet — call with items to create one)"
+		last := "(no todo yet 鈥?call with items to create one)"
 		for _, f := range q.Facts {
 			if f.Type == "todo" {
 				last = f.Body
@@ -553,7 +677,7 @@ func (a *agent) logPolicyDecision(sessionID, tool, action, reason string) {
 	_ = a.appendOne(sessionID, map[string]any{
 		"type":    "policy_decision",
 		"role":    "host",
-		"content": tool + " → " + action,
+		"content": tool + " 鈫?" + action,
 		"meta":    map[string]any{"tool": tool, "action": action, "reason": reason},
 	})
 }
@@ -564,7 +688,7 @@ func (a *agent) callTool(sessionID string, tc toolCall, severity string) (string
 		args = json.RawMessage(`{}`)
 	}
 	workspace := a.sessionWorkspace(sessionID)
-	// Policy plugin owns the full verdict (including ask → Medium round-trip).
+	// Policy plugin owns the full verdict (including ask 鈫?Medium round-trip).
 	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace, severity)
 	if action == "deny" {
 		a.logPolicyDecision(sessionID, tc.Name, "deny", reason)
@@ -588,7 +712,23 @@ func (a *agent) callTool(sessionID string, tc toolCall, severity string) (string
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	raw, err := callJSON(a.s, "tools", "call", payload)
+	owner := a.toolsOwnerFor(tc.Name)
+	if owner == "" {
+		// Not listed yet: try live tools plugins in order.
+		for _, name := range a.toolsPluginNames() {
+			raw, err := callToJSON(a.s, name, "tools", "call", payload)
+			if err == nil {
+				var out struct {
+					Content            string    `json:"content"`
+					AdditionalContexts []message `json:"additionalContexts"`
+				}
+				_ = json.Unmarshal(raw, &out)
+				return out.Content, out.AdditionalContexts, nil
+			}
+		}
+		return "", nil, fmt.Errorf("unknown tool %q", tc.Name)
+	}
+	raw, err := callToJSON(a.s, owner, "tools", "call", payload)
 	if err != nil {
 		return "", nil, err
 	}
@@ -639,6 +779,27 @@ type agent struct {
 	contextProbe bool
 	seq          int
 	seqMu        sync.Mutex
+	// toolOwners is agent-local tool name 鈫?providing plugin (ADR-0030 fan-out).
+	toolsMu    sync.Mutex
+	toolOwners map[string]string
+	// turnMu serializes turns per session id (locks left Host, ADR-0030).
+	turnMu   sync.Mutex
+	turnLock map[string]*sync.Mutex
+}
+
+func (a *agent) lockSession(sid string) *sync.Mutex {
+	sid = normalizeID(sid)
+	a.turnMu.Lock()
+	if a.turnLock == nil {
+		a.turnLock = map[string]*sync.Mutex{}
+	}
+	mu := a.turnLock[sid]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		a.turnLock[sid] = mu
+	}
+	a.turnMu.Unlock()
+	return mu
 }
 
 func (a *agent) nextSubagentID() string {
@@ -735,6 +896,12 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		return nil, &protocol.FrameError{Code: "bad_payload", Message: "user input is required"}
 	}
 	sessionID = normalizeID(sessionID)
+	// Per-session lock lives in the loop plugin (ADR-0030, down from Host).
+	mu := a.lockSession(sessionID)
+	if !mu.TryLock() {
+		return nil, &protocol.FrameError{Code: "busy", Message: "session already has a running turn"}
+	}
+	defer mu.Unlock()
 	// Resolve Workspace once per Turn (ADR-0020); tools.call injects this value.
 	workspace := a.sessionWorkspace(sessionID)
 	// Skill Trigger ($name) expands before the fact is written (spec).
@@ -816,7 +983,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 	if sysText != "" {
 		// Skip re-append when identical system is already the active one after summary.
 		skip := false
-		if raw, err := callJSON(a.s, "session", "query", map[string]any{
+		if raw, err := a.callCapJSON("session", "query", map[string]any{
 			"sessionId": sessionID, "afterSeq": 0, "limit": 0,
 		}); err == nil {
 			var q struct {
@@ -962,7 +1129,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			return nil, fmt.Errorf("agent loop: %w", err)
 		}
 
-		llmRaw, err := callJSON(a.s, "llm", "complete", reqBody)
+		llmRaw, err := a.callCapJSON("llm", "complete", reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: llm.complete: %w", err)
 		}
@@ -988,7 +1155,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 				},
 			})
 			// Best-effort: surface to Context Manager.
-			_, _ = callJSON(a.s, "context", "noteUsage", map[string]any{
+			_, _ = a.callCapJSON("context", "noteUsage", map[string]any{
 				"sessionId": sessionID, "usage": llmOut.Usage,
 			})
 		}
@@ -1056,7 +1223,11 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 		// Capture author-declared severity from tools.list for policy.decide.
 		readOnlyTools := map[string]bool{}
 		toolSeverity := map[string]string{}
-		if raw, err := callJSON(a.s, "tools", "list", map[string]any{}); err == nil {
+		for _, pluginName := range a.toolsPluginNames() {
+			raw, err := callToJSON(a.s, pluginName, "tools", "list", map[string]any{})
+			if err != nil {
+				continue
+			}
 			var listed struct {
 				Tools []struct {
 					Name     string `json:"name"`
@@ -1147,7 +1318,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 						if ws := a.sessionWorkspace(sessionID); ws != "" {
 							createPayload["workspace"] = ws
 						}
-						if _, err := callJSON(a.s, "session", "create", createPayload); err != nil {
+						if _, err := a.callCapJSON("session", "create", createPayload); err != nil {
 							resultContent = "error: " + err.Error()
 						} else {
 							go func(childID, input, sys string, parent string) {
@@ -1179,7 +1350,7 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 						if ws := a.sessionWorkspace(sessionID); ws != "" {
 							createPayload["workspace"] = ws
 						}
-						if _, err := callJSON(a.s, "session", "create", createPayload); err != nil {
+						if _, err := a.callCapJSON("session", "create", createPayload); err != nil {
 							resultContent = "error: " + err.Error()
 						} else {
 							childRes, cerr := a.runTurn(childID, input, false, in.SystemPrompt)
