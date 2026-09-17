@@ -636,13 +636,7 @@ class SessionView extends HTMLElement {
     if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) return;
     const args = d.arguments ? JSON.stringify(d.arguments) : '';
     const ok = window.confirm('Allow tool ' + d.tool + '?\n' + args.slice(0, 400));
-    try {
-      await fetch('/api/tool-approval', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: d.id, approved: !!ok })
-      });
-    } catch (e) { /* deny by timeout on host */ }
+    // Approval reply path is Deferred (#3 / ADR-0030). Surface the choice only.
     this.appendPre(ok ? ('allowed ' + d.tool) : ('denied ' + d.tool), ok ? 'message' : 'message error');
   }
   disconnectedCallback() {
@@ -766,7 +760,7 @@ class SessionView extends HTMLElement {
   async refreshUsage() {
     if (!this._root) return;
     try {
-      const res = await LiteAgent.call('context', 'usage', { sessionId: this._sid || '' });
+      const res = await LiteAgent.callCap('context-manager', 'context', 'usage', { sessionId: this._sid || '' });
       const u = (res && res.ok !== false && res.result && res.result.usage) || null;
       this.setUsageBar(u);
     } catch (e) { /* usage strip is best-effort */ }
@@ -806,7 +800,7 @@ class SessionView extends HTMLElement {
     this._ctxPanel.innerHTML = '<div class="ctx-head">Model Context…</div>';
     try {
       // listContext n=0 → full prepare snapshot (messages that entered the LLM).
-      const res = await LiteAgent.call('context', 'listContext', { sessionId: this._sid || '', n: 0 });
+      const res = await LiteAgent.callCap('context-manager', 'context', 'listContext', { sessionId: this._sid || '', n: 0 });
       if (!res || res.ok === false) throw new Error((res && res.error) || 'listContext failed');
       const msgs = (res.result && res.result.messages) || [];
       const total = (res.result && res.result.total) || msgs.length;
@@ -876,20 +870,16 @@ class SessionView extends HTMLElement {
   }
   // Mid-run refresh: resume live Thinking from rebuilt facts.
   maybeResumeLiveThinking() {
-    // Host turn status is still medium-level (running/idle); facts rebuild from Log.
-    // Ignore status from a different session (parallel turns are allowed).
-    fetch('/api/session').then(r => r.json()).then(b => {
-      if (b.status !== 'running' || this._thinkingEl || this._liveEl) return;
-      if (b.sessionId !== undefined && b.sessionId !== null && !this.isCurrent(b.sessionId)) return;
-      const thinks = this._root.querySelectorAll('details.think:not(.live) .disc-body');
-      if (thinks.length) this._reasoningBuf = thinks[thinks.length - 1].textContent || '';
-    }).catch(() => { });
+    if (this._thinkingEl || this._liveEl) return;
+    const thinks = this._root.querySelectorAll('details.think:not(.live) .disc-body');
+    if (thinks.length) this._reasoningBuf = thinks[thinks.length - 1].textContent || '';
   }
   sendOrStop() {
     if (!this._input) return;
     if (this._running) {
-      fetch('/api/turn/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: this._sid }) })
-        .then(() => { this._running = false; this.setSendState(false); });
+      LiteAgent.callCap('agent', 'loop', 'cancel', { sessionId: this._sid })
+        .then(() => { this._running = false; this.setSendState(false); })
+        .catch(() => { this._running = false; this.setSendState(false); });
       return;
     }
     const text = this._input.value.trim();
@@ -918,10 +908,10 @@ class SessionView extends HTMLElement {
     this.beginTurn();
     this._running = true;
     this.setSendState(true);
-    LiteAgent.sendMessage(text, this._sid).then(b => {
+    LiteAgent.callCap('agent', 'loop', 'turn', { input: text, sessionId: this._sid, allowSubagent: true }).then(b => {
+      this._running = false;
+      this.setSendState(false);
       if (b && b.ok === false) {
-        this._running = false;
-        this.setSendState(false);
         this.appendPre(b.error || 'send failed', 'message error');
       }
     }).catch(() => { this._running = false; this.setSendState(false); });
@@ -1092,27 +1082,12 @@ class SessionView extends HTMLElement {
     if (!name) return;
     // The File System Access API never exposes an absolute path; the Host maps
     // the folder name to a real directory (cwd subtree, then siblings).
-    let body = null;
-    try {
-      const res = await fetch('/api/workspace/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name })
-      });
-      body = await res.json();
-    } catch (e) { /* fall through to manual entry */ }
     this._wsCandidates = [];
-    if (body && body.path) {
-      this._ws = body.path;
-    } else if (body && body.candidates && body.candidates.length > 1) {
-      this._wsCandidates = body.candidates;
-    } else {
-      this._ws = '';
-      LiteAgent.emit('__notice', {
-        text: '已选择「' + name + '」，但 Host 未能定位其绝对路径，请手动填写',
-        cls: 'message warn'
-      });
-    }
+    this._ws = '';
+    LiteAgent.emit('__notice', {
+      text: '已选择「' + name + '」，请手动填写绝对路径（Medium 不再解析目录名）',
+      cls: 'message warn'
+    });
     this.renderWelcome();
   }
   async startSessionAndSend(text) {
@@ -1133,8 +1108,10 @@ class SessionView extends HTMLElement {
       await this.reload();
       this.appendUser(text);
       this.beginTurn();
-      const sent = await LiteAgent.sendMessage(text, id);
+      const sent = await LiteAgent.callCap('agent', 'loop', 'turn', { input: text, sessionId: id, allowSubagent: true });
       if (sent && sent.ok === false) throw new Error(sent.error || 'send failed');
+      this._running = false;
+      this.setSendState(false);
     } catch (e) {
       this._running = false;
       this.setSendState(false);

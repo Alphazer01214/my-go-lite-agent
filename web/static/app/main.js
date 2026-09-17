@@ -1,14 +1,12 @@
 // Shell entry: boot order only. Every content face is a plugin Panel Component
 // (ADR-0011). Settings chrome is medium framework; per-plugin settings faces
 // are <name>-settings custom elements owned by each plugin.
+// L0 only (ADR-0030): no session/turn domain orchestration in the Shell.
 
-import { state, setSessionId } from './state.js';
 import { setPageLoader, createLoader, setPages } from './loader.js';
 import { openSSE } from './events.js';
 import { openPluginsPanel, prefetchPlugins } from './plugins-panel.js';
 import { openSettingsPanel } from './settings.js';
-
-var sessionLabel = document.getElementById('session-label');
 
 function notice(text, cls) {
   if (window.LiteAgent && window.LiteAgent.emit) {
@@ -27,29 +25,6 @@ const pageLoader = createLoader('main', function panelHost(slot) {
   return document.getElementById('slot-toolbar-right');
 }, function (msg) { notice(msg, 'message error'); });
 setPageLoader(pageLoader);
-
-function refreshRunState() {
-  // The Host still knows a Current Session, but the Shell must NOT announce it:
-  // the Session View opens on its new-session face and only loads a Session
-  // when the user picks one (or sends the first message). Hence silent=true.
-  LiteAgent.call('session', 'current', {}).then(function (b) {
-    var id = (b && b.ok !== false && b.result && b.result.sessionId) || '';
-    setSessionId(id, true);
-    if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
-  }).catch(function () {
-    fetch('/api/session').then(function (r) { return r.json(); }).then(function (b) {
-      if (b.sessionId !== undefined) setSessionId(b.sessionId, true);
-      if (state.currentSessionId) sessionLabel.textContent = state.currentSessionId;
-    }).catch(function () { });
-  });
-}
-
-LiteAgent.on('__session', function (sid) {
-  sid = sid || '';
-  state.currentSessionId = sid;
-  window.__liteSessionId = sid;
-  sessionLabel.textContent = sid || '(default)';
-});
 
 function renderNav(pages) {
   var host = document.getElementById('layout-nav');
@@ -73,14 +48,9 @@ fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay)
   }
 }).catch(function () { }).then(function () {
   pageLoader.loadPluginUIs();
-  // Warm the plugin-graph cache now: under Autostart+dependsOn most plugins
-  // mount lazily on the first Turn, so waiting would show a half-empty graph.
   prefetchPlugins();
-  refreshRunState();
   openSSE();
 });
 
-var btnPlugins = document.getElementById('btn-plugins');
-if (btnPlugins) btnPlugins.addEventListener('click', function () { openPluginsPanel(); });
-var btnSettings = document.getElementById('btn-settings');
-if (btnSettings) btnSettings.addEventListener('click', function () { openSettingsPanel(); });
+// Re-export settings opener for the chrome button.
+window.__liteOpenSettings = openSettingsPanel;

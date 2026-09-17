@@ -90,8 +90,9 @@ func TestWebServeShellAndMessage(t *testing.T) {
 		t.Fatalf("shell missing split layout")
 	}
 
-	// Post a message; stubllm should settle markdown over SSE eventually.
-	req, _ := http.NewRequest(http.MethodPost, base+"/api/message", strings.NewReader(`{"text":"web-hello"}`))
+	// Start a turn via L0 /api/call (ADR-0030: no /api/message).
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/call", strings.NewReader(
+		`{"to":"agent","cap":"loop","method":"turn","payload":{"input":"web-hello","allowSubagent":true}}`))
 	req.Header.Set("Content-Type", "application/json")
 	mres, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -199,7 +200,8 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 	}
 
 	// One turn then history should include user text.
-	req2, _ := http.NewRequest(http.MethodPost, base+"/api/message", strings.NewReader(`{"text":"hist-marker"}`))
+	req2, _ := http.NewRequest(http.MethodPost, base+"/api/call", strings.NewReader(
+		`{"to":"agent","cap":"loop","method":"turn","payload":{"input":"hist-marker","allowSubagent":true}}`))
 	req2.Header.Set("Content-Type", "application/json")
 	mres, err := http.DefaultClient.Do(req2)
 	if err != nil {

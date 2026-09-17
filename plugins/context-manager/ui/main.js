@@ -64,7 +64,7 @@ class ContextManagerStatus extends HTMLElement {
     if (!this._root) return;
     try {
       const sid = window.__liteSessionId || '';
-      const b = await LiteAgent.call('context', 'usage', { sessionId: sid });
+      const b = await LiteAgent.callCap('context-manager', 'context', 'usage', { sessionId: sid });
       if (!b || b.ok === false) return;
       const r = b.result || {};
       this._u = r.usage || null;

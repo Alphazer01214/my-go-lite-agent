@@ -1,16 +1,12 @@
 // SSE bridge: one EventSource for the Shell and every Panel Component.
-// Everything fans out through LiteAgent — the faces consume their own topics
-// and queue until their history is ready; the shell paints only the status
-// line.
+// L0 only (ADR-0030): fan-out of opaque events; no domain topic semantics
+// beyond panel loader + a status line.
 
 import { applyPanel } from './loader.js';
 
 function applySSE(env) {
   var topic = env.topic;
   var d = env.data !== undefined ? env.data : env;
-  // Fan live events out to Panel Components subscribed via LiteAgent.on —
-  // presentation/stream/session go to the session-view; panel ops go to
-  // the page loader.
   if (window.LiteAgent && window.LiteAgent.emit) window.LiteAgent.emit(topic, d);
   if (topic === 'panel') { applyPanel(d); return; }
   if (topic === 'status') {
@@ -21,16 +17,12 @@ function applySSE(env) {
 }
 
 function openSSE() {
-  // No replay: durable state rehydrates from the Session Log via
-  // capabilities; SSE is live-only so refresh never double-paints.
   var es = new EventSource('/events');
   es.addEventListener('presentation', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('panel', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('stream', function (e) { applySSE(JSON.parse(e.data)); });
-  es.addEventListener('session', function (e) { applySSE(JSON.parse(e.data)); });
   es.addEventListener('status', function (e) { applySSE(JSON.parse(e.data)); });
-  // policy.ask → Host broadcasts tool_approval; session-view confirms via /api/tool-approval.
-  es.addEventListener('tool_approval', function (e) { applySSE(JSON.parse(e.data)); });
+  es.addEventListener('evt', function (e) { applySSE(JSON.parse(e.data)); });
   es.onerror = function () { document.getElementById('status').textContent = 'sse reconnecting…'; };
 }
 

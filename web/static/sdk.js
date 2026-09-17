@@ -1,21 +1,14 @@
-/* lite-agent.js — Web Shell bridge for Panel Components (zero npm, ADR-0010).
+/* lite-agent.js — Web Shell L0 bridge for Panel Components (zero npm, ADR-0010/0030).
  *
- * A plugin's UI Entry module (ui/main.js) is imported by the Shell from
- * /plugin-ui/<name>/main.js?plugin=<name>&v=<version> — derive your plugin
- * name from import.meta.url, not from location. Define custom elements named
- * "<plugin-name>-*"; they receive data via element properties (PanelOp props
- * or manifest mounts), render into their own Shadow DOM using --la-* design
- * tokens, and talk back through this global:
+ * Shell keeps only: point-named call, UI action, event bus, slash complete.
+ * Domain APIs (sendMessage / session faces) live in plugin ui/ modules.
  *
- *   LiteAgent.call(cap, method, payload)          → Promise<any>   star-through Host call
- *   LiteAgent.emitUIAction(plugin, panel, event, value, props?) → Promise<any>
- *                                                                  ui.action → plugin handler
- *   LiteAgent.on(topic, fn)                       → unsubscribe    presentation|status|stream|panel
- *   LiteAgent.onSessionChange(fn)                 → unsubscribe    fires immediately with the current
- *                                                                  session id, then on every switch
- *   LiteAgent.sendMessage(text, sessionId?)       → Promise<any>   start a turn (POST /api/message)
- *   LiteAgent.runCommand(line)                    → Promise<any>   run a /command (POST /api/command)
- *   LiteAgent.complete(prefix)                    → string[]       slash-command completion
+ *   LiteAgent.call(to, method, payload)     → Promise<{ok,result}>  POST /api/call {to,method,payload}
+ *   LiteAgent.callCap(to, cap, method, payload) → same, with explicit cap for plugin dispatch
+ *   LiteAgent.emitUIAction(plugin, panel, event, value, props?) → Promise
+ *   LiteAgent.on(topic, fn)                 → unsubscribe  presentation|status|stream|panel|evt
+ *   LiteAgent.emit(topic, data)             → local bus
+ *   LiteAgent.complete(prefix)              → string[] slash suggestions
  */
 (function(global){
   var listeners = {};
@@ -33,13 +26,16 @@
       try { fn(data); } catch(e){ /* one bad subscriber must not break the stream */ }
     });
   }
-  async function call(cap, method, payload){
+  async function callCap(to, cap, method, payload){
     var res = await fetch('/api/call', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({cap:cap, method:method, payload: payload||{}})
+      body: JSON.stringify({to:to, cap:cap, method:method, payload: payload||{}})
     });
     return res.json();
+  }
+  async function call(to, method, payload){
+    return callCap(to, to, method, payload);
   }
   async function emitUIAction(plugin, panel, event, value, props){
     var res = await fetch('/api/ui-action', {
@@ -62,14 +58,6 @@
     var names = global.__liteCommands || ['help','lp','refresh'];
     return names.map(function(n){return '/'+n;}).filter(function(c){return c.indexOf(prefix)===0;});
   }
-  async function sendMessage(text, sessionId){
-    var res = await fetch('/api/message', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({text: text, sessionId: sessionId||''})
-    });
-    return res.json();
-  }
   async function runCommand(line){
     var res = await fetch('/api/command', {
       method:'POST',
@@ -79,17 +67,7 @@
     return res.json();
   }
 
-  // Session channel: the Shell keeps window.__liteSessionId current and
-  // re-emits on every switch. Subscribing fires immediately so late-loaded
-  // components never miss the initial state.
-  function onSessionChange(fn){
-    if(global.__liteSessionId !== undefined){
-      try { fn(global.__liteSessionId); } catch(e){}
-    }
-    return on('__session', fn);
-  }
-
-  global.LiteAgent = { on:on, emit:emit, call:call, emitUIAction:emitUIAction,
-                       complete:complete, onSessionChange:onSessionChange,
-                       sendMessage:sendMessage, runCommand:runCommand };
+  global.LiteAgent = { on:on, emit:emit, call:call, callCap:callCap,
+                       emitUIAction:emitUIAction, complete:complete,
+                       runCommand:runCommand };
 })(window);
