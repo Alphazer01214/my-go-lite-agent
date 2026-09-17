@@ -378,3 +378,62 @@ func TestReplayBuffer(t *testing.T) {
 		t.Fatalf("want 1 replay event, got %d", n)
 	}
 }
+
+// TestToolApprovalRouteRegistered pins BUG-01 layer 2: the approval reply face
+// must be live on the HTTP mux — it used to be defined but never registered,
+// so a browser's ruling landed on a 404 and the gate silently opened.
+func TestToolApprovalRouteRegistered(t *testing.T) {
+	s := New(Options{CommandPlane: nopCommands{}})
+	ts := httptest.NewServer(s.http.Handler)
+	defer ts.Close()
+
+	res, err := http.Post(ts.URL+"/api/tool-approval", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		t.Fatalf("/api/tool-approval must be registered (BUG-01), got 404")
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for a ruling without an id, got %d: %s", res.StatusCode, body)
+	}
+}
+
+// TestFillDefaultWorkspace pins BUG-03: an empty Workspace on session.create
+// must fall back to the Host default (ADR-0020) on the capability path.
+func TestFillDefaultWorkspace(t *testing.T) {
+	def := "C:/work/proj"
+	get := func(payload json.RawMessage) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(payload, &m); err != nil {
+			t.Fatalf("payload must stay valid json: %v", err)
+		}
+		return m
+	}
+
+	out := fillDefaultWorkspace(json.RawMessage(`{"origin":"web","workspace":""}`), def)
+	m := get(out)
+	if m["workspace"] != def {
+		t.Fatalf("want default workspace %q, got %v", def, m["workspace"])
+	}
+	if m["origin"] != "web" {
+		t.Fatalf("origin must survive the merge, got %v", m["origin"])
+	}
+
+	// An explicit Workspace is never overwritten.
+	out = fillDefaultWorkspace(json.RawMessage(`{"workspace":"D:/other"}`), def)
+	if string(out) != `{"workspace":"D:/other"}` {
+		// Compare semantically instead of byte-wise.
+		if get(out)["workspace"] != "D:/other" {
+			t.Fatalf("explicit workspace must not be overwritten: %s", out)
+		}
+	}
+
+	// No Host default configured → payload untouched.
+	out = fillDefaultWorkspace(json.RawMessage(`{"workspace":""}`), "")
+	if string(out) != `{"workspace":""}` {
+		t.Fatalf("no default must leave payload untouched, got %s", out)
+	}
+}

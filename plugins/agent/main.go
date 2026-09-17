@@ -190,7 +190,7 @@ var defaultPluginFor = map[string]string{
 // defaultToolsPlugins are fan-out targets for tools.list / tools.call.
 // Host no longer merges multi-provider tools (ADR-0030). Live providers are
 // discovered via host.plugins; this list is the factory fallback.
-var defaultToolsPlugins = []string{"filetools", "shelltools", "skill-manager", "webtools", "echotool", "emptytools"}
+var defaultToolsPlugins = []string{"filetools", "shelltools", "skill-manager", "webtools"}
 
 func (a *agent) toolsPluginNames() []string {
 	raw, err := callToJSON(a.s, "host", "host", "plugins", map[string]any{})
@@ -517,8 +517,14 @@ func (a *agent) sessionWorkspace(sessionID string) string {
 	return out.Workspace
 }
 
-// policyDecide asks the policy Capability (ADR-0019). Missing provider 鈫?allow.
-// severity is the tool author's declared risk (low|medium|high) from tools.list.
+// policyDecide asks the policy Capability (ADR-0019). severity is the tool
+// author's declared risk (low|medium|high) from tools.list.
+//
+// The failure semantics are fail-closed on purpose: when a policy provider IS
+// mounted but its decide breaks (timeout, malformed reply), the tool is DENIED
+// — a broken gate must never silently let a medium/high tool through. The one
+// allow path is "no policy provider in this assembly at all": then there is no
+// gate to consult, so the historical allow behavior stands.
 func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace, severity string) (string, string) {
 	payload := map[string]any{
 		"tool":      tool,
@@ -531,7 +537,7 @@ func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, works
 	}
 	raw, err := a.callCapJSON("policy", "decide", payload)
 	if err != nil {
-		return "allow", "no policy provider"
+		return policyDecisionOnError(err, a.policyProviderMounted())
 	}
 	var out struct {
 		Action string `json:"action"`
@@ -539,9 +545,50 @@ func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, works
 	}
 	_ = json.Unmarshal(raw, &out)
 	if out.Action == "" {
-		return "allow", "empty policy action"
+		return "deny", "empty policy action"
 	}
 	return out.Action, out.Reason
+}
+
+// policyDecisionOnError is the fail-closed decision table for a broken policy
+// gate (ADR-0019): when a provider IS mounted but its decide errored, the tool
+// is DENIED — a broken gate must never silently widen to allow. The single
+// allow path is "no policy provider in this assembly at all".
+func policyDecisionOnError(err error, providerMounted bool) (string, string) {
+	if !providerMounted {
+		return "allow", "no policy provider"
+	}
+	return "deny", "policy decide failed: " + err.Error()
+}
+
+// policyProviderMounted reports whether a healthy mounted plugin provides the
+// "policy" capability (L0 host.plugins snapshot). Unknown snapshot → true, so
+// decide errors stay fail-closed instead of silently widening to allow.
+func (a *agent) policyProviderMounted() bool {
+	raw, err := callToJSON(a.s, "host", "host", "plugins", map[string]any{})
+	if err != nil {
+		return true
+	}
+	var out struct {
+		Plugins []struct {
+			Name     string   `json:"name"`
+			Provides []string `json:"provides"`
+			Healthy  bool     `json:"healthy"`
+			UI       bool     `json:"ui"`
+		} `json:"plugins"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	for _, p := range out.Plugins {
+		if p.UI || !p.Healthy {
+			continue
+		}
+		for _, c := range p.Provides {
+			if c == "policy" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *agent) confirmTool(sessionID, tool string, args json.RawMessage, workspace string) bool {
@@ -1260,11 +1307,11 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 			}
 			wg.Add(1)
 			go func(i int, tc toolCall) {
-					defer wg.Done()
-					_ = a.s.EmitRender(pluginsdk.RenderIntent{
-						Kind: pluginsdk.RenderMessageText, Level: "info",
-						Text: "Running " + tc.Name + "…", SessionID: sessionID,
-					})
+				defer wg.Done()
+				_ = a.s.EmitRender(pluginsdk.RenderIntent{
+					Kind: pluginsdk.RenderMessageText, Level: "info",
+					Text: "Running " + tc.Name + "…", SessionID: sessionID,
+				})
 				out, addCtx, callErr := a.callTool(sessionID, tc, toolSeverity[tc.Name])
 				if callErr != nil {
 					outcomes[i].content = "error: " + callErr.Error()

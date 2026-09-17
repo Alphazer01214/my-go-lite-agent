@@ -4,6 +4,8 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>lite agent</title>
+<!-- Inline data-URI icon: avoids a /favicon.ico 404 in the console (BUG-11). -->
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="%230f1115"/><circle cx="5.5" cy="8" r="2.6" fill="%237aa2f7"/><path d="M9 6.5l3-2v7l-3-2z" fill="%239ece6a"/></svg>'/>
 <style>
 :root {
   /* Design tokens (ADR-0010): Panel Components consume these across the
@@ -43,19 +45,11 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 /* Bottom status bar: the Host reserves the last row and plugins fill it with
    their own <plugin>-status Panel Components (workspace, tokens, model, …).
    The Shell owns only the geometry and the slot. */
-#statusbar{
-  grid-column:1 / -1;grid-row:2;
-  display:flex;align-items:center;gap:0;
-  min-height:26px;padding:0 10px;
-  background:var(--la-panel);border-top:1px solid var(--la-line);
-  color:var(--la-dim);font-size:11px;
-  font-family:var(--la-mono,ui-monospace,monospace);
-  overflow-x:auto;overflow-y:hidden;white-space:nowrap;
-}
-#statusbar:empty{display:none}
+#statusbar{grid-column:1 / -1;grid-row:2;display:flex;align-items:center;gap:0;min-height:26px;padding:0 10px;background:var(--la-panel);border-top:1px solid var(--la-line);color:var(--la-dim);font-size:11px;font-family:var(--la-mono,ui-monospace,monospace);overflow-x:auto;overflow-y:hidden;white-space:nowrap}
 /* #status is the Host's own line inside the shared bottom bar (SSE status /
-   loader warnings); plugin chips follow it. */
-#status{flex:0 0 auto;color:var(--la-dim);padding-right:2px}
+   loader warnings); plugin chips follow it. A single definition: the older
+   full-width rule was duplicated and fought this one (BUG-15). */
+#status{flex:0 0 auto;color:var(--la-dim);padding-right:2px;font-size:12px;padding:2px 8px 0}
 #status:empty{display:none}
 #statusbar>*{flex:0 0 auto}
 #statusbar-empty{flex:1;font-size:11px;color:var(--la-dim);opacity:.7}
@@ -82,7 +76,6 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var
 #chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 #chat>*{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 #slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
-#status{font-size:12px;color:var(--la-dim);padding:2px 20px 0;min-height:16px;flex-shrink:0}
 
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}

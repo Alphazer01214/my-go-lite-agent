@@ -19,6 +19,9 @@ type commandPlane struct {
 	pluginsDir string
 	manifests  map[string]plugin.Manifest
 	mounted    []string
+	// web is set when the plane backs the Web Medium: CLI-only content
+	// (one-shot flags, /exit) is filtered from /help output (BUG-09).
+	web bool
 }
 
 func newCommandPlane(srv *serve.Server, pluginsDir string, plan assembly.Plan) *commandPlane {
@@ -211,18 +214,26 @@ func (cp *commandPlane) helpText(pluginName string) string {
 	b.WriteString("  /help [plugin]     Show this help, or a plugin's commands\n")
 	b.WriteString("  /lp                List mounted plugins (name, version, provides)\n")
 	b.WriteString("  /refresh           Rescan manifests and broadcast config.reload (no hot-plug)\n")
-	b.WriteString("  /exit              Quit (CLI only)\n")
+	if !cp.web {
+		b.WriteString("  /exit              Quit (CLI only)\n")
+	}
 	b.WriteString("\nPlugin commands:\n")
 	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
 	b.WriteString("  Mounted plugins and their commands are listed below.\n")
-	b.WriteString("\nCLI flags (one-shot, not slash):\n")
-	b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
-	b.WriteString("  -context-list N      Print last N prepare messages after the run\n")
-	b.WriteString("  -session-derive      Print Model Context from session.derive\n")
-	b.WriteString("  -session-query       Print Session Log facts\n")
-	b.WriteString("  -session-append JSON Append facts\n")
-	b.WriteString("  -invoke / -frame-cap / -frame-method / -invoke-payload\n")
-	b.WriteString("                       Host-initiated Frame call into a plugin\n")
+	if cp.web {
+		// Read-only commands only: production launch has no CLI flags (ADR-0030)
+		// and /exit has no effect when the panel is a browser tab (BUG-09).
+		b.WriteString("  只读子命令；生产启动无 CLI flag（ADR-0030）。\n")
+	} else {
+		b.WriteString("\nCLI flags (one-shot, not slash):\n")
+		b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
+		b.WriteString("  -context-list N      Print last N prepare messages after the run\n")
+		b.WriteString("  -session-derive      Print Model Context from session.derive\n")
+		b.WriteString("  -session-query       Print Session Log facts\n")
+		b.WriteString("  -session-append JSON Append facts\n")
+		b.WriteString("  -invoke / -frame-cap / -frame-method / -invoke-payload\n")
+		b.WriteString("                       Host-initiated Frame call into a plugin\n")
+	}
 	b.WriteString("\nPlugins:\n")
 	if len(cp.mounted) == 0 {
 		b.WriteString("  (none)\n")

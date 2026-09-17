@@ -50,7 +50,19 @@ fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay)
   pageLoader.loadPluginUIs();
   prefetchPlugins();
   openSSE();
+  wireChromeButtons();
 });
 
-// Re-export settings opener for the chrome button.
+// Wire the header chrome buttons. The panels are shell-owned overlays
+// (ADR-0011): openPluginsPanel / openSettingsPanel each toggle themselves
+// (open ⇄ close) by inspecting #main-overlay, so one click handler each.
+function wireChromeButtons() {
+  var pluginsBtn = document.getElementById('btn-plugins');
+  if (pluginsBtn) pluginsBtn.addEventListener('click', function () { openPluginsPanel(); });
+  var settingsBtn = document.getElementById('btn-settings');
+  if (settingsBtn) settingsBtn.addEventListener('click', function () { openSettingsPanel(); });
+}
+
+// Re-export openers for chrome buttons / debugging.
 window.__liteOpenSettings = openSettingsPanel;
+window.__liteOpenPlugins = openPluginsPanel;

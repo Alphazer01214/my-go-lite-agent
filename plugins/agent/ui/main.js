@@ -154,7 +154,8 @@ class AgentModePanel extends HTMLElement {
     this._names.forEach((id) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = labelOf(id) + (id === this._current ? ' ·' : '');
+      // Alias + raw id, matching the welcome chips and Settings (BUG-10).
+      b.textContent = labelOf(id) + ' (' + id + ')' + (id === this._current ? ' ·' : '');
       if (id === this._current) b.classList.add('on');
       b.onclick = (e) => {
         e.stopPropagation();

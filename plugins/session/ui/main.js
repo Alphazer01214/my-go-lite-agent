@@ -30,6 +30,14 @@ import { esc, md } from './lib/md.js';
 import { mergeReasoningFacts } from './lib/facts.js';
 import './settings.js';
 
+// Scheme display vocabulary (kept in sync with plugins/agent/ui/main.js):
+// a friendly alias with the raw id beside it, so welcome chips, the mode
+// menu and Settings all say the same thing (BUG-10).
+const SCHEME_LABELS = { chat: '极简', tool_calling: '标准', coding: '编码' };
+function schemeLabel(id) {
+  return SCHEME_LABELS[id] || id || '—';
+}
+
 // SSE is the live path; this timer only backstops missed events.
 // Fast while a turn is running, slower when idle; pause when tab is hidden.
 const POLL_MS_ACTIVE = 2000;
@@ -346,9 +354,11 @@ class SessionRail extends HTMLElement {
       const s = (st && st.status) || '';
       if (s === 'idle' || String(s).indexOf('error:') === 0) this.loadSessions();
     }));
-    // Only announce-driven highlighting: at boot the Shell sits on the
-    // new-session face, so nothing may look "current" yet.
-    this._offs.push(LiteAgent.on('__session', id => this.markActive(id)));
+    // Announcement-driven highlighting plus reload: a freshly minted Session
+    // (__session) or a switch must appear/highlight in the rail without a page
+    // reload — the medium emits no turn-level status in the L0 Medium, so the
+    // rail cannot lean on idle like the CLI face did.
+    this._offs.push(LiteAgent.on('__session', id => { this.markActive(id); this.loadSessions(); }));
     this._offs.push(LiteAgent.on('__new', () => { this.markActive(''); this.loadSessions(); }));
     await this.loadSessions();
   }
@@ -636,8 +646,16 @@ class SessionView extends HTMLElement {
     if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) return;
     const args = d.arguments ? JSON.stringify(d.arguments) : '';
     const ok = window.confirm('Allow tool ' + d.tool + '?\n' + args.slice(0, 400));
-    // Approval reply path is Deferred (#3 / ADR-0030). Surface the choice only.
     this.appendPre(ok ? ('allowed ' + d.tool) : ('denied ' + d.tool), ok ? 'message' : 'message error');
+    // Reply to the Host approval face (ADR-0029): the Medium waits <20s and
+    // then the policy layer fails closed — send the ruling before that.
+    try {
+      await fetch('/api/tool-approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: d.id, approved: ok })
+      });
+    } catch (e) { /* approval reply is best-effort; a lost ruling times out to deny */ }
   }
   disconnectedCallback() {
     this._offs.forEach(off => off());
@@ -921,6 +939,7 @@ class SessionView extends HTMLElement {
   showWelcome() {
     this._mode = 'welcome';
     this._sid = '';
+    this._hostDefaultWs = '';
     this._running = false;
     this._ready = true; // nothing to replay: no history gate
     this._queue = [];
@@ -931,6 +950,7 @@ class SessionView extends HTMLElement {
     if (this._ctxPanel) { this._ctxPanel.classList.remove('open'); this._ctxPanel.innerHTML = ''; }
     this.renderWelcome();
     this.loadSchemeState();
+    this.loadHostDefaultWs();
     if (this._input) this._input.focus();
   }
   renderWelcome() {
@@ -947,54 +967,34 @@ class SessionView extends HTMLElement {
     card.appendChild(h1);
     card.appendChild(sub);
 
-    // Workspace row (ADR-0020): the browser picker yields only a folder name,
-    // so the Host resolves it to a path; a manual path always works too.
+    // Workspace row (ADR-0020): the Folder-Picker cannot yield an absolute path
+    // in the L0 Medium (the name→path resolver was a removed Host face), so the
+    // row is a plain path input; leaving it empty uses the Host default.
     const wsRow = document.createElement('div');
     wsRow.className = 'w-row';
     wsRow.appendChild(this._wLabel('工作区 Workspace'));
     const val = document.createElement('div');
     val.className = 'w-value' + (this._ws ? '' : ' empty');
-    val.textContent = this._ws || '（留空 — 使用 Host 默认工作区）';
+    // When empty, be honest about what the Host default (ADR-0020) resolves to.
+    val.textContent = this._ws || (this._hostDefaultWs
+      ? '（将使用 Host 默认工作区：' + this._hostDefaultWs + '）'
+      : '（留空 — 使用 Host 默认工作区）');
     wsRow.appendChild(val);
     const actions = document.createElement('div');
     actions.className = 'w-actions';
-    const btnPick = document.createElement('button');
-    btnPick.type = 'button';
-    btnPick.className = 'w-btn';
-    btnPick.textContent = '选择文件夹…';
-    btnPick.onclick = () => this.pickWorkspace();
     const input = document.createElement('input');
     input.className = 'w-input';
-    input.placeholder = '或直接填写绝对路径（可留空）';
+    input.placeholder = '填写此会话的绝对路径（可留空用 Host 默认）';
     input.value = this._ws || '';
-    input.onchange = () => { this._ws = input.value.trim(); this._wsCandidates = []; this.renderWelcome(); };
+    input.onchange = () => { this._ws = input.value.trim(); this.renderWelcome(); };
     const btnClear = document.createElement('button');
     btnClear.type = 'button';
     btnClear.className = 'w-btn';
     btnClear.textContent = '清空';
-    btnClear.onclick = () => { this._ws = ''; this._wsCandidates = []; this.renderWelcome(); };
-    actions.appendChild(btnPick);
+    btnClear.onclick = () => { this._ws = ''; this.renderWelcome(); };
     actions.appendChild(input);
     actions.appendChild(btnClear);
     wsRow.appendChild(actions);
-    if (this._wsCandidates.length) {
-      const cand = document.createElement('div');
-      cand.className = 'w-cand';
-      const tip = document.createElement('div');
-      tip.className = 'w-hint';
-      tip.textContent = 'Host 找到多个同名目录，请选择：';
-      cand.appendChild(tip);
-      this._wsCandidates.forEach(p => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'w-btn';
-        b.style.textAlign = 'left';
-        b.textContent = p;
-        b.onclick = () => { this._ws = p; this._wsCandidates = []; this.renderWelcome(); };
-        cand.appendChild(b);
-      });
-      wsRow.appendChild(cand);
-    }
     card.appendChild(wsRow);
 
     // Agent Scheme row.
@@ -1013,7 +1013,7 @@ class SessionView extends HTMLElement {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'w-chip' + (s === this._scheme ? ' on' : '');
-      b.textContent = s;
+      b.textContent = schemeLabel(s) + ' (' + s + ')';
       b.title = 'config.set defaultScheme=' + s + '（下一 Turn 生效）';
       b.onclick = () => this.applyScheme(s);
       chips.appendChild(b);
@@ -1032,6 +1032,15 @@ class SessionView extends HTMLElement {
     l.className = 'w-label';
     l.textContent = text;
     return l;
+  }
+  async loadHostDefaultWs() {
+    // The Host's default Workspace (ADR-0020) is the current Session's at boot;
+    // surface the resolved path so "留空" is honest about what will be used.
+    try {
+      const b = await LiteAgent.call('session', 'info', {});
+      this._hostDefaultWs = (b && b.ok !== false && b.result && b.result.workspace) || '';
+    } catch (e) { this._hostDefaultWs = ''; }
+    if (this._mode === 'welcome') this.renderWelcome();
   }
   async loadSchemeState() {
     try {
@@ -1066,29 +1075,6 @@ class SessionView extends HTMLElement {
     } catch (e) {
       LiteAgent.emit('__notice', { text: 'scheme set failed: ' + e, cls: 'message error' });
     }
-  }
-  async pickWorkspace() {
-    if (typeof window.showDirectoryPicker !== 'function') {
-      LiteAgent.emit('__notice', { text: '当前浏览器不支持文件夹选择 API，请直接填写路径', cls: 'message warn' });
-      return;
-    }
-    let handle = null;
-    try {
-      handle = await window.showDirectoryPicker({ mode: 'read' });
-    } catch (e) {
-      return; // user cancelled
-    }
-    const name = (handle && handle.name) || '';
-    if (!name) return;
-    // The File System Access API never exposes an absolute path; the Host maps
-    // the folder name to a real directory (cwd subtree, then siblings).
-    this._wsCandidates = [];
-    this._ws = '';
-    LiteAgent.emit('__notice', {
-      text: '已选择「' + name + '」，请手动填写绝对路径（Medium 不再解析目录名）',
-      cls: 'message warn'
-    });
-    this.renderWelcome();
   }
   async startSessionAndSend(text) {
     this._running = true;
@@ -1202,6 +1188,9 @@ class SessionView extends HTMLElement {
         }
         this.freezeThinking();
         this.appendAssistant(md(text || ''));
+        // Final assistant body = turn boundary: the usage strip refreshes here
+        // (no turn-level status event is guaranteed in the L0 Medium, BUG-06).
+        this.refreshUsage();
         return;
       }
       if (kind === 'message_text') {

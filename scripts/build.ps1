@@ -36,11 +36,7 @@ foreach ($line in Get-Content (Join-Path $PSScriptRoot "shipped-plugins.conf")) 
 }
 $corePlugins = @($groups["core"])
 $toolsPlugins = @($groups["tools"])
-$examplePlugins = @($groups["example"])
-$shippedPlugins = @($corePlugins + $toolsPlugins + $examplePlugins)
-# 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
-#   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow
-#   located under testdata/plugins/ (never under plugins/, so Discovery skips them).
+$shippedPlugins = @($corePlugins + $toolsPlugins)
 
 $onlySet = @{}
 foreach ($n in $Only) {

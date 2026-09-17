@@ -60,44 +60,12 @@ type Server struct {
 	// plugin name -> dir for /plugin-ui/
 	uiDirs map[string]string
 
-	// current default session for the Web Shell ("" = Host default).
-	sessMu sync.Mutex
-	sessID string
-	// defaultWorkspace is applied to new Sessions when the client omits one.
+	// defaultWorkspace is applied to new Sessions when the client omits one (ADR-0020).
 	defaultWorkspace string
-	// pending tool approvals (policy.ask 鈫?Render Medium).
+	// pending tool approvals (policy.ask → Render Medium).
 	apprMu   sync.Mutex
 	apprNext int
 	apprWait map[string]chan bool
-}
-
-// currentSession resolves the Current Session from the session plugin
-// (point-named, ADR-0030), falling back to the medium cache when absent.
-func (s *Server) currentSession() string {
-	if s.opts.Srv != nil {
-		out, err := s.opts.Srv.CallByPlugin("session", "session", "current", json.RawMessage(`{}`))
-		if err == nil && out != nil {
-			var res struct {
-				SessionID string `json:"sessionId"`
-			}
-			if json.Unmarshal(out, &res) == nil && res.SessionID != "" {
-				return res.SessionID
-			}
-		}
-	}
-	s.sessMu.Lock()
-	defer s.sessMu.Unlock()
-	return s.sessID
-}
-
-func (s *Server) setCurrentSession(id string) {
-	s.sessMu.Lock()
-	s.sessID = id
-	s.sessMu.Unlock()
-	if s.opts.Srv != nil && id != "" {
-		payload, _ := json.Marshal(map[string]string{"sessionId": id})
-		_, _ = s.opts.Srv.CallByPlugin("session", "session", "select", payload)
-	}
 }
 
 // Event is one SSE payload.
@@ -146,10 +114,12 @@ func New(opts Options) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/events", s.handleEvents)
-	// L0 Medium faces only (ADR-0030): generic call, commands, UI action, graph.
+	// L0 Medium faces only (ADR-0030): generic call, commands, UI action, graph,
+	// and the approval reply face (ADR-0029: tool_approval SSE → POST ruling).
 	mux.HandleFunc("/api/command", s.handleCommand)
 	mux.HandleFunc("/api/ui-action", s.handleUIAction)
 	mux.HandleFunc("/api/call", s.handleCall)
+	mux.HandleFunc("/api/tool-approval", s.handleToolApproval)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/layout", s.handleLayout)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
@@ -286,42 +256,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.opts.Srv == nil {
-		http.Error(w, "no agent server", http.StatusServiceUnavailable)
-		return
-	}
-	var in struct {
-		Text      string `json:"text"`
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Text) == "" {
-		http.Error(w, "text required", http.StatusBadRequest)
-		return
-	}
-	sid := in.SessionID
-	if sid == "" {
-		sid = s.currentSession()
-	}
-	// Run turn asynchronously so the request returns; events stream on /events.
-	// Busy/lock enforcement lives in the loop plugin (ADR-0030).
-	go func() {
-		payload, _ := json.Marshal(map[string]any{"input": in.Text, "sessionId": sid, "allowSubagent": true})
-		_, err := s.opts.Srv.CallByPlugin("agent", "loop", "turn", payload)
-		if err != nil {
-			s.broadcast(Event{Topic: "status", Data: map[string]string{
-				"status":    "error:" + err.Error(),
-				"sessionId": sid,
-			}})
-		}
-	}()
-	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
-}
-
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -342,135 +276,14 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "output": out, "error": errString(err)})
 }
 
-func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.opts.Srv == nil {
-		http.Error(w, "no agent server", http.StatusServiceUnavailable)
-		return
-	}
-	var in struct {
-		Workspace string `json:"workspace"`
-		SessionID string `json:"sessionId"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
-	workspace := strings.TrimSpace(in.Workspace)
-	if workspace == "" {
-		workspace = s.defaultWorkspace
-	}
-	id := in.SessionID
-	if id == "" {
-		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
-	}
-	// session.create is the public Session contract (ADR-0020); origin=web
-	// so subagent-created sessions never steal Current (CONTEXT.md).
-	payload, _ := json.Marshal(map[string]any{
-		"sessionId": id, "origin": "web", "workspace": workspace,
-	})
-	if _, err := s.opts.Srv.CallByPlugin("session", "session", "create", payload); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	s.setCurrentSession(id)
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + id, "sessionId": id}})
-	writeJSON(w, map[string]any{"ok": true, "sessionId": id, "status": "idle", "workspace": workspace})
-}
-
-func (s *Server) handleSessionWorkspace(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.opts.Srv == nil {
-		http.Error(w, "no agent server", http.StatusServiceUnavailable)
-		return
-	}
-	var in struct {
-		SessionID string `json:"sessionId"`
-		Workspace string `json:"workspace"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Workspace) == "" {
-		http.Error(w, "workspace required", http.StatusBadRequest)
-		return
-	}
-	sid := in.SessionID
-	if sid == "" {
-		sid = s.currentSession()
-	}
-	// Session metadata including Workspace is read via the public session.info
-	// contract; setting Workspace upserts via session.create (ADR-0020).
-	payload, _ := json.Marshal(map[string]any{"sessionId": sid, "workspace": in.Workspace})
-	if _, err := s.opts.Srv.CallByPlugin("session", "session", "create", payload); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true, "sessionId": sid, "workspace": in.Workspace})
-}
-
-// workspaceResolveMaxDirs caps the directory walk so a pick never hangs the Host.
-const workspaceResolveMaxDirs = 20000
-
-// skipWalkDirs are directory names never searched for a picked workspace.
-var skipWalkDirs = map[string]bool{
-	"node_modules": true, "AppData": true, "$RECYCLE.BIN": true,
-	"System Volume Information": true, "Windows": true, "ProgramData": true,
-}
-
-// handleWorkspaceResolve maps a folder chosen in the browser to an absolute path.
-//
-// The File System Access API (showDirectoryPicker) deliberately never reveals a
-// path 鈥?only the directory NAME. The Web Workspace (ADR-0020) needs a real
-// path. The directory walk lives in the workspace Capability provider (a
-// Plugin, ADR-0026: Host does not traverse the filesystem for plugin business);
-// this handler only relays name 鈫?{path, candidates}.
-func (s *Server) handleWorkspaceResolve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.opts.Srv == nil {
-		http.Error(w, "no agent server", http.StatusServiceUnavailable)
-		return
-	}
-	var in struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Name) == "" {
-		http.Error(w, "name required", http.StatusBadRequest)
-		return
-	}
-	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(in.Name)})
-	// workspace.resolve was a Host L1 face; under ADR-0030 no provider is
-	// guaranteed — fall back to empty so the picker still works.
-	out, err := s.opts.Srv.CallByPlugin("filetools", "workspace", "resolve", payload)
-	if err != nil {
-		// No provider: fall back to "type the path" (empty result), do not fail
-		// the whole picker.
-		writeJSON(w, map[string]any{"ok": true, "name": in.Name, "path": "", "candidates": []string{}})
-		return
-	}
-	var res struct {
-		Name       string   `json:"name"`
-		Path       string   `json:"path"`
-		Candidates []string `json:"candidates"`
-	}
-	if len(out) > 0 {
-		_ = json.Unmarshal(out, &res)
-	}
-	if res.Name == "" {
-		res.Name = in.Name
-	}
-	if res.Candidates == nil {
-		res.Candidates = []string{}
-	}
-	writeJSON(w, map[string]any{"ok": true, "name": res.Name, "path": res.Path, "candidates": res.Candidates})
-}
-
 // requestToolApproval implements Host OnToolApproval for the Web Medium (ADR-0019).
 // Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
-// Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
+// The wait is deliberately shorter than serve.DefaultCallTimeout (30s): the
+// approval bubble lives inside a plugin-to-plugin Frame (sandbox → agent), so
+// if no ruling lands in time the enclosing call times out FIRST — and the
+// policy layer fails closed. A longer wait here would be dead code.
+const approvalWait = 20 * time.Second
+
 func (s *Server) requestToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
 	s.apprMu.Lock()
 	s.apprNext++
@@ -493,7 +306,7 @@ func (s *Server) requestToolApproval(tool string, arguments json.RawMessage, wor
 	select {
 	case ok := <-ch:
 		return ok
-	case <-time.After(2 * time.Minute):
+	case <-time.After(approvalWait):
 		return false
 	}
 }
@@ -523,88 +336,6 @@ func (s *Server) handleToolApproval(w http.ResponseWriter, r *http.Request) {
 	default:
 	}
 	writeJSON(w, map[string]any{"ok": true, "approved": in.Approved})
-}
-
-func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
-	sid := s.currentSession()
-	status := "idle"
-	var running []string
-	if s.opts.Srv != nil {
-		status = "idle"
-		running = nil
-	}
-	writeJSON(w, map[string]any{
-		"sessionId": sid,
-		"status":    status,
-		"running":   running,
-		"busy":      len(running) > 0,
-	})
-}
-
-func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Srv == nil {
-		writeJSON(w, map[string]any{"sessions": []any{}, "current": s.currentSession()})
-		return
-	}
-	out, err := s.opts.Srv.CallByPlugin("session", "session", "list", json.RawMessage(`{}`))
-	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error(), "sessions": []any{}, "current": s.currentSession()})
-		return
-	}
-	var listRes struct {
-		Sessions []map[string]any `json:"sessions"`
-	}
-	if len(out) > 0 {
-		_ = json.Unmarshal(out, &listRes)
-	}
-	if listRes.Sessions == nil {
-		listRes.Sessions = []map[string]any{}
-	}
-	writeJSON(w, map[string]any{"sessions": listRes.Sessions, "current": s.currentSession()})
-}
-
-func (s *Server) handleSessionSelect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var in struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.SessionID == "" {
-		http.Error(w, "sessionId required", http.StatusBadRequest)
-		return
-	}
-	s.setCurrentSession(in.SessionID)
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "session:" + in.SessionID, "sessionId": in.SessionID}})
-	status := "idle"
-	if s.opts.Srv != nil {
-		status = "idle"
-	}
-	writeJSON(w, map[string]any{"ok": true, "sessionId": in.SessionID, "status": status})
-}
-
-func (s *Server) handleTurnCancel(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.opts.Srv == nil {
-		http.Error(w, "no agent server", http.StatusServiceUnavailable)
-		return
-	}
-	sid := s.currentSession()
-	var in struct {
-		SessionID string `json:"sessionId"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
-	if in.SessionID != "" {
-		sid = in.SessionID
-	}
-	// Cancel only the target Session so parallel turns keep running.
-	cancelLoop(s.opts.Srv, sid)
-	s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "cancelling", "sessionId": sid}})
-	writeJSON(w, map[string]any{"ok": true, "sessionId": sid})
 }
 
 func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {
@@ -676,9 +407,26 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	if len(in.Payload) == 0 {
 		in.Payload = json.RawMessage(`{}`)
 	}
+	// ADR-0020: a web session.create with no Workspace gets the Host default.
+	// The removed /api/session/new route used to own this; the Medium keeps the
+	// contract on the capability path so the frontend needs no special-case.
+	if target == "session" && in.Method == "create" {
+		in.Payload = fillDefaultWorkspace(in.Payload, s.defaultWorkspace)
+	}
 	capName := in.Cap
 	if capName == "" {
 		capName = target
+	}
+	// Turn lifecycle status for the Web Medium (ADR-0030: the Medium owns Render
+	// state). The Shell drives exactly one call per Turn — agent.loop.turn via
+	// /api/call — so the Medium tags running/idle around it; plugin-driven
+	// subagent Turns never pass through this HTTP face. Consumers (rail, usage
+	// bar, chips) react to status idles without any domain payload meaning.
+	turnSID := ""
+	broadcastTurn := capName == "loop" && target == "agent" && in.Method == "turn"
+	if broadcastTurn {
+		turnSID = payloadSessionID(in.Payload)
+		s.broadcast(Event{Topic: "status", Data: map[string]string{"status": "running", "sessionId": turnSID}})
 	}
 	var out json.RawMessage
 	var err error
@@ -688,6 +436,13 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out, err = s.opts.Srv.CallByPlugin(target, capName, in.Method, in.Payload)
 	}
+	if broadcastTurn {
+		status := "idle"
+		if err != nil {
+			status = "error:" + err.Error()
+		}
+		s.broadcast(Event{Topic: "status", Data: map[string]string{"status": status, "sessionId": turnSID}})
+	}
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -695,12 +450,36 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "result": json.RawMessage(orEmptyJSON(out))})
 }
 
-func cancelLoop(srv *serve.Server, sessionID string) {
-	if srv == nil {
-		return
+// fillDefaultWorkspace applies def to a session.create payload whose Workspace
+// is empty (ADR-0020). Returns the payload unchanged when nothing changes —
+// a payload that is not a JSON object, already carries a workspace, or targets
+// no default is passed through untouched.
+func fillDefaultWorkspace(payload json.RawMessage, def string) json.RawMessage {
+	if def == "" || len(payload) == 0 {
+		return payload
 	}
-	payload, _ := json.Marshal(map[string]string{"sessionId": sessionID})
-	_, _ = srv.CallByPlugin("agent", "loop", "cancel", payload)
+	var m map[string]any
+	if json.Unmarshal(payload, &m) != nil {
+		return payload
+	}
+	if ws, _ := m["workspace"].(string); strings.TrimSpace(ws) != "" {
+		return payload
+	}
+	m["workspace"] = def
+	b, err := json.Marshal(m)
+	if err != nil {
+		return payload
+	}
+	return b
+}
+
+// payloadSessionID plucks the sessionId a payload targets ("" = Host default).
+func payloadSessionID(payload json.RawMessage) string {
+	var m struct {
+		SessionID string `json:"sessionId"`
+	}
+	_ = json.Unmarshal(payload, &m)
+	return m.SessionID
 }
 
 func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {

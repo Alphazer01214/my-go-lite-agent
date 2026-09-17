@@ -1,6 +1,6 @@
 # webtools：web_fetch / web_search
 
-Status: ready-for-agent
+Status: resolved（插件已落地并接入 coding scheme）
 
 ## Problem Statement
 

@@ -6,10 +6,10 @@
 用户输入
    │
    ▼
-┌──────────── Host（薄内核）────────────┐
+┌──────────── Host（L0 薄内核）─────────┐
 │  Discovery · Assembly · 生命周期       │
-│  Frame 路由（星型） · Session 不变量   │
-│  agent.request / agent.inject          │
+│  按插件名转发（Frame To + 不透明载荷） │
+│  通用事件/应答 · hostFaces · ensure    │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
  session     llm      context-manager tools
@@ -19,6 +19,8 @@
                     │
                  agent（插件，provides loop）
 ```
+
+Host 不认识能力名，不解析领域 payload；会话、回合、工具编排全在插件（ADR-0030）。
 
 ## 理念
 
@@ -32,8 +34,8 @@
 
 - 进程外插件（stdin/stdout JSON Frame），崩溃隔离
 - **Autostart + dependsOn**：Manifest 根集 + 依赖闭包；不再依赖日常 Assembly 白名单（ADR-0021）
-- 星型路由：插件不直连，策略平面唯一
-- Session Log 不变量 + Agent 插件（提供 `loop`，经星型组合 llm/session/tools）
+- **L0 转发**：Host 按插件名寻址（Frame `to` + 不透明 payload），不按能力名分支（ADR-0030）
+- Session Log 不变量 + Agent 插件（提供 `loop`，自行组合 llm/session/tools）
 - **Agent Scheme**：`chat` / `tool_calling` / `coding`（config 可自定义）；`dependsPlugins` + `allowedTools`
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
@@ -172,7 +174,7 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 
 ## 文档
 
-- 插件索引（含状态标记：核四件 / 场景工具 / 示例 / 测试夹具）：[plugins/README.md](plugins/README.md)
+- 插件索引（含状态标记：核四件 / 场景工具）：[plugins/README.md](plugins/README.md)
 - 术语与边界：[CONTEXT.md](CONTEXT.md)
 - 架构决策：[docs/adr/](docs/adr/)
-- 内部票与规格：[.scratch/](.scratch/)（开发用）
+- 历史 spec 归档：[docs/archive/](docs/archive/)（开发过程稿，非现行契约）

@@ -38,18 +38,13 @@ done
 # Single source of truth: scripts/shipped-plugins.conf (shared with build.ps1).
 CORE_PLUGINS=()
 TOOLS_PLUGINS=()
-EXAMPLE_PLUGINS=()
 while IFS= read -r line; do
   case "$line" in
     core\:*) __rest="${line#core: }"; CORE_PLUGINS=($__rest) ;;
     tools\:*) __rest="${line#tools: }"; TOOLS_PLUGINS=($__rest) ;;
-    example\:*) __rest="${line#example: }"; EXAMPLE_PLUGINS=($__rest) ;;
   esac
 done < "$ROOT/scripts/shipped-plugins.conf"
-SHIPPED_PLUGINS=("${CORE_PLUGINS[@]}" "${TOOLS_PLUGINS[@]}" "${EXAMPLE_PLUGINS[@]}")
-# 测试夹具 (NOT shipped — Go tests build them into temp dirs on demand):
-#   agentprobe asyncsubllm consumer crashonce emptytools promptreg sessionprobe slow
-#   located under testdata/plugins/ (never under plugins/, so Discovery skips them).
+SHIPPED_PLUGINS=("${CORE_PLUGINS[@]}" "${TOOLS_PLUGINS[@]}")
 
 should_build() {
   local target="$1"

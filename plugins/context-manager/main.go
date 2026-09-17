@@ -171,11 +171,11 @@ func buildCompactHint(tokens, window int) map[string]any {
 	}
 	suggest := float64(tokens) > softBudgetRatio*float64(window)
 	return map[string]any{
-		"suggestCompact":   suggest,
-		"estimatedTokens":  tokens,
-		"contextWindow":    window,
-		"threshold":        softBudgetRatio,
-		"thresholdTokens":  int(float64(window) * softBudgetRatio),
+		"suggestCompact":  suggest,
+		"estimatedTokens": tokens,
+		"contextWindow":   window,
+		"threshold":       softBudgetRatio,
+		"thresholdTokens": int(float64(window) * softBudgetRatio),
 	}
 }
 
@@ -253,6 +253,43 @@ func buildSummary(msgs []message) string {
 	return strings.Join(lines, "\n")
 }
 
+// lastLLMUsageFromLog projects a session's most recent provider usage from its
+// Session Log (session.query of the "session" Capability), for sessions this
+// process never prepared — historical sessions keep showing a real token count
+// instead of null (BUG-08). Returns nil when the log has no llm_usage fact.
+func lastLLMUsageFromLog(s *pluginsdk.Server, sessionID string) *usageInfo {
+	payload, _ := json.Marshal(map[string]any{"sessionId": sessionID, "afterSeq": 0, "limit": 0})
+	raw, err := s.CallTo("session", "session", "query", payload)
+	if err != nil {
+		return nil
+	}
+	var out struct {
+		Facts []struct {
+			Type string         `json:"type"`
+			Meta map[string]any `json:"meta"`
+		} `json:"facts"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	for i := len(out.Facts) - 1; i >= 0; i-- {
+		f := out.Facts[i]
+		if f.Type != "llm_usage" {
+			continue
+		}
+		usage, _ := f.Meta["usage"].(map[string]any)
+		if usage == nil {
+			return nil
+		}
+		tok := 0
+		if v, ok := usage["total_tokens"].(float64); ok {
+			tok = int(v)
+		}
+		return &usageInfo{EstimatedTokens: tok, Source: "provider"}
+	}
+	return nil
+}
+
 func main() {
 	s := pluginsdk.New()
 	st := newStore()
@@ -261,7 +298,7 @@ func main() {
 	listTools := func() []map[string]any {
 		// Fan-out over known tools plugins (Host no longer merges, ADR-0030).
 		merged := []map[string]any{}
-		for _, name := range []string{"filetools", "shelltools", "skill-manager", "webtools", "echotool"} {
+		for _, name := range []string{"filetools", "shelltools", "skill-manager", "webtools"} {
 			raw, err := s.CallTo(name, "tools", "list", json.RawMessage(`{}`))
 			if err != nil {
 				continue
@@ -454,7 +491,14 @@ func main() {
 		sess := st.session[sid]
 		st.mu.Unlock()
 		if sess == nil {
-			return json.Marshal(map[string]any{"usage": nil})
+			// Historical / restarted session: this process never prepared it.
+			// Project the last provider-reported llm_usage fact from the Session
+			// Log so the UI can tell "no data" from "not yet prepared" (BUG-08).
+			usage := lastLLMUsageFromLog(s, sid)
+			if usage == nil {
+				return json.Marshal(map[string]any{"usage": nil})
+			}
+			return json.Marshal(map[string]any{"usage": usage})
 		}
 		out := map[string]any{"usage": sess.usage}
 		if sess.contextWindow > 0 {

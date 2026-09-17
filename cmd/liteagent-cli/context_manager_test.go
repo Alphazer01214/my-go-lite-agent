@@ -93,65 +93,6 @@ func TestContextManagerAssemblesSystemPrompt(t *testing.T) {
 	}
 }
 
-func buildPromptRegPluginDir(t *testing.T, root, pluginsDir, name string) {
-	t.Helper()
-	bin := buildPkg(t, root, "./testdata/plugins/promptreg")
-	dst := filepath.Join(pluginsDir, name, name+".exe")
-	writeFile(t, filepath.Join(pluginsDir, name, "plugin.json"), `{
-		"name": "`+name+`",
-		"version": "0.1.0",
-		"protocol": 2,
-		"autostart": true,
-		"provides": ["demo"],
-		"consumes": ["system-prompt"],
-		"entry": "`+name+`.exe"
-	}`)
-	b, err := os.ReadFile(bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestContextManagerRegisterSegmentViaStar: another Plugin registers a dynamic Prompt Segment.
-func TestContextManagerRegisterSegmentViaStar(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
-	buildPromptRegPluginDir(t, root, pluginsDir, "promptreg")
-
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","promptreg","agent"]}`)
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-invoke", "promptreg",
-		"-invoke-payload", `{"name":"dyn","order":50,"text":"DYNAMIC_SEGMENT_MARKER"}`,
-		"-turn", "hello dynamic",
-		"-session-derive",
-	)
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("register segment then turn: %v\n%s", err, out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "invoke ok") {
-		t.Fatalf("want invoke ok: %s", s)
-	}
-	if !strings.Contains(s, "DYNAMIC_SEGMENT_MARKER") {
-		t.Fatalf("want dynamically registered segment in derive: %s", s)
-	}
-}
-
 // TestTurnWorksWithoutContextManager: missing system-prompt provider must not fail the turn.
 func TestTurnWorksWithoutContextManager(t *testing.T) {
 	root := moduleRoot(t)

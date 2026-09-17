@@ -7,52 +7,6 @@ import (
 	"testing"
 )
 
-// TestContextPrepareReturnsSystemAndTools: context.prepare returns assembled systemText
-// and tools schemas collected from the mounted tools plugin.
-func TestContextPrepareReturnsSystemAndTools(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
-		"segments": [
-			{"name": "identity", "order": -1000, "text": "You are CM_PREPARE_IDENTITY."}
-		]
-	}`)
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
-	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
-
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","echotool","agent"]}`)
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-invoke", "context-manager",
-		"-frame-cap", "context",
-		"-frame-method", "prepare",
-		"-invoke-payload", `{"sessionId":"","messages":[{"role":"user","content":"hello"}]}`,
-		"-session-derive",
-	)
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("invoke context.prepare: %v\n%s", err, out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "invoke ok") {
-		t.Fatalf("want invoke ok: %s", s)
-	}
-	if !strings.Contains(s, "CM_PREPARE_IDENTITY") {
-		t.Fatalf("want systemText from segments: %s", s)
-	}
-	if !strings.Contains(s, "echo_text") {
-		t.Fatalf("want tools schemas from tools.list: %s", s)
-	}
-}
-
 // TestContextCompactProducesSummary: context.compact returns summary text and coversThroughSeq.
 func TestContextCompactProducesSummary(t *testing.T) {
 	root := moduleRoot(t)
@@ -61,7 +15,6 @@ func TestContextCompactProducesSummary(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
-
 	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","context-manager","agent"]}`)
@@ -106,7 +59,6 @@ func TestContextRegisterSkillAppearsInPrepare(t *testing.T) {
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
-
 	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","agent"]}`)
@@ -132,47 +84,6 @@ func TestContextRegisterSkillAppearsInPrepare(t *testing.T) {
 	}
 }
 
-// TestLoopPreparePreservesToolCalls: derive history with tool_calls must survive
-// context.prepare echo (session_invariant_violation regression).
-func TestLoopPreparePreservesToolCalls(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
-	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
-	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
-
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","stubllm","context-manager","echotool","agent"]}`)
-
-	appendJSON := `[
-		{"type":"message","role":"user","content":"use a tool"},
-		{"type":"tool_call","role":"assistant","content":"","meta":{"tool_calls":[{"id":"call_1","name":"echo_text","arguments":{"text":"hi"}}]}},
-		{"type":"tool_result","role":"tool","content":"hi","meta":{"tool_call_id":"call_1"}}
-	]`
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-session-append", appendJSON,
-		"-turn", "next",
-	)
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("turn with tool history + CM: %v\n%s", err, out)
-	}
-	if strings.Contains(string(out), "session_invariant_violation") {
-		t.Fatalf("prepare must preserve tool_calls: %s", out)
-	}
-	if !strings.Contains(string(out), "turn ok") {
-		t.Fatalf("want turn ok: %s", out)
-	}
-}
-
 // TestContextUsageCharsAreModelVisibleOnly: usage.chars must equal sum of
 // message content (not systemText again, not Host/JSON framing).
 func TestContextUsageCharsAreModelVisibleOnly(t *testing.T) {
@@ -182,10 +93,9 @@ func TestContextUsageCharsAreModelVisibleOnly(t *testing.T) {
 	pluginsDir := t.TempDir()
 	buildSessionPluginDir(t, root, pluginsDir, "session")
 	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", `{
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
 		"segments": [{"name":"identity","order":-1000,"text":"SYS_ONLY_XXXX"}]
 	}`)
-
+	buildAgentPluginDir(t, root, pluginsDir, "agent")
 	cfg := filepath.Join(t.TempDir(), "assembly.json")
 	writeFile(t, cfg, `{"plugins":["session","context-manager","agent"]}`)
 

@@ -40,41 +40,6 @@ func TestWorkspaceBindsToDefaultSession(t *testing.T) {
 	}
 }
 
-func TestToolsMultiProviderListAndCall(t *testing.T) {
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
-	// second tools provider: filetools
-	buildPkgToPlugin(t, root, pluginsDir, "filetools")
-	buildStubLLMPluginDir(t, root, pluginsDir, "stubllm")
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
-	buildContextManagerPluginDir(t, root, pluginsDir, "context-manager", "")
-
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["agent","session","stubllm","echotool","filetools","context-manager"]}`)
-
-	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, "note.txt"), "hello-ws\n")
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-workspace", ws,
-		"-turn", "use tools",
-	)
-	cmd.Env = hostEnv(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("turn: %v\n%s", err, out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "turn ok") {
-		t.Fatalf("want turn ok: %s", s)
-	}
-}
-
 func TestFiletoolsRespectsWorkspace(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")

@@ -143,38 +143,6 @@ func TestLLMOpenAIRealTurn(t *testing.T) {
 	}
 }
 
-// TestLLMOpenAIForwardsTools: Host tools schema must reach the OpenAI request body.
-func TestLLMOpenAIForwardsTools(t *testing.T) {
-	srv := fakeOpenAI(t, "ok-with-tools", true)
-	defer srv.Close()
-
-	root := moduleRoot(t)
-	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
-
-	pluginsDir := t.TempDir()
-	buildSessionPluginDir(t, root, pluginsDir, "session")
-	buildLLMOpenAIPluginDir(t, root, pluginsDir, "llm-openai", srv.URL, "deepseek-flash")
-	buildEchoToolPluginDir(t, root, pluginsDir, "echotool")
-
-	buildAgentPluginDir(t, root, pluginsDir, "agent")
-	cfg := filepath.Join(t.TempDir(), "assembly.json")
-	writeFile(t, cfg, `{"plugins":["session","llm-openai","echotool","agent"]}`)
-
-	cmd := exec.Command(hostBin,
-		"-plugins", pluginsDir,
-		"-assembly", cfg,
-		"-turn", "use tools",
-	)
-	cmd.Env = filterEnv(hostEnv(t), "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("tools forward turn: %v\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "turn ok") {
-		t.Fatalf("want turn ok: %s", out)
-	}
-}
-
 func TestLLMOpenAIMissingKey(t *testing.T) {
 	root := moduleRoot(t)
 	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")

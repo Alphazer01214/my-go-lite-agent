@@ -31,24 +31,6 @@ Manifest autostart（默认 false）作启动根
 | [skill-manager](skill-manager/README.md) | 场景工具（scheme `coding` 拉起） | `skills` `tools` | — | Skill 发现、`$skill` 展开 |
 | [project-context](project-context/README.md) | 场景工具（scheme `coding` 拉起） | `project-context` | — | AGENTS.md / CLAUDE.md |
 | [webtools](webtools/README.md) | 场景工具（scheme `coding` 拉起） | `tools` | — | web_fetch / web_search |
-| [echotool](echotool/README.md) | 示例（无 scheme 拉起） | `tools` | — | Presentation Card 最小样例 |
-| [echo](echo/README.md) | **无用**（样例残留） | `echo` | — | 仅 CLI/夹具对端；产品路径无人挂载 |
-| [uidemo](uidemo/README.md) | 示例（无 scheme 拉起） | — | sidebar 面板 | Panel Component 活文档 |
-| [agentprobe](../testdata/plugins/agentprobe/README.md) | **测试夹具，不发布** | — | — | `agent.request` 不变量 |
-| [asyncsubllm](../testdata/plugins/asyncsubllm/README.md) | **测试夹具，不发布** | `llm` | — | 异步 Subagent 回注 |
-| [consumer](../testdata/plugins/consumer/README.md) | **测试夹具，不发布** | `demo` | — | 星型路由 / consumes |
-| [crashonce](../testdata/plugins/crashonce/README.md) | **测试夹具，不发布** | `echo` | — | 崩溃后按需重启 |
-| [emptytools](../testdata/plugins/emptytools/README.md) | **测试夹具，不发布** | `tools`（空） | — | 无模型可见工具 |
-| [promptreg](../testdata/plugins/promptreg/README.md) | **测试夹具，不发布** | — | — | 运行时注册 Prompt Segment |
-| [sessionprobe](../testdata/plugins/sessionprobe/README.md) | **测试夹具，不发布** | — | — | 多会话 session.* |
-| [slow](../testdata/plugins/slow/README.md) | **测试夹具，不发布** | `slow` | — | 调用超时 |
-
-### 「无用」的判定口径
-
-- **测试夹具（8 个）**：`agentprobe` `asyncsubllm` `consumer` `crashonce` `emptytools` `promptreg` `sessionprobe` `slow`，位于 `testdata/plugins/`。
-  没有 `plugin.json`，Go 测试按需编译；构建脚本显式列出但不安装。**不要在 dist 里手动放它们**——它们会污染 Discovery，且 `slow` / `crashonce` 会带来超时与重启噪声。
-- **`echo`**：唯一真正冗余的插件。它只被 `consumer` 夹具与 CLI 手工 `-invoke` 使用；没有任何 `autostart`/scheme 会挂载它，产品路径上不会启动。保留仅为兼容既有测试。
-- **`echotool` / `uidemo`**：示例/参考，随 dist 发布但不自动挂载；要在真实会话里用它们，把它们加进某个 scheme 的 `dependsPlugins`。
 
 ## 给插件作者
 

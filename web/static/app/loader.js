@@ -57,24 +57,42 @@ export function createLoader(page, panelHost, onError) {
   // import.meta.url) and version (cache-busting across plugin upgrades).
   function loadPluginUIs() {
     fetch('/api/plugins').then(function (r) { return r.json(); }).then(function (b) {
-      (b.plugins || []).forEach(function (p) {
-        if (!p.ui || !p.ui.entry) return;
+      // Deterministic slot order (BUG-14): chips/mounts must land in a stable
+      // plugin-name order — the statusbar has no ordering contract, so
+      // import-completion order used to shuffle it per load. Imports still run
+      // in parallel; only the mount phase is ordered.
+      var plugins = (b.plugins || []).filter(function (p) {
+        if (!p.ui || !p.ui.entry) return false;
         // /api/plugins reports the whole Discovery catalog (the plugin graph
         // draws from it), but only mounted plugins have live Panel Components:
         // an unmounted plugin's UI dir is not even served under /plugin-ui/.
-        if (p.state && p.state !== 'mounted') return;
+        if (p.state && p.state !== 'mounted') return false;
+        return true;
+      }).sort(function (a, c) { return (a.name || '').localeCompare(c.name || ''); });
+
+      function mountsOf(p) {
+        return (p.ui.mounts || []).filter(function (m) {
+          if (PAGES.indexOf(pageOf(m)) < 0) {
+            report('plugin ' + p.name + ' mounts unknown page "' + pageOf(m) + '" (known: ' + PAGES.join(', ') + ')');
+            return false;
+          }
+          return pageOf(m) === page;
+        });
+      }
+
+      Promise.all(plugins.map(function (p) {
         var url = p.ui.entry + '?plugin=' + encodeURIComponent(p.name) + '&v=' + encodeURIComponent(p.version || '');
-        import(url).then(function () {
-          (p.ui.mounts || []).forEach(function (m) {
-            if (PAGES.indexOf(pageOf(m)) < 0) {
-              report('plugin ' + p.name + ' mounts unknown page "' + pageOf(m) + '" (known: ' + PAGES.join(', ') + ')');
-              return;
-            }
-            if (pageOf(m) !== page) return; // other layout page's mount
+        return import(url).catch(function (e) {
+          report('plugin ui failed: ' + p.name + ' ' + e);
+          return null;
+        });
+      })).then(function () {
+        // Ordered mount: each plugin's statics land in sorted-name order while
+        // module compilation stayed concurrent.
+        plugins.forEach(function (p) {
+          mountsOf(p).forEach(function (m) {
             applyPanel({ op: 'set', slot: m.slot, id: m.component, component: m.component, props: m.props });
           });
-        }).catch(function (e) {
-          report('plugin ui failed: ' + p.name + ' ' + e);
         });
       });
     }).catch(function (e) {

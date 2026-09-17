@@ -74,6 +74,7 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 
 	probeCommandFaces(srv, plan.Mounted)
 	cp := newCommandPlane(srv, pluginsDir, plan)
+	cp.web = true // /help filters CLI-only flags for the Web Medium (BUG-09)
 
 	bind := addr
 	if strings.HasPrefix(bind, ":") {

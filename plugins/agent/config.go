@@ -47,9 +47,6 @@ func defaultSchemes() map[string]scheme {
 			DependsPlugins: []string{
 				"filetools", "shelltools", "sandbox",
 				"skill-manager", "project-context", "webtools",
-				// Reference plugins ride along the richest scheme so every
-				// shipped plugin has a mount path (C12).
-				"echotool", "echo", "uidemo",
 			},
 			RunSubagent: &on,
 			Todo:        &on,
