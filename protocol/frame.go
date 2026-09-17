@@ -9,12 +9,17 @@ import (
 )
 
 // Frame is one complete Host↔Plugin message: length-prefixed JSON body.
+//
+// Addressing (ADR-0030, Frame v5): Host routes by To (target plugin name) and
+// forwards Payload opaquely. Cap/Method remain for the receiving Plugin's own
+// dispatch — Host must not branch on domain capability names.
 type Frame struct {
 	V       int             `json:"v"`
 	ID      string          `json:"id"`
 	Type    string          `json:"type"` // req | res | evt
-	Cap     string          `json:"cap"`
-	Method  string          `json:"method"`
+	To      string          `json:"to,omitempty"`
+	Cap     string          `json:"cap,omitempty"`
+	Method  string          `json:"method,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	Error   *FrameError     `json:"error,omitempty"`
 }
@@ -40,9 +45,11 @@ const (
 
 // Version is the Frame protocol version carried in Frame.V.
 // v2: presentation render kinds are markdown_text | message_text | summary_text.
+// v5: Host addresses by To (plugin name) + opaque payload; Cap/Method are
+// receiving-plugin dispatch only (ADR-0030).
 // It versions the wire Frame only; the plugin.json "protocol" field is a
 // separate manifest/UI-contract version (plugin.CurrentProtocol, ADR-0012).
-const Version = 2
+const Version = 5
 
 // maxFrameSize guards against corrupt length prefixes.
 const maxFrameSize = 16 << 20

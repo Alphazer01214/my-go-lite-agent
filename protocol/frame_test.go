@@ -10,11 +10,12 @@ import (
 func TestFrameRoundtrip(t *testing.T) {
 	payload := json.RawMessage(`{"hello":"world"}`)
 	in := &Frame{
-		V:       1,
+		V:       Version,
 		ID:      "call-1",
 		Type:    TypeReq,
-		Cap:     "echo",
-		Method:  "echo",
+		To:      "session",
+		Cap:     "session",
+		Method:  "append",
 		Payload: payload,
 	}
 
@@ -26,7 +27,7 @@ func TestFrameRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFrame: %v", err)
 	}
-	if out.V != in.V || out.ID != in.ID || out.Type != in.Type || out.Cap != in.Cap || out.Method != in.Method {
+	if out.V != in.V || out.ID != in.ID || out.Type != in.Type || out.To != in.To || out.Cap != in.Cap || out.Method != in.Method {
 		t.Fatalf("header mismatch: %+v vs %+v", out, in)
 	}
 	if !bytes.Equal(out.Payload, payload) {

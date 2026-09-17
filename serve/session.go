@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -19,28 +20,14 @@ type sessionTurn struct {
 }
 
 // Message is one model-visible chat message.
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
+// Alias of the pluginsdk contract (ADR-0030: types live in pluginsdk).
+type Message = pluginsdk.Message
 
 // ToolCall is a model-requested tool invocation.
-type ToolCall struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-}
+type ToolCall = pluginsdk.ToolCall
 
 // TurnResult is one Agent Loop turn returned by the mounted loop provider (ADR-0016).
-type TurnResult struct {
-	User      string    `json:"user"`
-	Assistant string    `json:"assistant"`
-	Chunks    []string  `json:"chunks"`
-	ToolCalls []string  `json:"tool_calls,omitempty"`
-	Messages  []Message `json:"messages"`
-}
+type TurnResult = pluginsdk.TurnResult
 
 // normalizeSessionID maps empty/blank to the default Session id so Host turn
 // state, status, and render tags never split "" vs "default" into two Sessions.

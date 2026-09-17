@@ -202,8 +202,17 @@ func CallByFace(s *Server, pluginName, face, method string, payload json.RawMess
 	return out.Payload, nil
 }
 
+// CallByPlugin addresses a mounted Plugin by name and invokes cap.method
+// on it (L0 point-named call, ADR-0030). Cap/Method are the receiving
+// Plugin's dispatch keys; Host does not route by them.
+func (s *Server) CallByPlugin(pluginName, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	return s.callByPlugin(pluginName, cap, method, payload)
+}
+
 // CallByCap routes cap.method to the Plugin that provides cap.
 // For tools (multi-provider, ADR-0018), list merges and call routes by tool name.
+// DEPRECATED for Medium/plugin use under ADR-0030: prefer CallByPlugin / Frame.To.
+// Still used during the Z1→Z2 transition and by tests.
 func (s *Server) CallByCap(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	if cap == ToolsCap {
 		if method == "list" {

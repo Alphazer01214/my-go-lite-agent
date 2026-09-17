@@ -21,13 +21,28 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	s.mu.Unlock()
 	if closed {
 		_ = s.writeTo(from, &protocol.Frame{
-			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method,
+			V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap, Method: f.Method,
 			Error: &protocol.FrameError{Code: "host_closed", Message: "host_closed"},
 		})
 		return
 	}
 
+	// L0 point-named addressing (ADR-0030): Frame.To is the target plugin name.
+	// Cap/Method are carried for the receiving Plugin's dispatch only.
+	if f.To != "" {
+		if f.To == from {
+			_ = s.writeTo(from, &protocol.Frame{
+				V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap, Method: f.Method,
+				Error: &protocol.FrameError{Code: "route_failed", Message: "cannot call self by name"},
+			})
+			return
+		}
+		s.forwardTo(from, f, f.To)
+		return
+	}
+
 	// Host owns agent/request (log invariant) and agent.inject (append-only notify).
+	// Temporary retained special case until Deferred #3 is reopened (ADR-0030).
 	if f.Cap == AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
 		s.handleAgentFromPlugin(from, f)
 		return
@@ -40,6 +55,7 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	}
 
 	// Multi-provider tools (ADR-0018): merge list / route call by tool name.
+	// Scheduled for removal in Z2 (tools leave Host, ADR-0030).
 	if f.Cap == ToolsCap {
 		s.routeToolsFromPlugin(from, f)
 		return
@@ -51,17 +67,31 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 		return
 	}
 	owner, ok := s.provides[f.Cap]
+	s.mu.Unlock()
 	if !ok || owner == from {
-		s.mu.Unlock()
 		_ = s.writeTo(from, &protocol.Frame{
 			V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap,
 			Error: &protocol.FrameError{Code: "capability_unavailable", Message: fmt.Sprintf("unknown capability %q", f.Cap)},
 		})
 		return
 	}
+	s.forwardTo(from, f, owner)
+}
+
+// forwardTo sends f to the named plugin process with fwd-id rewriting,
+// pending registration, and timeout (L0 transfer primitive).
+func (s *Server) forwardTo(from string, f *protocol.Frame, owner string) {
 	to := DefaultCallTimeout
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if p := s.plugins[owner]; p != nil {
 		to = p.timeout
+	} else if _, ui := s.mountedUI[owner]; !ui {
+		// Not mounted as a process; still allow if it will be launched below
+		// via ensureAlive (process plugins only).
 	}
 	s.seq++
 	fwdID := fmt.Sprintf("fwd-%d", s.seq)
@@ -81,7 +111,7 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 		delete(s.pending, fwdID)
 		s.mu.Unlock()
 		_ = s.writeTo(from, &protocol.Frame{
-			Type: protocol.TypeRes, ID: f.ID, Cap: f.Cap,
+			Type: protocol.TypeRes, ID: f.ID, To: f.To, Cap: f.Cap,
 			Error: &protocol.FrameError{Code: "route_failed", Message: err.Error()},
 		})
 		return
@@ -89,12 +119,13 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 
 	fwd := *f
 	fwd.ID = fwdID
+	fwd.To = owner
 	if err := s.writeTo(owner, &fwd); err != nil {
 		s.mu.Lock()
 		delete(s.pending, fwdID)
 		s.mu.Unlock()
 		_ = s.writeTo(from, &protocol.Frame{
-			Type: protocol.TypeRes, ID: f.ID, Cap: f.Cap,
+			Type: protocol.TypeRes, ID: f.ID, To: f.To, Cap: f.Cap,
 			Error: &protocol.FrameError{Code: "route_failed", Message: err.Error()},
 		})
 		return
@@ -111,7 +142,7 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 			return
 		}
 		_ = s.writeTo(from, &protocol.Frame{
-			Type: protocol.TypeRes, ID: f.ID, Cap: f.Cap,
+			Type: protocol.TypeRes, ID: f.ID, To: f.To, Cap: f.Cap,
 			Error: &protocol.FrameError{Code: "timeout", Message: fmt.Sprintf("call to %s timed out after %s", owner, to)},
 		})
 		_ = w

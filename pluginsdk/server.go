@@ -1,8 +1,8 @@
 // Package pluginsdk is the Plugin author API: Serve/Handle/Call/Emit over Host Frames.
 //
 // Public contract (breaking changes require protocol field bump):
-//   - Frame: uint32 big-endian length + JSON; fields v,id,type,cap,method,payload,error
-//   - Manifest: plugin.json beside the executable; protocol must be 1..3
+//   - Frame: uint32 big-endian length + JSON; fields v,id,type,to,cap,method,payload,error
+//   - Manifest: plugin.json beside the executable; protocol must be 1..CurrentProtocol
 //
 // Native and third-party Plugins use this package; do not hand-roll Frame loops.
 package pluginsdk
@@ -83,7 +83,21 @@ func (s *Server) EmitTo(id, cap, method string, payload json.RawMessage) error {
 }
 
 // Call invokes another Capability through Host (star topology). Blocks until res or error.
+// Prefer CallTo when the target plugin name is known (ADR-0030 L0 addressing).
 func (s *Server) Call(cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	return s.callFrame("", cap, method, payload)
+}
+
+// CallTo addresses a target Plugin by name (ADR-0030). Host forwards to that
+// process without interpreting Cap/Method or Payload.
+func (s *Server) CallTo(plugin, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
+	if plugin == "" {
+		return nil, fmt.Errorf("callTo: plugin name is required")
+	}
+	return s.callFrame(plugin, cap, method, payload)
+}
+
+func (s *Server) callFrame(to, cap, method string, payload json.RawMessage) (json.RawMessage, error) {
 	id := fmt.Sprintf("sdk-%d", s.out.Add(1))
 	ch := make(chan *protocol.Frame, 1)
 	s.mu.Lock()
@@ -92,6 +106,7 @@ func (s *Server) Call(cap, method string, payload json.RawMessage) (json.RawMess
 		V:       protocol.Version,
 		ID:      id,
 		Type:    protocol.TypeReq,
+		To:      to,
 		Cap:     cap,
 		Method:  method,
 		Payload: payload,

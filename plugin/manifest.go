@@ -116,7 +116,8 @@ type Manifest struct {
 // CurrentProtocol is the highest plugin.json "protocol" (manifest + UI
 // contract, ADR-0012) this Host accepts. It is not the Frame wire version —
 // Frame.V carries protocol.Version. Protocol 4 carries hostFaces (ADR-0027).
-const CurrentProtocol = 4
+// Protocol 5 is L0-only Host/Medium addressing (ADR-0030).
+const CurrentProtocol = 5
 
 // ValidHostFace reports whether name is a declared hostFace (ADR-0027).
 func ValidHostFace(name string) bool {
