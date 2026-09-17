@@ -1,10 +1,10 @@
 # l0-only-boundary：Host 与 Medium 领域清零
 
-Status: open
+Status: resolved（#3 agent.request|inject|confirm 仍 Deferred，另开票据）
 
 共识见 [decisions.md](./decisions.md)（**实现面已定；#3 request/inject/confirm 暂缓**）。  
-**已定**：启动只带 plugins；Host 按插件名转发（Frame `to`+payload，protocol 5）；static=Medium 且流式在插件 UI；金路径插件化；删除 arch-check.sh。  
-**暂缓**：agent.request|inject|confirm 改造——Z2 作临时保留特例。
+**已定并落地**：启动只带 plugins；Host 按插件名转发（Frame `to`+payload，protocol 5）；static=Medium 且流式在插件 UI；金路径插件化；arch-check.sh 已删。  
+**暂缓**：agent.request|inject|confirm —— Host 临时保留特例。
 
 ## Intent
 

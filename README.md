@@ -37,7 +37,7 @@
 - **Agent Scheme**：`chat` / `tool_calling` / `coding`（config 可自定义）；`dependsPlugins` + `allowedTools`
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
-- CLI REPL / 一轮 `-turn`；Web Shell（新建会话面 + 聊天 + 中心 Session Trace + 底栏信息区）
+- CLI REPL / Web Shell（新建会话面 + 聊天 + 中心 Session Trace + 底栏信息区）
 - **Workspace**：Session 级项目根（CLI 默认 cwd，Web 会话可选）
 - **coding Scheme**：filetools + shelltools + sandbox + skill-manager + project-context + webtools
 - **Tool severity sandbox**：工具 schema 声明 `severity`（low/medium/high），sandbox 按 `severityPolicy` 拦截（默认 medium/high→ask）；显式 rules 仍优先
@@ -98,23 +98,21 @@ export OPENAI_MODEL=deepseek-chat
 
 ### 跑起来
 
-日常路径只需 `-plugins`（Autostart 核四件：agent / session / llm-openai / context-manager）：
+启动只带 L0 项：`-plugins` / `-repl` / `-serve` / `-debug` / `-discover` / `-dump`（ADR-0030）。领域动作由已挂载插件的 command / UI 承接。
 
 ```powershell
-# 一轮对话（默认 scheme: tool_calling）
-.\dist\liteagent-cli.exe -plugins dist\plugins -turn "你好"
-
-# 指定 Agent Scheme：-scheme flag 已删除（ADR-0027），一次性 -turn 无法预选；
-# 进 REPL 热切换，或先改 dist/plugins/agent/config.json 的 defaultScheme
+# 金路径：REPL 直接输入即走 agent 插件 loop.turn
 .\dist\liteagent-cli.exe -plugins dist\plugins -repl
 
 # Web
 .\dist\liteagent-server.exe -plugins dist\plugins -serve 127.0.0.1:8080
+
+# 通用点名诊断（不绑领域名）
+.\dist\liteagent-cli.exe -plugins dist\plugins -invoke agent -frame-cap loop -frame-method turn -invoke-payload '{"input":"你好"}'
 ```
 
 ```bash
-./dist/liteagent-cli -plugins dist/plugins -turn "你好"
-./dist/liteagent-cli -plugins dist/plugins -repl   # 进入后 /agent config set defaultScheme=coding
+./dist/liteagent-cli -plugins dist/plugins -repl
 ./dist/liteagent-server -plugins dist/plugins -serve 127.0.0.1:8080
 ```
 
@@ -130,16 +128,8 @@ export OPENAI_MODEL=deepseek-chat
 
 Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件 / id / cap / method / payload）与插件启停会打到 **stderr**，不污染 stdout 的对话输出。
 
-Coding Scheme（Workspace + shell + sandbox + skills + web）：`-scheme` flag 已删除（ADR-0027），一次性 `-turn` 无法预选；先设 `defaultScheme=coding`（`dist/plugins/agent/config.json` 或 REPL 里 `/agent config set defaultScheme=coding`）再执行：
+Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json` 或 REPL 里 `/agent config set defaultScheme=coding`），进 REPL 对话；工作区可放 `.liteagent/permissions.json`、`.liteagent/skills/<name>/SKILL.md`、`AGENTS.md`。
 
-```bash
-./dist/liteagent-cli -plugins dist/plugins -workspace "$PWD" -turn "读一下 README 并总结"
-# 工作区可放 .liteagent/permissions.json、.liteagent/skills/<name>/SKILL.md、AGENTS.md
-```
-
-```powershell
-.\dist\liteagent-cli.exe -plugins dist\plugins -workspace (Get-Location) -turn "读一下 README 并总结"
-```
 ## 常用命令
 
 **REPL / Web 输入框**
@@ -157,20 +147,22 @@ Coding Scheme（Workspace + shell + sandbox + skills + web）：`-scheme` flag �
 
 **Web 界面**
 
-- **新建会话面**：打开页面停在「工作区选取（可留空）+ agent 模式 + 聊天框」，**不会**自动加载当前会话。工作区用浏览器的文件夹选择 API 挑选（该 API 只给目录名，Host 经 `/api/workspace/resolve` 把它映射成本机绝对路径；匹配到多个会列出候选，匹配不到则手填）。发出第一条消息时才创建会话并绑定该工作区。左侧会话列表**按工作区路径分组**，点一下即进入历史会话。
+- **新建会话面**：打开页面停在「工作区选取（可留空）+ agent 模式 + 聊天框」，**不会**自动加载当前会话。目录选择后需手填绝对路径（Medium 不再解析目录名，ADR-0030）。发出第一条消息时才创建会话并绑定该工作区。左侧会话列表**按工作区路径分组**，点一下即进入历史会话。
 - **底栏信息区**：Shell 最下面一整栏（Layout `statusbar` 槽位），内容由各插件自己的 `<plugin>-status` 组件提供——工作区 / 会话 / 事实数（session）、token 与窗口占比（context-manager）、模型名与模型总时长（llm-openai）、当前 scheme（agent）。
 - **Settings**：打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
 - **Plugins**：插件 / Capability / Host / UI 槽位的关系图。实线绿=已挂载，虚线灰=已发现但待拉起（由某个 Agent Scheme 的 `dependsPlugins` 决定），红=degraded（consumes 未满足），琥珀=dependsOn 引用了未发现的插件。
 
-**CLI 一次成型**
+**CLI 诊断（L0）**
 
 ```powershell
--turn TEXT           跑一轮
--context-list N      打印最近 prepare 的 N 条消息
--session-derive      打印 Model Context
--session-query       打印 Session Log 事实
--debug               Host Frame 调试日志（stderr）
+-invoke PLUGIN     点名调用插件（诊断）
+-frame-cap CAP     Frame cap（插件侧 dispatch key）
+-frame-method M    Frame method
+-invoke-payload J  JSON payload
+-debug             Host Frame 调试日志（stderr）
 ```
+
+产品启动**没有** `-turn` / `-session-*` / `-agent-*` / `-workspace` / `-context-list` / `-cards`（ADR-0030）。集成测试可在 `L0_TEST_COMPAT=1` 下使用隐藏兼容 flag。
 
 ## 装配示例
 
