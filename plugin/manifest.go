@@ -2,6 +2,7 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -150,6 +151,8 @@ func LoadManifest(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
+	// Windows editors may prefix UTF-8 JSON with a BOM; json.Unmarshal rejects it.
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	var m Manifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", path, err)

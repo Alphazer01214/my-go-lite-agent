@@ -40,6 +40,22 @@ func TestManifestValidate(t *testing.T) {
 	}
 }
 
+func TestLoadManifestStripsUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin.json")
+	body := `{"name":"echo","version":"1.0.0","protocol":5,"entry":"echo.exe"}`
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, body...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("BOM-prefixed manifest rejected: %v", err)
+	}
+	if m.Name != "echo" || m.Entry != "echo.exe" {
+		t.Fatalf("unexpected manifest: %+v", m)
+	}
+}
+
 func TestEntryExists(t *testing.T) {
 	dir := t.TempDir()
 	m := Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "bin"}
