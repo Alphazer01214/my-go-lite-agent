@@ -471,6 +471,8 @@ func appendReasoningFact(s *pluginsdk.Server, sessionID, content string) {
 		"content": content,
 		// Always tag the Session (empty = default) so Web can filter foreign turns.
 		"sessionId": sessionID,
+		// Hop-end time (UnixMilli); session.append honors a positive caller ts.
+		"ts": time.Now().UnixMilli(),
 	}
 	payload, err := json.Marshal(fact)
 	if err != nil {

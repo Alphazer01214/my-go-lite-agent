@@ -1,8 +1,10 @@
 package main_test
 
 import (
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,60 @@ func TestSessionFactsCarryTimestamp(t *testing.T) {
 	// query JSON includes ts (UnixMilli) on each fact.
 	if !strings.Contains(s, `"ts"`) {
 		t.Fatalf("want ts field on session facts: %s", s)
+	}
+}
+
+// TestSessionAppendHonorsCallerTs: session.append keeps a positive caller ts
+// (e.g. llm-openai reasoning hop-end stamp) instead of overwriting with now.
+func TestSessionAppendHonorsCallerTs(t *testing.T) {
+	root := moduleRoot(t)
+	hostBin := buildPkg(t, root, "./cmd/liteagent-cli")
+
+	pluginsDir := t.TempDir()
+	buildSessionPluginDir(t, root, pluginsDir, "session")
+
+	cfg := filepath.Join(t.TempDir(), "assembly.json")
+	writeFile(t, cfg, `{"plugins":["session"]}`)
+
+	const wantTs = 1700000000123
+	appendJSON := `[{"type":"reasoning","role":"assistant","content":"think-stamp","ts":` +
+		strconv.FormatInt(wantTs, 10) + `}]`
+	cmd := exec.Command(hostBin,
+		"-plugins", pluginsDir,
+		"-assembly", cfg,
+		"-session-append", appendJSON,
+		"-session-query",
+	)
+	cmd.Env = hostEnv(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("session append/query: %v\n%s", err, out)
+	}
+	s := string(out)
+
+	var facts []map[string]any
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "query ok facts=") {
+			continue
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "query ok facts=")), &facts); err != nil {
+			t.Fatalf("parse facts: %v\n%s", err, line)
+		}
+	}
+	var found bool
+	for _, f := range facts {
+		if f["type"] != "reasoning" || f["content"] != "think-stamp" {
+			continue
+		}
+		found = true
+		got, _ := f["ts"].(float64)
+		if int64(got) != wantTs {
+			t.Fatalf("want caller ts=%d, got %v (%s)", wantTs, f["ts"], s)
+		}
+	}
+	if !found {
+		t.Fatalf("want reasoning fact think-stamp: %s", s)
 	}
 }
 

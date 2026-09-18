@@ -36,15 +36,25 @@ done
 
 # ── shipped plugins ─────────────────────────────────────────────────────────
 # Single source of truth: scripts/shipped-plugins.conf (shared with build.ps1).
+# Bash 3.2 + `set -u`: empty-array `${arr[@]}` is unbound, so expand via the
+# ${arr[@]+"${arr[@]}"} idiom. `|| [[ -n $line ]]` also picks up a conf last
+# line with no trailing newline (read returns non-zero on that EOF otherwise
+# and the line would be skipped).
 CORE_PLUGINS=()
 TOOLS_PLUGINS=()
-while IFS= read -r line; do
+while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in
-    core\:*) __rest="${line#core: }"; CORE_PLUGINS=($__rest) ;;
-    tools\:*) __rest="${line#tools: }"; TOOLS_PLUGINS=($__rest) ;;
+    core:*)
+      __rest="${line#core:}"
+      CORE_PLUGINS=($__rest)
+      ;;
+    tools:*)
+      __rest="${line#tools:}"
+      TOOLS_PLUGINS=($__rest)
+      ;;
   esac
 done < "$ROOT/scripts/shipped-plugins.conf"
-SHIPPED_PLUGINS=("${CORE_PLUGINS[@]}" "${TOOLS_PLUGINS[@]}")
+SHIPPED_PLUGINS=(${CORE_PLUGINS[@]+"${CORE_PLUGINS[@]}"} ${TOOLS_PLUGINS[@]+"${TOOLS_PLUGINS[@]}"})
 
 should_build() {
   local target="$1"
@@ -220,7 +230,7 @@ if [[ $LIST -eq 1 ]]; then
   echo "Shipped targets:"
   echo "  liteagent-cli"
   echo "  liteagent-server"
-  for name in "${SHIPPED_PLUGINS[@]}"; do
+  for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
     tag="assets-only"
     if [[ -f "$ROOT/plugins/$name/plugin.json" ]] && grep -q '"entry"' "$ROOT/plugins/$name/plugin.json"; then
       tag="binary"
@@ -238,7 +248,7 @@ build_pkg "liteagent-cli"    "./cmd/liteagent-cli"    "$DIST/liteagent-cli"
 build_pkg "liteagent-server" "./cmd/liteagent-server" "$DIST/liteagent-server"
 
 # ── plugins ──────────────────────────────────────────────────────────────────
-for name in "${SHIPPED_PLUGINS[@]}"; do
+for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
   install_plugin_dir "$name"
 done
 
@@ -248,7 +258,7 @@ if [[ -d "$DIST/plugins" ]]; then
     [[ -d "$dir" ]] || continue
     base="$(basename "$dir")"
     keep=0
-    for name in "${SHIPPED_PLUGINS[@]}"; do
+    for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
       [[ "$base" == "$name" ]] && keep=1 && break
     done
     if [[ $keep -eq 0 ]]; then
