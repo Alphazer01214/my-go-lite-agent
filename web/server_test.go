@@ -32,8 +32,10 @@ func TestShellAndSDKServed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(body), `id="split"`) || !strings.Contains(string(body), `id="chat-col"`) {
-		t.Fatalf("want center split shell, got %d bytes", len(body))
+	if !strings.Contains(string(body), `id="region-left"`) || !strings.Contains(string(body), `id="region-center"`) ||
+		!strings.Contains(string(body), `id="region-right"`) || !strings.Contains(string(body), `id="region-top"`) ||
+		!strings.Contains(string(body), `id="region-bottom"`) {
+		t.Fatalf("want five-region shell, got %d bytes", len(body))
 	}
 	// Shell face lives in ES modules under /app/ (ADR-0011 ticket 02).
 	if !strings.Contains(string(body), `/app/main.js`) {
@@ -80,7 +82,7 @@ func TestPluginUIAndTraversal(t *testing.T) {
 			UI: &plugin.UISpec{
 				Entry: "main.js",
 				Mounts: []plugin.UIMount{
-					{Slot: "sidebar", Component: "demo-panel", Props: json.RawMessage(`{"a":1}`)},
+					{Slot: "left", Component: "demo-panel", Props: json.RawMessage(`{"a":1}`)},
 				},
 			},
 		},
@@ -92,7 +94,7 @@ func TestPluginUIAndTraversal(t *testing.T) {
 			UI: &plugin.UISpec{
 				Entry: "main.js",
 				Mounts: []plugin.UIMount{
-					{Slot: "toolbar-right", Component: "webonly-panel"},
+					{Slot: "right", Component: "webonly-panel"},
 				},
 			},
 		},
@@ -122,7 +124,7 @@ func TestPluginUIAndTraversal(t *testing.T) {
 	for _, want := range []string{
 		`"entry":"/plugin-ui/demo/main.js"`,
 		`"component":"demo-panel"`,
-		`"slot":"sidebar"`,
+		`"slot":"left"`,
 		`"name":"demo"`,
 		`"name":"webonly"`,
 		`"component":"webonly-panel"`,

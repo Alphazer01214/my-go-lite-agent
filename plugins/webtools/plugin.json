@@ -1,7 +1,7 @@
 {
   "name": "webtools",
   "version": "0.2.0",
-  "protocol": 5,
+  "protocol": 6,
   "provides": [
     "tools"
   ],

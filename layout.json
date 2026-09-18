@@ -3,15 +3,14 @@
   "pages": [
     {
       "slug": "main",
-      "title": "Chat",
+      "title": "Main",
       "path": "/",
       "slots": [
-        { "id": "sidebar", "role": "session-rail", "preferred": "session-rail", "region": "left" },
-        { "id": "chat", "role": "session-view", "preferred": "session-view", "region": "center" },
-        { "id": "trace", "role": "session-trace", "preferred": "session-trace", "region": "center-split" },
-        { "id": "statusbar", "role": "status-bar", "region": "bottom" },
-        { "id": "toolbar-right", "role": "panel", "region": "right" },
-        { "id": "main-overlay", "role": "overlay", "region": "overlay" }
+        { "id": "top", "role": "panel", "region": "top" },
+        { "id": "bottom", "role": "panel", "region": "bottom" },
+        { "id": "left", "role": "panel", "region": "left" },
+        { "id": "center", "role": "panel", "region": "center" },
+        { "id": "right", "role": "panel", "region": "right" }
       ]
     }
   ]

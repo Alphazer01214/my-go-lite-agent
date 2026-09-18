@@ -86,8 +86,8 @@ func TestWebServeShellAndMessage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(body), "id=\"split\"") && !strings.Contains(string(body), "chat-col") {
-		t.Fatalf("shell missing split layout")
+	if !strings.Contains(string(body), "id=\"region-center\"") && !strings.Contains(string(body), "region-left") {
+		t.Fatalf("shell missing five-region layout")
 	}
 
 	// Start a turn via L0 /api/call (ADR-0030: no /api/message).

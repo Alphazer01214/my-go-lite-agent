@@ -21,7 +21,7 @@ func TestUIOnlyPluginMountsWithoutProcess(t *testing.T) {
 		"autostart": true,
 		"provides": [],
 		"consumes": [],
-		"ui": {"entry": "main.js", "mounts": [{"slot": "sidebar", "component": "uifix-panel", "props": {"n": 1}}]}
+		"ui": {"entry": "main.js", "mounts": [{"slot": "left", "component": "uifix-panel", "props": {"n": 1}}]}
 	}`)
 	writeFile(t, filepath.Join(pluginsDir, "uifix", "ui", "main.js"), "export{};")
 

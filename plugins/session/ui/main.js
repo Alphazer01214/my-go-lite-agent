@@ -1,21 +1,25 @@
 /* session plugin UI Entry (ADR-0011): the Session Log's Web faces.
  *
- * session-view  — the primary Session Log view (main chat surface): replays
- *                 history facts, consumes the Presentation stream live, and
- *                 renders the dsh-style disclosure flow. Rendering semantics
- *                 match the CLI Medium (markdown_text / message_text /
+ * session-rail  — the session list / switcher (Shell region `left`), grouped
+ *                 by Workspace path (ADR-0020). Switching is the Current
+ *                 Session on the session Capability (ADR-0012); announces
+ *                 over __session / __new.
+ * session-workspace — composite Panel Component for Shell region `center`
+ *                 (ADR-0031). Owns chat | trace geometry only; rail lives in
+ *                 region `left`. The Shell hosts generic regions only.
+ * session-view  — the primary Session Log view (chat pane inside workspace):
+ *                 replays history facts, consumes the Presentation stream
+ *                 live, and renders the dsh-style disclosure flow. Rendering
+ *                 semantics match the CLI Medium (markdown_text / message_text /
  *                 summary_text / stream). It also owns the new-session face:
  *                 at boot (and on "＋") it shows Workspace picker + Agent
  *                 Scheme + composer instead of loading a Session — a Session
  *                 is only loaded once the user picks one or sends a message.
- * session-rail  — the session list / switcher (sidebar), grouped by Workspace
- *                 path (ADR-0020) as the only grouping basis. Switching is the
- *                 Current Session on the session Capability (ADR-0012); the
- *                 component announces the switch over __session so the view
- *                 reloads, or over __new to open the new-session face.
- * session-trace — the Session Log's trace projection (center column).
- * session-status— one chip of the Host's bottom status bar (Workspace +
- *                 Current Session + fact count).
+ * session-trace — the Session Log's trace projection (trace pane inside
+ *                 workspace). Owns a type-filter bar inside the component
+ *                 itself (display kind = message role, or fact type).
+ * session-status— chip in Shell region `bottom` (Workspace + Current Session
+ *                 + fact count).
  *
  * Facts come from the session Capability through the star route
  * (LiteAgent.call('session','query')). Turn status and cancel are the
@@ -50,6 +54,26 @@ function fmtTs(ts) {
   const pad = (x) => String(x).padStart(2, '0');
   return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 }
+
+// Trace display kind: message facts filter by role, everything else by type.
+function factKind(f) {
+  const t = (f && f.type) || '';
+  if (t === 'message') return (f && f.role) || 'msg';
+  return t;
+}
+
+// Preferred chip order; unknown kinds append in first-seen order.
+const TRACE_KIND_ORDER = [
+  'user', 'assistant', 'system', 'msg',
+  'reasoning',
+  'tool_call', 'tool_result',
+  'request_header',
+  'step_start', 'step_end',
+  'turn_start', 'turn_end',
+  'llm_usage',
+  'context_summary',
+  'todo'
+];
 
 function summary(f) {
   const t = f.type || '';
@@ -93,6 +117,8 @@ class SessionTrace extends HTMLElement {
     // The Shell opens on the new-session face; the trace column stays empty
     // until a Session is actually entered (__session).
     this._active = false;
+    // Type filter: null = show all; Set of display kinds = show only those.
+    this._filter = null;
   }
   async connectedCallback() {
     const root = this.attachShadow({ mode: 'open' });
@@ -100,6 +126,10 @@ class SessionTrace extends HTMLElement {
     const style = document.createElement('style');
     style.textContent = CSS;
     root.appendChild(style);
+    const bar = document.createElement('div');
+    bar.className = 'toolbar';
+    bar.hidden = true;
+    root.appendChild(bar);
     const list = document.createElement('div');
     list.className = 'list';
     root.appendChild(list);
@@ -110,6 +140,7 @@ class SessionTrace extends HTMLElement {
       this._active = false;
       this._viewSid = '';
       this._booted = false;
+      this._filter = null;
       this.renderIdle();
     });
     this._offFacts = LiteAgent.on('session', f => this.onFact(f));
@@ -145,8 +176,135 @@ class SessionTrace extends HTMLElement {
   }
   renderIdle() {
     if (!this._root) return;
+    const bar = this._root.querySelector('.toolbar');
+    if (bar) { bar.innerHTML = ''; bar.hidden = true; }
     const list = this._root.querySelector('.list');
     if (list) list.innerHTML = '<div class="message">未进入会话 — 选择或新建一个会话后显示事实流。</div>';
+  }
+  _onFilterChip(kind) {
+    if (!kind) {
+      this._filter = null;
+    } else if (!this._filter) {
+      this._filter = new Set([kind]);
+    } else if (this._filter.has(kind)) {
+      this._filter.delete(kind);
+      if (this._filter.size === 0) this._filter = null;
+    } else {
+      this._filter.add(kind);
+    }
+    this._applyFilter();
+  }
+  _kindMatches(kind) {
+    return !this._filter || this._filter.has(kind);
+  }
+  _applyFilter() {
+    if (!this._root) return;
+    const list = this._root.querySelector('.list');
+    if (!list) return;
+    const rows = list.querySelectorAll('.trace-row');
+    rows.forEach(row => {
+      const show = this._kindMatches(row.dataset.kind || '');
+      row.classList.toggle('filtered-out', !show);
+      const det = row.nextElementSibling;
+      if (det && det.classList.contains('trace-detail')) {
+        det.classList.toggle('filtered-out', !show);
+      }
+    });
+    this._ensureFilterEmpty();
+    this._syncFilterBar();
+  }
+  _ensureFilterEmpty() {
+    if (!this._root) return;
+    const list = this._root.querySelector('.list');
+    if (!list) return;
+    const empty = list.querySelector('.filter-empty');
+    const rows = list.querySelectorAll('.trace-row');
+    let visible = 0;
+    rows.forEach(r => { if (!r.classList.contains('filtered-out')) visible++; });
+    if (rows.length && visible === 0) {
+      if (!empty) {
+        const el = document.createElement('div');
+        el.className = 'message filter-empty';
+        el.textContent = '无匹配事实 — 当前类型过滤下没有可见行。';
+        list.appendChild(el);
+      }
+    } else if (empty) {
+      empty.remove();
+    }
+  }
+  _syncFilterBar() {
+    if (!this._root) return;
+    const bar = this._root.querySelector('.toolbar');
+    const list = this._root.querySelector('.list');
+    if (!bar || !list) return;
+    const rows = list.querySelectorAll('.trace-row');
+    if (!this._active || (!rows.length && !this._filter)) {
+      bar.innerHTML = '';
+      bar.hidden = true;
+      return;
+    }
+    const present = new Set();
+    rows.forEach(r => { if (r.dataset.kind) present.add(r.dataset.kind); });
+    if (this._filter) this._filter.forEach(k => present.add(k));
+    const kinds = TRACE_KIND_ORDER.filter(k => present.has(k));
+    present.forEach(k => { if (kinds.indexOf(k) === -1) kinds.push(k); });
+    let visible = 0;
+    rows.forEach(r => { if (!r.classList.contains('filtered-out')) visible++; });
+    bar.hidden = false;
+    bar.innerHTML = '';
+    const all = document.createElement('button');
+    all.type = 'button';
+    all.className = 'chip' + (!this._filter ? ' on' : '');
+    all.textContent = '全部';
+    all.title = '显示全部类型';
+    all.onclick = () => this._onFilterChip('');
+    bar.appendChild(all);
+    kinds.forEach(k => {
+      const on = !!(this._filter && this._filter.has(k));
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip' + (on ? ' on' : '');
+      b.dataset.kind = k;
+      b.textContent = k;
+      b.title = this._filter
+        ? (on ? '取消过滤 ' + k : '加入过滤 ' + k)
+        : ('只看 ' + k);
+      b.onclick = () => this._onFilterChip(k);
+      bar.appendChild(b);
+    });
+    const cnt = document.createElement('span');
+    cnt.className = 'count';
+    cnt.textContent = this._filter ? (visible + '/' + rows.length) : String(rows.length);
+    cnt.title = this._filter ? '可见 / 全部' : '事实总数';
+    bar.appendChild(cnt);
+  }
+  // Shell slots are generic (ADR-0030/0031): do not assume slot-specific host CSS.
+  // Walk light DOM and cross shadow hosts to find the real scroll container.
+  _scrollParent() {
+    let n = this;
+    while (n) {
+      if (n !== this && n.clientHeight > 0 && n.scrollHeight > n.clientHeight) {
+        const oy = getComputedStyle(n).overflowY;
+        if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') return n;
+      }
+      let next = n.parentElement;
+      if (!next) {
+        const rn = n.getRootNode && n.getRootNode();
+        next = (rn && rn.host) || null;
+      }
+      if (next === n) break;
+      n = next;
+    }
+    return (this._root && this._root.querySelector('.list')) || null;
+  }
+  _isNearBottom() {
+    const sc = this._scrollParent();
+    if (!sc) return true;
+    return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
+  }
+  _scrollToBottom() {
+    const sc = this._scrollParent();
+    if (sc) sc.scrollTop = sc.scrollHeight;
   }
   hasTextSelection() {
     const sel = this._root && this._root.getSelection ? this._root.getSelection() : window.getSelection();
@@ -224,12 +382,13 @@ class SessionTrace extends HTMLElement {
     // Preserve expanded rows across rebuilds (otherwise open state collapses).
     const open = new Set();
     list.querySelectorAll('.trace-row.open').forEach(r => open.add(String(r.dataset.seq)));
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+    const nearBottom = this._isNearBottom();
     list.innerHTML = '';
     this._lastSeq = -1;
     facts.forEach(f => this.appendFact(f, open));
     if (facts.length) this._lastSeq = Number(facts[facts.length - 1].seq || 0);
-    if (nearBottom) list.scrollTop = list.scrollHeight;
+    this._applyFilter();
+    if (nearBottom) this._scrollToBottom();
   }
   appendFact(f, openSet) {
     if (!f || !f.type) return;
@@ -237,10 +396,11 @@ class SessionTrace extends HTMLElement {
     const t = f.type;
     const role = f.role || '';
     const cls = t === 'message' && role ? role : t;
+    const kind = factKind(f);
     const row = document.createElement('div');
     row.className = 'trace-row ' + cls;
     row.dataset.seq = String(f.seq != null ? f.seq : '');
-    const kind = t === 'message' ? (role || 'msg') : t;
+    row.dataset.kind = kind;
     const sid = f.sessionId !== undefined && f.sessionId !== null ? String(f.sessionId) : '';
     const short = sid ? (sid.length > 8 ? sid.slice(0, 8) : sid) : '·';
     const ts = f.ts ? fmtTs(f.ts) : '';
@@ -259,9 +419,17 @@ class SessionTrace extends HTMLElement {
       row.classList.add('open');
       det.classList.add('open');
     }
+    if (!this._kindMatches(kind)) {
+      row.classList.add('filtered-out');
+      det.classList.add('filtered-out');
+    }
     list.appendChild(row); list.appendChild(det);
-    // Live append during a run may stick to bottom; full render uses nearBottom in render().
-    if (!openSet) list.scrollTop = list.scrollHeight;
+    // Live append may stick to the shell slot bottom; full render uses nearBottom in render().
+    if (!openSet) {
+      this._scrollToBottom();
+      this._ensureFilterEmpty();
+      this._syncFilterBar();
+    }
   }
   renderError(e) {
     const list = this._root.querySelector('.list');
@@ -273,8 +441,31 @@ class SessionTrace extends HTMLElement {
 }
 
 const CSS = `
+  /* Independent Panel Component (ADR-0010/0030): no Shell slot CSS assumed.
+     Filter bar sticks in the generic scrolling trace slot; list is content-height. */
   :host { display:block; font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed); }
-  .list { height:100%; overflow-y:auto; min-height:0; }
+  .toolbar {
+    position:sticky; top:0; z-index:2;
+    display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+    padding:6px 12px; margin:-6px 0 0;
+    background:var(--la-panel,#161a22);
+    border-bottom:1px solid var(--la-line,#2a2f3a);
+  }
+  .toolbar[hidden] { display:none !important; }
+  .toolbar .chip {
+    background:transparent; border:1px solid var(--la-line,#2a2f3a); color:var(--la-dim,#9aa0a6);
+    border-radius:999px; padding:2px 8px; font-size:10px; cursor:pointer;
+    font-family:var(--la-mono,monospace); line-height:1.4;
+  }
+  .toolbar .chip:hover { color:var(--la-ink,#e8eaed); border-color:var(--la-accent,#7aa2f7); }
+  .toolbar .chip.on {
+    background:rgba(122,162,247,.16); border-color:var(--la-accent,#7aa2f7); color:var(--la-accent,#7aa2f7);
+  }
+  .toolbar .count {
+    margin-left:auto; font-size:10px; color:var(--la-dim,#9aa0a6);
+    font-family:var(--la-mono,monospace);
+  }
+  .list { min-height:0; }
   .trace-row { padding:6px 12px; font-size:12px; cursor:pointer; display:flex; gap:8px; align-items:baseline; line-height:1.3; }
   .trace-row:hover { background:#1a1f2a; }
   .trace-row .t-kind { flex:0 0 72px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }
@@ -288,14 +479,17 @@ const CSS = `
   .trace-row.tool_result .t-kind { color:var(--la-err,#f7768e); }
   .trace-row.reasoning .t-kind { color:#bb9af7; }
   .trace-row.open { background:#1a1f2a; }
+  .trace-row.filtered-out, .trace-detail.filtered-out { display:none !important; }
   .trace-detail { display:none; padding:4px 12px 10px 92px; font-size:11px; color:var(--la-dim,#9aa0a6); white-space:pre-wrap; font-family:var(--la-mono,monospace); border-bottom:1px solid var(--la-line,#2a2f3a); }
   .trace-detail.open { display:block; }
+  .message { padding:8px 12px; color:var(--la-dim,#9aa0a6); }
   .message.error { color:var(--la-err,#f7768e); padding:8px 12px; }
+  .filter-empty { color:var(--la-dim,#9aa0a6); }
 `;
 
 if (!customElements.get('session-trace')) customElements.define('session-trace', SessionTrace);
 
-/* ---- session-rail: the session list / switcher (sidebar) ---- */
+/* ---- session-rail: the session list / switcher (workspace left pane) ---- */
 
 const RAIL_CSS = `
   :host { display:flex; flex-direction:column; height:100%; min-height:0; font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed); }
@@ -1444,3 +1638,55 @@ class SessionStatus extends HTMLElement {
 }
 
 if (!customElements.get('session-status')) customElements.define('session-status', SessionStatus);
+
+/* ---- session-workspace: chat | trace composite (Shell region center) ----
+ * ADR-0031: Shell hosts top/bottom + left|center|right. Rail is a separate
+ * mount on `left`; this component owns only the center chat|trace split. */
+
+const WORKSPACE_CSS = `
+  :host {
+    display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden;
+    font:12px/1.5 var(--la-sans, system-ui); color:var(--la-ink,#e8eaed);
+    background:var(--la-bg,#0f1115);
+  }
+  .ws {
+    flex:1; min-height:0; display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(260px,0.85fr);
+  }
+  .col { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .col.chat { border-right:1px solid var(--la-line,#2a2f3a); }
+  .col.trace { background:var(--la-bg,#0f1115); }
+  .col > .pane-head {
+    flex:0 0 auto; padding:10px 12px; border-bottom:1px solid var(--la-line,#2a2f3a);
+    background:var(--la-panel,#161a22); font-size:12px; color:var(--la-dim,#9aa0a6);
+  }
+  .col > .pane-body { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .col > .pane-body > * { flex:1; min-height:0; }
+  /* Trace pane scrolls in the component host container so the type-filter
+     bar can stick without any Shell slot specialization (ADR-0031). */
+  .col.trace > .pane-body { display:block; overflow-y:auto; overflow-x:hidden; }
+  .col.trace > .pane-body > session-trace { display:block; min-height:100%; }
+`;
+
+class SessionWorkspace extends HTMLElement {
+  connectedCallback() {
+    const root = this.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = WORKSPACE_CSS;
+    root.appendChild(style);
+    const ws = document.createElement('div');
+    ws.className = 'ws';
+    ws.innerHTML =
+      '<div class="col chat">' +
+      '<div class="pane-head">Chat</div>' +
+      '<div class="pane-body"><session-view></session-view></div>' +
+      '</div>' +
+      '<div class="col trace">' +
+      '<div class="pane-head">Session trace</div>' +
+      '<div class="pane-body"><session-trace></session-trace></div>' +
+      '</div>';
+    root.appendChild(ws);
+  }
+}
+
+if (!customElements.get('session-workspace')) customElements.define('session-workspace', SessionWorkspace);

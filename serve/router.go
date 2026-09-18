@@ -239,7 +239,8 @@ func (s *Server) validatePanelOp(from string, op PanelOp) error {
 	if op.ID == "" {
 		return fmt.Errorf("id is required")
 	}
-	if !plugin.ValidMountSlot(op.Slot) {
+	if !plugin.ValidUISlot(op.Slot) {
+		// ADR-0031: PanelOps may only target Shell-hosted region slots.
 		return fmt.Errorf("unknown slot %q", op.Slot)
 	}
 	if op.Op == "set" {

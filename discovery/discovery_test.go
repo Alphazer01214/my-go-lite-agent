@@ -56,7 +56,7 @@ func TestScanValidAndInvalid(t *testing.T) {
 		"protocol": 2,
 		"provides": [],
 		"consumes": [],
-		"ui": {"entry": "main.js", "assets": ["deps.css"], "mounts": [{"slot": "sidebar", "component": "uifix-panel"}]}
+		"ui": {"entry": "main.js", "assets": ["deps.css"], "mounts": [{"slot": "left", "component": "uifix-panel"}]}
 	}`)
 	writeFile(t, filepath.Join(root, "uifix", "ui", "main.js"), "export{};")
 	writeFile(t, filepath.Join(root, "uifix", "ui", "deps.css"), ":host{}")

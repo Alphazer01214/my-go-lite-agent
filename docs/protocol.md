@@ -2,7 +2,7 @@
 
 Host ↔ Plugin 进程间通信的实现说明。规范名词见 [CONTEXT.md](../CONTEXT.md)；架构决策见 [docs/adr/](adr/)。
 
-本文描述**当前代码已落地**的行为。ADR-0030（L0-only、按插件名点名路由、`CurrentProtocol = 5`）是已接受的演进方向，尚未在 Frame 线协议上完整落地——见文末[演进方向](#9-演进方向与adr-0030)。
+本文描述**当前代码已落地**的行为。Frame 线协议与 Manifest 契约均已升至 **5**（ADR-0030 点名路由已落地于 `protocol` / `pluginsdk` / `serve`）；Host 侧仍有少量 Deferred 与 Medium 残留 L1——见文末[演进方向](#9-演进方向与adr-0030)。分模块开发文档见 [docs/modules/](modules/)。
 
 ---
 
@@ -10,13 +10,13 @@ Host ↔ Plugin 进程间通信的实现说明。规范名词见 [CONTEXT.md](..
 
 | 层 | 常量 | 位置 | 作用 |
 |----|------|------|------|
-| **Frame 线协议** | `protocol.Version = 2` | `protocol/frame.go` | 消息怎么编码、字段语义 |
-| **Manifest 契约** | `plugin.CurrentProtocol = 4` | `plugin/manifest.go` | `plugin.json` 可声明什么（UI、hostFaces…） |
+| **Frame 线协议** | `protocol.Version = 5` | `protocol/frame.go` | 消息怎么编码、字段语义 |
+| **Manifest 契约** | `plugin.CurrentProtocol = 6` | `plugin/manifest.go` | `plugin.json` 可声明什么（UI、hostFaces…） |
 
 对应关系：
 
-- Frame 的 `V` 字段只版本化线协议。v1→v2：Presentation render kinds 变为 `markdown_text \| message_text \| summary_text`。
-- Manifest 的 `protocol` 字段是**另一条线**。Host 校验范围为 `1..CurrentProtocol`；更高版本拒载。协议 4 引入 `hostFaces`（ADR-0027）。破坏性 UI 契约变更见 ADR-0012（protocol 3）。
+- Frame 的 `V` 字段只版本化线协议。v1→v2：Presentation render kinds 变为 `markdown_text \| message_text \| summary_text`。v5：引入 `To`，Host 按插件名寻址 + 不透明 payload。
+- Manifest 的 `protocol` 字段是**另一条线**。Host 校验范围为 `1..CurrentProtocol`；更高版本拒载。协议 4 引入 `hostFaces`（ADR-0027）；协议 5 对齐 L0-only / 点名路由；协议 6 对齐 Shell 五区域槽位 top|bottom|left|center|right（ADR-0031）。破坏性 UI 契约变更见 ADR-0012 / ADR-0031。
 
 相关测试：`protocol/frame_test.go`（roundtrip、EOF、零长度拒绝）。
 
@@ -45,8 +45,9 @@ type Frame struct {
 	V       int             `json:"v"`
 	ID      string          `json:"id"`
 	Type    string          `json:"type"` // req | res | evt
-	Cap     string          `json:"cap"`
-	Method  string          `json:"method"`
+	To      string          `json:"to,omitempty"`
+	Cap     string          `json:"cap,omitempty"`
+	Method  string          `json:"method,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	Error   *FrameError     `json:"error,omitempty"`
 }
@@ -54,12 +55,13 @@ type Frame struct {
 
 | 字段 | 说明 |
 |------|------|
-| `V` | Frame 协议版本，当前写 `protocol.Version`（2） |
+| `V` | Frame 协议版本，当前写 `protocol.Version`（5） |
 | `ID` | 请求/响应对齐键；广播 `evt` 可为空 |
 | `Type` | `req` \| `res` \| `evt` |
-| `Cap` | 能力名（如 `session`、`tools`、`presentation`）；也是 hostFaces 的寻址键 |
+| `To` | **目标插件名**（ADR-0030 寻址键）；Host 原样转发，不解析 payload |
+| `Cap` | 接收方插件内的 dispatch 能力名；hostFaces 调用时填面名（`config`/`commands`/`ui`） |
 | `Method` | 能力下的方法名（如 `complete`、`call`、`render`） |
-| `Payload` | 不透明 JSON；Host 路由层一般不解读（ADR-0026） |
+| `Payload` | 不透明 JSON；Host 路由层一般不解读（ADR-0026/0030） |
 | `Error` | 仅 `res` 携带；结构化错误见下 |
 
 ```go
@@ -349,7 +351,7 @@ func main() {
 校验要点：
 
 - `name` 匹配 `^[a-z0-9-]+$`
-- `protocol` ∈ `1..CurrentProtocol`（当前 4）
+- `protocol` ∈ `1..CurrentProtocol`（当前 6）
 - `entry` 或 `ui` 至少其一；无 entry 的 UI-only 插件不得 `provides`
 - `hostFaces` 仅 `config` | `commands` | `ui`，不可重复
 - `dependsOn` 按插件名；不可自引用
@@ -361,25 +363,18 @@ func main() {
 
 ## 9. 演进方向与 ADR-0030
 
-当前代码仍是 **cap 寻址的星型**（插件 `req` 靠 `provides[cap]` 找 owner）。ADR-0030 已接受的终态：
+Frame/Manifest 线与 Host 路由已按 ADR-0030 收紧。下表区分「已落地」与「残留」：
 
-| 项 | 当前（实现） | 目标（ADR-0030 / decisions） |
-|----|--------------|------------------------------|
-| Host 寻址 | `provides[cap]` → owner | **插件名**；信封 `to` + 不透明 payload |
-| Frame | `v,id,type,cap,method,payload` | `v,id,type,to,payload`（cap/method 不进 Host 分支） |
-| `protocol.Version` | 2 | 随 v5 线格式 bump |
-| `CurrentProtocol` | 4 | **5**；出厂插件升级，旧 Host 拒新 manifest |
-| tools 多提供方 | Host 合并 list/call | 出 Host；loop/agent 自 fan-out |
-| `agent.request/inject/confirm` | Host 特例处理 | **Deferred**（暂缓改造） |
-| L1 领域名 | Host/Medium 部分仍可见 | Host/Medium 禁止作为分支条件或专用 API |
+| 项 | 状态 |
+|----|------|
+| Host 寻址插件名（`To` + 不透明 payload） | **已落地**（`protocol.Version = 5`） |
+| Host 不按业务 `cap` 分支；`CallByPlugin` / `CallByFace` | **已落地** |
+| tools 多提供方合并不在 Host | **已落地**（loop/agent 自 fan-out） |
+| `CurrentProtocol = 6` | **已落地** |
+| `agent.request/inject/confirm` | **Deferred**（Host 暂留特例，勿扩大） |
+| Medium 残留 L1（`session.create` workspace 种子、`runLoopTurn` 点名等） | 收敛中，见 [internal/app](modules/internal-app.md) / [web](modules/web.md) |
 
-已朝 0030 落地的部分：
-
-- `CallByPlugin` / `CallByFace` 点名入口
-- Host 包注释与 Registry 注释明确「路由按插件名」方向
-- provides 注册表定位为观测/ degraded，而非 Medium 领域 API
-
-阅读顺序建议：本文 → ADR-0001 → ADR-0026 → ADR-0027 → ADR-0030 → `docs/archive/l0-only-boundary/decisions.md`。
+阅读顺序建议：本文 → [docs/modules/](modules/) → ADR-0001 → ADR-0026 → ADR-0027 → ADR-0030。
 
 ---
 
@@ -394,7 +389,7 @@ func main() {
 | `plugin/manifest.go` | Manifest、`CurrentProtocol`、UI/hostFaces 校验 |
 | `serve/serve.go` | Host 入口、`Start`、`CallByPlugin`、`CallByFace`、默认超时 |
 | `serve/transport.go` | 进程 launch/readLoop/写帧/callOnce/Close |
-| `serve/router.go` | star 路由、tools 合并、evt 收集、ensurePlugins、agent.* |
+| `serve/router.go` | 按 `to` 转发、evt 收集、ensurePlugins、Deferred agent.* |
 | `serve/registry.go` | provides / faces / degraded 观测 |
 | `serve/medium.go` | Render Medium 事件主题等 |
 | `discovery/` | 插件目录扫描 |
@@ -412,7 +407,7 @@ func main() {
 | 0023 | host.ensurePlugins |
 | 0026 | Host↔Plugin 边界判据 |
 | 0027 | hostFaces、protocol 4 |
-| 0030 | L0-only、点名路由（目标态） |
+| 0030 | L0-only、点名路由（已落地于 Frame v5） |
 
 ---
 

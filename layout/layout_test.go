@@ -17,12 +17,12 @@ func TestLoadAndValidate(t *testing.T) {
 	path := filepath.Join(dir, "layout.json")
 	body := `{
 	  "pages": [
-	    {"slug":"main","title":"Chat","path":"/","slots":[
-	      {"id":"sidebar","role":"session-rail","preferred":"session-rail","region":"left"},
-	      {"id":"chat","role":"session-view","preferred":"session-view","region":"center"}
-	    ]},
-	    {"slug":"trace","title":"Trace","path":"/trace","slots":[
-	      {"id":"main","role":"session-trace","region":"main"}
+	    {"slug":"main","title":"Main","path":"/","slots":[
+	      {"id":"top","role":"panel","region":"top"},
+	      {"id":"bottom","role":"panel","region":"bottom"},
+	      {"id":"left","role":"panel","region":"left"},
+	      {"id":"center","role":"panel","region":"center"},
+	      {"id":"right","role":"panel","region":"right"}
 	    ]}
 	  ]
 	}`
@@ -33,11 +33,11 @@ func TestLoadAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Pages) != 2 {
+	if len(d.Pages) != 1 {
 		t.Fatalf("pages=%d", len(d.Pages))
 	}
-	if d.Pages[0].Slots[0].Role != "session-rail" {
-		t.Fatalf("role=%q", d.Pages[0].Slots[0].Role)
+	if len(d.Pages[0].Slots) != 5 || d.Pages[0].Slots[3].ID != "center" {
+		t.Fatalf("slots=%v", d.Pages[0].Slots)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestValidateRequiresMain(t *testing.T) {
 
 func TestMergeAdditive(t *testing.T) {
 	base := Doc{Pages: []Page{
-		{Slug: "main", Path: "/", Slots: []Slot{{ID: "sidebar", Role: "session-rail"}}},
+		{Slug: "main", Path: "/", Slots: []Slot{{ID: "left", Role: "panel"}}},
 	}}
 	m, err := Merge(base, []Contribution{{
 		Plugin: "extra",
@@ -87,11 +87,11 @@ func TestMergeAdditive(t *testing.T) {
 
 func TestMergeRejectsRedefiningBaseSlot(t *testing.T) {
 	base := Doc{Pages: []Page{
-		{Slug: "main", Path: "/", Slots: []Slot{{ID: "chat", Role: "session-view"}}},
+		{Slug: "main", Path: "/", Slots: []Slot{{ID: "left", Role: "panel"}}},
 	}}
 	_, err := Merge(base, []Contribution{{
 		Plugin: "evil",
-		Pages:  []Page{{Slug: "main", Path: "/", Slots: []Slot{{ID: "chat", Role: "other"}}}},
+		Pages:  []Page{{Slug: "main", Path: "/", Slots: []Slot{{ID: "left", Role: "other"}}}},
 	}})
 	if err == nil {
 		t.Fatal("expected redefine rejection")

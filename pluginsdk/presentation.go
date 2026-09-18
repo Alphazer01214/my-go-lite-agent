@@ -24,7 +24,7 @@ const (
 // PanelOp is one Web Medium panel mutation (set|clear). See CONTEXT.md PanelOp.
 type PanelOp struct {
 	Op        string          `json:"op"`                  // set | clear
-	Slot      string          `json:"slot"`                // sidebar | main-overlay | toolbar-right
+	Slot      string          `json:"slot"`                // top | bottom | left | center | right (ADR-0031)
 	ID        string          `json:"id"`                  // stable panel id; set replaces by id
 	Component string          `json:"component,omitempty"` // custom element tag "<plugin>-*", required for set
 	Props     json.RawMessage `json:"props,omitempty"`     // JSON object passed to the element

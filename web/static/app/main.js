@@ -1,6 +1,5 @@
-// Shell entry: boot order only. Every content face is a plugin Panel Component
-// (ADR-0011). Settings chrome is medium framework; per-plugin settings faces
-// are <name>-settings custom elements owned by each plugin.
+// Shell entry: boot order only. Content faces are plugin Panel Components
+// (ADR-0011/0031). Shell exposes top/bottom + left|center|right; domain UI is plugin-owned.
 // L0 only (ADR-0030): no session/turn domain orchestration in the Shell.
 
 import { setPageLoader, createLoader, setPages } from './loader.js';
@@ -16,13 +15,14 @@ function notice(text, cls) {
   }
 }
 
+// ADR-0031: only top/bottom/left/center/right are Shell-hosted slots.
 const pageLoader = createLoader('main', function panelHost(slot) {
-  if (slot === 'sidebar') return document.getElementById('rail');
-  if (slot === 'main-overlay') return document.getElementById('main-overlay');
-  if (slot === 'trace') return document.getElementById('slot-trace');
-  if (slot === 'statusbar') return document.getElementById('statusbar');
-  if (slot === 'chat') return document.getElementById('chat');
-  return document.getElementById('slot-toolbar-right');
+  if (slot === 'top') return document.getElementById('region-top');
+  if (slot === 'bottom') return document.getElementById('region-bottom');
+  if (slot === 'left') return document.getElementById('region-left');
+  if (slot === 'center') return document.getElementById('region-center');
+  if (slot === 'right') return document.getElementById('region-right');
+  return null;
 }, function (msg) { notice(msg, 'message error'); });
 setPageLoader(pageLoader);
 
@@ -53,9 +53,7 @@ fetch('/api/layout').then(function (r) { return r.json(); }).then(function (lay)
   wireChromeButtons();
 });
 
-// Wire the header chrome buttons. The panels are shell-owned overlays
-// (ADR-0011): openPluginsPanel / openSettingsPanel each toggle themselves
-// (open ⇄ close) by inspecting #main-overlay, so one click handler each.
+// Shell chrome buttons (framework overlays — not plugin region mounts).
 function wireChromeButtons() {
   var pluginsBtn = document.getElementById('btn-plugins');
   if (pluginsBtn) pluginsBtn.addEventListener('click', function () { openPluginsPanel(); });
@@ -63,6 +61,5 @@ function wireChromeButtons() {
   if (settingsBtn) settingsBtn.addEventListener('click', function () { openSettingsPanel(); });
 }
 
-// Re-export openers for chrome buttons / debugging.
 window.__liteOpenSettings = openSettingsPanel;
 window.__liteOpenPlugins = openPluginsPanel;

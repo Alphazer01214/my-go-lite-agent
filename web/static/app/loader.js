@@ -4,9 +4,9 @@
 // loads; the custom element upgrade then wires the already-inserted element
 // without losing props.
 
-// Layout page vocabulary comes from the merged layout (ADR-0012).
+// Layout page vocabulary comes from the merged layout (ADR-0012/0031).
 // Fallback for tests / early boot before /api/layout lands.
-export var PAGES = ['main', 'trace'];
+export var PAGES = ['main'];
 
 export function setPages(list) {
   if (list && list.length) PAGES = list.slice();
@@ -58,7 +58,7 @@ export function createLoader(page, panelHost, onError) {
   function loadPluginUIs() {
     fetch('/api/plugins').then(function (r) { return r.json(); }).then(function (b) {
       // Deterministic slot order (BUG-14): chips/mounts must land in a stable
-      // plugin-name order — the statusbar has no ordering contract, so
+      // plugin-name order — the bottom region has no ordering contract, so
       // import-completion order used to shuffle it per load. Imports still run
       // in parallel; only the mount phase is ordered.
       var plugins = (b.plugins || []).filter(function (p) {

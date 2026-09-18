@@ -1,7 +1,7 @@
 {
   "name": "agent",
   "version": "0.1.0",
-  "protocol": 5,
+  "protocol": 6,
   "autostart": true,
   "dependsOn": [
     "session",
@@ -34,12 +34,12 @@
     "mounts": [
       {
         "page": "main",
-        "slot": "toolbar-right",
+        "slot": "right",
         "component": "agent-mode-panel"
       },
       {
         "page": "main",
-        "slot": "statusbar",
+        "slot": "bottom",
         "component": "agent-status"
       }
     ]

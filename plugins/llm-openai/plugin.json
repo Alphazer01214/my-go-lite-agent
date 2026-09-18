@@ -1,7 +1,7 @@
 {
   "name": "llm-openai",
   "version": "0.2.0",
-  "protocol": 5,
+  "protocol": 6,
   "autostart": true,
   "provides": [
     "llm"
@@ -23,7 +23,7 @@
     "mounts": [
       {
         "page": "main",
-        "slot": "statusbar",
+        "slot": "bottom",
         "component": "llm-openai-status"
       }
     ]

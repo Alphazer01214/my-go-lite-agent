@@ -58,9 +58,10 @@ type UIMount struct {
 	Props     json.RawMessage `json:"props,omitempty"`
 }
 
-// UISlots are the Panel slot names a base layout page may provide (ADR-0009/0012).
-// Contributed pages may introduce additional slot ids; base layout slots stay stable.
-var UISlots = []string{"sidebar", "main-overlay", "toolbar-right", "trace", "main", "chat"}
+// UISlots are the Shell-hosted Panel slot names (ADR-0031): top/bottom plus
+// the left|center|right body row. Domain faces (chat/trace/…) are
+// plugin-owned components mounted into these regions — never named Shell slots.
+var UISlots = []string{"top", "bottom", "left", "center", "right"}
 
 // ValidUISlot reports whether slot is a known base Shell Panel slot.
 func ValidUISlot(slot string) bool {
@@ -118,7 +119,8 @@ type Manifest struct {
 // contract, ADR-0012) this Host accepts. It is not the Frame wire version —
 // Frame.V carries protocol.Version. Protocol 4 carries hostFaces (ADR-0027).
 // Protocol 5 is L0-only Host/Medium addressing (ADR-0030).
-const CurrentProtocol = 5
+// Protocol 6 is Shell five-region slots (ADR-0031): top|bottom|left|center|right.
+const CurrentProtocol = 6
 
 // ValidHostFace reports whether name is a declared hostFace (ADR-0027).
 func ValidHostFace(name string) bool {

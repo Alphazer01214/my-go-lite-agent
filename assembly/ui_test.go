@@ -22,31 +22,36 @@ func mounted(name string, mounts ...plugin.UIMount) discovery.Found {
 func TestResolveUIMountsDefaults(t *testing.T) {
 	plan := Plan{Mounted: []discovery.Found{
 		mounted("session",
-			plugin.UIMount{Slot: "chat", Component: "session-view"},
-			plugin.UIMount{Page: "trace", Slot: "main", Component: "session-trace"},
+			plugin.UIMount{Slot: "left", Component: "session-rail"},
+			plugin.UIMount{Slot: "center", Component: "session-workspace"},
+			plugin.UIMount{Slot: "bottom", Component: "session-status"},
 		),
 	}}
 	got, err := ResolveUIMounts(Config{}, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("len=%d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("len=%d %+v", len(got), got)
 	}
-	if got[0].Page != "main" || got[0].Component != "session-view" {
-		t.Fatalf("got[0]=%+v", got[0])
+	seen := map[string]string{}
+	for _, g := range got {
+		seen[g.Component] = g.Slot
+	}
+	if seen["session-rail"] != "left" || seen["session-workspace"] != "center" || seen["session-status"] != "bottom" {
+		t.Fatalf("got=%+v", got)
 	}
 }
 
 func TestResolveUIMountsDisableAndOverride(t *testing.T) {
 	plan := Plan{Mounted: []discovery.Found{
-		mounted("uidemo", plugin.UIMount{Slot: "sidebar", Component: "uidemo-mode-panel"}),
-		mounted("other", plugin.UIMount{Slot: "sidebar", Component: "other-panel"}),
+		mounted("uidemo", plugin.UIMount{Slot: "left", Component: "uidemo-mode-panel"}),
+		mounted("other", plugin.UIMount{Slot: "left", Component: "other-panel"}),
 	}}
 	cfg := Config{UI: &UIConfig{
 		Disable: []string{"uidemo/uidemo-mode-panel"},
 		Overrides: []UIOverride{{
-			Plugin: "other", Component: "other-panel", Slot: "toolbar-right",
+			Plugin: "other", Component: "other-panel", Slot: "right",
 			Props: json.RawMessage(`{"a":1}`), Winner: true,
 		}},
 	}}
@@ -57,25 +62,25 @@ func TestResolveUIMountsDisableAndOverride(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len=%d %+v", len(got), got)
 	}
-	if got[0].Slot != "toolbar-right" || string(got[0].Props) != `{"a":1}` {
+	if got[0].Slot != "right" || string(got[0].Props) != `{"a":1}` {
 		t.Fatalf("got=%+v", got[0])
 	}
 }
 
 func TestResolveUIMountsWinnerDropsOthers(t *testing.T) {
 	plan := Plan{Mounted: []discovery.Found{
-		mounted("session", plugin.UIMount{Slot: "chat", Component: "session-view"}),
-		mounted("alt", plugin.UIMount{Slot: "chat", Component: "alt-view"}),
+		mounted("session", plugin.UIMount{Slot: "center", Component: "session-workspace"}),
+		mounted("alt", plugin.UIMount{Slot: "center", Component: "alt-workspace"}),
 	}}
 	ord := 0
 	cfg := Config{UI: &UIConfig{Overrides: []UIOverride{{
-		Plugin: "alt", Component: "alt-view", Winner: true, Order: &ord,
+		Plugin: "alt", Component: "alt-workspace", Winner: true, Order: &ord,
 	}}}}
 	got, err := ResolveUIMounts(cfg, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Component != "alt-view" {
+	if len(got) != 1 || got[0].Component != "alt-workspace" {
 		t.Fatalf("got=%+v", got)
 	}
 }

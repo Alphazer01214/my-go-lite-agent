@@ -1,7 +1,7 @@
 {
   "name": "context-manager",
   "version": "0.3.0",
-  "protocol": 5,
+  "protocol": 6,
   "autostart": true,
   "provides": [
     "system-prompt",
@@ -33,7 +33,7 @@
     "mounts": [
       {
         "page": "main",
-        "slot": "statusbar",
+        "slot": "bottom",
         "component": "context-manager-status"
       }
     ]

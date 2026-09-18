@@ -14,11 +14,12 @@
 
 | 触发场景 | 打开 |
 |----------|------|
-| 改 Host / Medium / 路由 / 启动面 | [ADR-0030](docs/adr/0030-l0-only-host-and-medium.md) → [ADR-0026](docs/adr/0026-host-plugin-boundary-criteria.md) → [ADR-0027](docs/adr/0027-plugin-host-faces.md) |
-| 改插件 / manifest / UI 面 | [plugins/README.md](plugins/README.md) → [ADR-0027](docs/adr/0027-plugin-host-faces.md) → [ADR-0012](docs/adr/0012-web-ui-contract-v2.md) |
+| 改 Host / Medium / 路由 / 启动面 | [ADR-0030](docs/adr/0030-l0-only-host-and-medium.md) → [ADR-0026](docs/adr/0026-host-plugin-boundary-criteria.md) → [ADR-0027](docs/adr/0027-plugin-host-faces.md) → [docs/modules/](docs/modules/) |
+| 改插件 / manifest / UI 面 | [plugins/README.md](plugins/README.md) → [ADR-0027](docs/adr/0027-plugin-host-faces.md) → [ADR-0012](docs/adr/0012-web-ui-contract-v2.md) → [ADR-0031](docs/adr/0031-shell-five-regions.md) |
 | 改装配 / scheme / 挂载 | [ADR-0021](docs/adr/0021-autostart-depends-on-over-assembly.md) → [ADR-0023](docs/adr/0023-host-ensure-plugins.md) → [ADR-0022](docs/adr/0022-consumes-soft-skip-degraded.md) |
 | 改 Agent Loop / 会话 / 压缩 | [ADR-0016](docs/adr/0016-agent-plugin-no-host-loop.md) → [ADR-0028](docs/adr/0028-auto-compact-as-default.md) → [ADR-0013](docs/adr/0013-context-prepare-and-log-native-compaction.md) |
 | 改策略 / 审批 / 工具面 | [ADR-0019](docs/adr/0019-policy-capability-not-interceptor.md) → [ADR-0018](docs/adr/0018-tools-capability-multi-provider.md) |
+| 查非插件模块职责 / API | [docs/modules/README.md](docs/modules/README.md) |
 | 写票据 / 开 feature | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) → [docs/agents/triage-labels.md](docs/agents/triage-labels.md) |
 | 术语与 ADR 冲突 | [CONTEXT.md](CONTEXT.md) → [docs/agents/domain.md](docs/agents/domain.md) |
 
@@ -61,7 +62,7 @@
 - `hostFaces` 仅 `config` | `commands` | `ui`（ADR-0027）。这三面按**插件名**寻址，与 `provides`（能力名、唯一属主）语义不同，不得混入 `provides`。
 - `provides` / `consumes` 是声明与观测（degraded、Plugin Graph）；运行时调用点名插件或由插件自建发现。
 - Panel Component 元素名以插件名为前缀（`<plugin>-*`）；样式走 `--la-*` Design Token；交互经 SDK 回插件。
-- `protocol` 字段 ∈ `1..plugin.CurrentProtocol`（当前 **5**）。破坏 Manifest/UI 契约 → bump `CurrentProtocol` 并升级出厂插件；破坏 Frame 线格式 → bump `protocol.Version`（当前 **5**）。
+- `protocol` 字段 ∈ `1..plugin.CurrentProtocol`（当前 **6**）。破坏 Manifest/UI 契约 → bump `CurrentProtocol` 并升级出厂插件；破坏 Frame 线格式 → bump `protocol.Version`（当前 **5**）。
 - 核心与 Host 零第三方依赖（解析库除外）；插件优先 stdlib。
 
 ## 变更纪律
@@ -106,6 +107,7 @@
 | 0027 | `hostFaces` 转正；导出面收窄；无 `-scheme` |
 | 0028 | 自动压缩是默认行为 |
 | 0029 | Medium 展示钩子为订阅列表，非单槽 |
-| 0030 | Host/Medium L0-only；按插件名路由；`CurrentProtocol = 5`；`agent.*` Deferred |
+| 0030 | Host/Medium L0-only；按插件名路由；`CurrentProtocol = 5`（被 0031 升到 6 的槽位面另见）；`agent.*` Deferred |
+| 0031 | Shell 五块通用区域 `top\|bottom\|left\|center\|right`；session 占左+中（rail / chat+trace）；`CurrentProtocol = 6` |
 
 **明确不做**：同进程插件、Waterfall/Interceptor、Host 内建 Loop、Assembly 白名单作日常真源、Host 合并 tools、Medium/CLI 领域启动 flag 与领域 HTTP 面、恢复 cap 注册表路由。

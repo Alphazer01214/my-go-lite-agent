@@ -18,101 +18,101 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--la-bg);color:var(--la-ink);font-family:var(--la-sans)}
 
-/* 3-column grid (history | chat+trace | plugins) plus a full-width status bar */
+/* ADR-0031: Shell provides five generic regions — top/bottom + left|center|right.
+   Domain faces (chat, trace, rail, …) are plugin Panel Components. */
 #app{
   display:grid;
-  grid-template-columns:240px minmax(0,1fr) 240px;
-  grid-template-rows:minmax(0,1fr) auto;
+  grid-template-columns:220px minmax(0,1fr) 240px;
+  grid-template-rows:auto minmax(0,1fr) auto;
+  grid-template-areas:
+    "top top top"
+    "left center right"
+    "bottom bottom bottom";
   height:100%;
   min-height:0;
-  /* Never collapse the center column on narrow windows: scroll instead. */
-  min-width:860px;
+  min-width:960px;
 }
-#rail{
+
+#region-top{
+  grid-area:top;
+  display:flex;flex-direction:column;min-height:0;
+  background:var(--la-panel);
+  border-bottom:1px solid var(--la-line);
+}
+#region-left{
+  grid-area:left;
+  display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;
   background:var(--la-panel2);
   border-right:1px solid var(--la-line);
-  display:flex;flex-direction:column;min-height:0;overflow:hidden;
 }
-
-#right{
+#region-center{
+  grid-area:center;
+  display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;
+}
+#region-right{
+  grid-area:right;
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
   background:var(--la-panel2);
   border-left:1px solid var(--la-line);
-  display:flex;flex-direction:column;min-height:0;overflow:hidden;
 }
-#right-head{padding:12px;border-bottom:1px solid var(--la-line);font-size:12px;color:var(--la-dim)}
-#slot-toolbar-right{flex:1;overflow-y:auto;padding:8px;min-height:0}
+#region-bottom{
+  grid-area:bottom;
+  display:flex;align-items:center;gap:0;min-height:26px;padding:0 10px;
+  background:var(--la-panel);border-top:1px solid var(--la-line);
+  color:var(--la-dim);font-size:11px;font-family:var(--la-mono,ui-monospace,monospace);
+  overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+}
+/* Generic slot geometry only — any Panel Component in a region fills it. */
+#region-left>*,#region-center>*,#region-right>*{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#region-top>*{flex:0 0 auto}
+#region-bottom>*{flex:0 0 auto}
+#region-bottom>*+*{border-left:1px solid var(--la-line);margin-left:10px;padding-left:10px}
 
-/* Bottom status bar: the Host reserves the last row and plugins fill it with
-   their own <plugin>-status Panel Components (workspace, tokens, model, …).
-   The Shell owns only the geometry and the slot. */
-#statusbar{grid-column:1 / -1;grid-row:2;display:flex;align-items:center;gap:0;min-height:26px;padding:0 10px;background:var(--la-panel);border-top:1px solid var(--la-line);color:var(--la-dim);font-size:11px;font-family:var(--la-mono,ui-monospace,monospace);overflow-x:auto;overflow-y:hidden;white-space:nowrap}
-/* #status is the Host's own line inside the shared bottom bar (SSE status /
-   loader warnings); plugin chips follow it. A single definition: the older
-   full-width rule was duplicated and fought this one (BUG-15). */
-#status{flex:0 0 auto;color:var(--la-dim);padding-right:2px;font-size:12px;padding:2px 8px 0}
+/* Shell L0 chrome inside region-top (framework controls only — no domain panels). */
+#shell-chrome{
+  display:flex;align-items:center;gap:10px;padding:8px 12px;min-height:36px;
+  font-size:12px;color:var(--la-dim);
+}
+#shell-chrome .chrome-brand{font-weight:600;color:var(--la-ink);font-size:13px;flex:0 0 auto}
+#layout-nav{display:flex;gap:10px;align-items:center}
+#layout-nav a{color:var(--la-accent);text-decoration:none}
+#shell-chrome .chrome-actions{margin-left:auto;display:flex;align-items:center;gap:0}
+#status{flex:0 0 auto;color:var(--la-dim);font-family:var(--la-mono,monospace);font-size:11px;padding:0 6px}
 #status:empty{display:none}
-#statusbar>*{flex:0 0 auto}
-#statusbar-empty{flex:1;font-size:11px;color:var(--la-dim);opacity:.7}
-#statusbar>*+*{border-left:1px solid var(--la-line);margin-left:10px;padding-left:10px}
-/* No leading separator when the Host's own status line is empty. */
-#status:empty+*{border-left:0;margin-left:0;padding-left:0}
+#status:not(:empty){border-left:1px solid var(--la-line);margin-left:8px;padding-left:8px}
 
-/* center workspace */
-#center{display:flex;flex-direction:column;min-width:0;min-height:0}
-#split{
-  flex:1;display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(280px,0.85fr);
-  min-height:0;min-width:0;
-}
-#chat-col,#trace-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
-#chat-col{border-right:1px solid var(--la-line)}
-#pane-head{
-  padding:10px 16px;border-bottom:1px solid var(--la-line);background:var(--la-panel);
-  font-size:12px;color:var(--la-dim);display:flex;justify-content:space-between;align-items:center;flex-shrink:0
-}
-#pane-head a{color:var(--la-accent);text-decoration:none}
-/* The chat surface is the session-view Panel Component (ADR-0011);
-   the layout owns sizing, the component owns scrolling and content. */
-#chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-#chat>*{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-#slot-trace{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
+.btn-plugins{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:8px}
+.btn-plugins:hover{color:var(--la-accent);border-color:var(--la-accent)}
 
+/* Shell-owned overlay for Settings / Plugin Graph — not a Layout slot. */
 #main-overlay{position:fixed;inset:0;pointer-events:none;z-index:20}
 #main-overlay:empty{display:none}
 #main-overlay>*{pointer-events:auto}
-/* Floating plugin-graph modal (shell-owned, not a layout page). */
 .pg-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:24px}
-.pg-modal{background:var(--la-panel);border:1px solid var(--la-line);border-radius:12px;width:min(920px,100%);max-height:min(80vh,720px);display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.45);overflow:hidden}
+.pg-modal{background:var(--la-panel);border:1px solid var(--la-line);border-radius:12px;width:min(920px,100%);max-height:min(80vh,720px);display:flex;flex-direction:column;box-shadow:0 12px 24px rgba(0,0,0,.45);overflow:hidden}
 .pg-modal-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--la-line);font-size:13px;font-weight:600}
-.pg-modal-head button{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
+.pg-modal-head button{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
 .pg-modal-head button:hover{color:var(--la-ink);border-color:var(--la-accent)}
 .pg-modal-body{flex:1;min-height:0;overflow:auto;display:flex}
-.btn-plugins{background:transparent;border:1px solid var(--la-line);color:var(--la-dim);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:8px}
-.btn-plugins:hover{color:var(--la-accent);border-color:var(--la-accent)}
 </style>
 </head>
 <body>
 <div id="app">
-  <aside id="rail" class="panel-root"></aside>
-  <section id="center">
-    <div id="split">
-      <section id="chat-col">
-        <div id="pane-head"><span>Chat</span><span id="layout-nav" style="display:flex;gap:10px;margin-left:12px;align-items:center"></span><span style="display:flex;align-items:center"><button id="btn-plugins" class="btn-plugins" type="button" title="Mounted plugins & dependency graph">Plugins</button><button id="btn-settings" class="btn-plugins" type="button" title="Plugin settings">Settings</button><span id="session-label" style="font-family:var(--la-mono);font-size:11px;margin-left:8px"></span></span></div>
-        <div id="chat" class="panel-root"></div>
-      </section>
-      <section id="trace-col">
-        <div id="pane-head"><span>Session trace</span></div>
-        <div id="slot-trace" class="panel-root"></div>
-      </section>
+  <div id="region-top" class="region">
+    <div id="shell-chrome">
+      <span class="chrome-brand">lite agent</span>
+      <span id="layout-nav"></span>
+      <span class="chrome-actions">
+        <button id="btn-plugins" class="btn-plugins" type="button" title="Mounted plugins &amp; dependency graph">Plugins</button>
+        <button id="btn-settings" class="btn-plugins" type="button" title="Plugin settings">Settings</button>
+        <span id="status"></span>
+      </span>
     </div>
-  </section>
-  <aside id="right">
-    <div id="right-head">Panels</div>
-    <div id="slot-toolbar-right" class="panel-root"></div>
-  </aside>
-  <footer id="statusbar" class="panel-root">
-    <span id="status"></span>
-  </footer>
+  </div>
+  <div id="region-left" class="region panel-root"></div>
+  <div id="region-center" class="region panel-root"></div>
+  <div id="region-right" class="region panel-root"></div>
+  <div id="region-bottom" class="region panel-root"></div>
 </div>
 <div id="main-overlay"></div>
 <script src="/sdk/lite-agent.js"></script>

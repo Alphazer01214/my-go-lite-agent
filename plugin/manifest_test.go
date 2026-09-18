@@ -15,7 +15,7 @@ func TestManifestValidate(t *testing.T) {
 
 	// UI-only Plugin: legal with no executable entry (ADR-0011).
 	uiOnly := Manifest{Name: "a", Version: "1.0.0", Protocol: CurrentProtocol,
-		UI: &UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "a-panel"}}}}
+		UI: &UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "a-panel"}}}}
 	if err := uiOnly.Validate(); err != nil {
 		t.Fatalf("ui-only manifest rejected: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestManifestValidate(t *testing.T) {
 	}{
 		{"missing name", Manifest{Version: "1", Protocol: 2, Entry: "x"}},
 		{"missing version", Manifest{Name: "a", Protocol: 2, Entry: "x"}},
-		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 6, Entry: "x"}},
+		{"bad protocol", Manifest{Name: "a", Version: "1", Protocol: 7, Entry: "x"}},
 		{"missing entry and ui", Manifest{Name: "a", Version: "1", Protocol: 2}},
 		{"empty provides item", Manifest{Name: "a", Version: "1", Protocol: 2, Entry: "x", Provides: []string{""}}},
 		{"bad name chars", Manifest{Name: "Help", Version: "1", Protocol: 2, Entry: "x"}},
@@ -105,7 +105,7 @@ func TestUISpecValidate(t *testing.T) {
 		UI: &UISpec{
 			Entry: "main.js",
 			Mounts: []UIMount{
-				{Slot: "sidebar", Component: "uidemo-mode-panel", Props: json.RawMessage(`{"mode":"chat"}`)},
+				{Slot: "left", Component: "uidemo-mode-panel", Props: json.RawMessage(`{"mode":"chat"}`)},
 			},
 		},
 	}
@@ -156,11 +156,11 @@ func TestUISpecValidate(t *testing.T) {
 		{"page uppercase", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "Main", Slot: "main", Component: "uidemo-x"}}}},
 		{"page with space", UISpec{Entry: "main.js", Mounts: []UIMount{{Page: "main page", Slot: "main", Component: "uidemo-x"}}}},
 		{"bad slot", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "Footer", Component: "uidemo-x"}}}},
-		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "other-panel"}}}},
-		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo"}}}},
-		{"component bad chars", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-X"}}}},
-		{"props not object", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-x", Props: json.RawMessage(`[1]`)}}}},
-		{"props malformed", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "sidebar", Component: "uidemo-x", Props: json.RawMessage(`{`)}}}},
+		{"foreign component prefix", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "other-panel"}}}},
+		{"component without hyphen", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "uidemo"}}}},
+		{"component bad chars", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "uidemo-X"}}}},
+		{"props not object", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "uidemo-x", Props: json.RawMessage(`[1]`)}}}},
+		{"props malformed", UISpec{Entry: "main.js", Mounts: []UIMount{{Slot: "left", Component: "uidemo-x", Props: json.RawMessage(`{`)}}}},
 	}
 	for _, tc := range cases {
 		m := Manifest{Name: "uidemo", Version: "1", Protocol: CurrentProtocol, Entry: "x", UI: &tc.ui}

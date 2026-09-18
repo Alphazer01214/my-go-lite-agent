@@ -1,7 +1,7 @@
 {
   "name": "session",
-  "version": "0.4.0",
-  "protocol": 5,
+  "version": "0.5.0",
+  "protocol": 6,
   "provides": [
     "session"
   ],
@@ -42,22 +42,17 @@
     "mounts": [
       {
         "page": "main",
-        "slot": "sidebar",
+        "slot": "left",
         "component": "session-rail"
       },
       {
         "page": "main",
-        "slot": "chat",
-        "component": "session-view"
+        "slot": "center",
+        "component": "session-workspace"
       },
       {
         "page": "main",
-        "slot": "trace",
-        "component": "session-trace"
-      },
-      {
-        "page": "main",
-        "slot": "statusbar",
+        "slot": "bottom",
         "component": "session-status"
       }
     ]

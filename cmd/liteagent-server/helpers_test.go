@@ -85,15 +85,12 @@ func writeTestLayout(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "layout.json")
 	writeFile(t, path, `{
 	  "pages": [
-	    {"slug":"main","title":"Chat","path":"/","slots":[
-	      {"id":"sidebar","role":"session-rail","preferred":"session-rail"},
-	      {"id":"chat","role":"session-view","preferred":"session-view"},
-	      {"id":"trace","role":"session-trace"},
-	      {"id":"toolbar-right","role":"panel"},
-	      {"id":"main-overlay","role":"overlay"}
-	    ]},
-	    {"slug":"trace","title":"Trace","path":"/trace","slots":[
-	      {"id":"main","role":"session-trace"}
+	    {"slug":"main","title":"Main","path":"/","slots":[
+	      {"id":"top","role":"panel"},
+	      {"id":"bottom","role":"panel"},
+	      {"id":"left","role":"panel"},
+	      {"id":"center","role":"panel"},
+	      {"id":"right","role":"panel"}
 	    ]}
 	  ]
 	}`)

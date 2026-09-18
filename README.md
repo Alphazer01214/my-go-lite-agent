@@ -28,7 +28,7 @@ Host 不认识能力名，不解析领域 payload；会话、回合、工具编�
 - **日志是真源**：会话事实只追加；模型能看到的内容必须能从 Session Log 重建。
 - **轻**：进程隔离换崩溃边界与独立分发；不绑重框架，不堆臃肿 harness。
 
-规范名词见 [CONTEXT.md](CONTEXT.md)；架构决策见 [docs/adr/](docs/adr/)。
+规范名词见 [CONTEXT.md](CONTEXT.md)；架构决策见 [docs/adr/](docs/adr/)；模块开发文档见 [docs/modules/](docs/modules/)。
 
 ## 特性
 
@@ -150,7 +150,7 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 **Web 界面**
 
 - **新建会话面**：打开页面停在「工作区选取（可留空）+ agent 模式 + 聊天框」，**不会**自动加载当前会话。目录选择后需手填绝对路径（Medium 不再解析目录名，ADR-0030）。发出第一条消息时才创建会话并绑定该工作区。左侧会话列表**按工作区路径分组**，点一下即进入历史会话。
-- **底栏信息区**：Shell 最下面一整栏（Layout `statusbar` 槽位），内容由各插件自己的 `<plugin>-status` 组件提供——工作区 / 会话 / 事实数（session）、token 与窗口占比（context-manager）、模型名与模型总时长（llm-openai）、当前 scheme（agent）。
+- **底栏信息区**：Shell 区域 `bottom`（ADR-0031），内容由各插件自己的 `<plugin>-status` 组件提供——工作区 / 会话 / 事实数（session）、token 与窗口占比（context-manager）、模型名与模型总时长（llm-openai）、当前 scheme（agent）。session 占 `left`（会话列表）与 `center`（chat|trace）。
 - **Settings**：打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
 - **Plugins**：插件 / Capability / Host / UI 槽位的关系图。实线绿=已挂载，虚线灰=已发现但待拉起（由某个 Agent Scheme 的 `dependsPlugins` 决定），红=degraded（consumes 未满足），琥珀=dependsOn 引用了未发现的插件。
 
@@ -177,4 +177,6 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 - 插件索引（含状态标记：核四件 / 场景工具）：[plugins/README.md](plugins/README.md)
 - 术语与边界：[CONTEXT.md](CONTEXT.md)
 - 架构决策：[docs/adr/](docs/adr/)
+- 模块开发文档：[docs/modules/](docs/modules/)
+- 线协议总览：[docs/protocol.md](docs/protocol.md)
 - 历史 spec 归档：[docs/archive/](docs/archive/)（开发过程稿，非现行契约）

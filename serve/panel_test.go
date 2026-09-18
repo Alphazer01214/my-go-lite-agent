@@ -44,7 +44,7 @@ func collectPanelEvents(s *Server, from string, f *protocol.Frame) (panels []Pan
 func TestDispatchPanelAcceptsComponentOps(t *testing.T) {
 	s := &Server{}
 
-	set := PanelOp{Op: "set", Slot: "sidebar", ID: "mode", Component: "uidemo-mode-panel", Props: json.RawMessage(`{"mode":"chat"}`)}
+	set := PanelOp{Op: "set", Slot: "left", ID: "mode", Component: "uidemo-mode-panel", Props: json.RawMessage(`{"mode":"chat"}`)}
 	panels, status := collectPanelEvents(s, "uidemo", panelFrame(t, set))
 	if len(panels) != 1 || panels[0].Component != "uidemo-mode-panel" {
 		t.Fatalf("want set op broadcast, got %+v (status %v)", panels, status)
@@ -53,7 +53,7 @@ func TestDispatchPanelAcceptsComponentOps(t *testing.T) {
 		t.Fatalf("want no warn, got %v", status)
 	}
 
-	clear := PanelOp{Op: "clear", Slot: "toolbar-right", ID: "mode"}
+	clear := PanelOp{Op: "clear", Slot: "right", ID: "mode"}
 	panels, status = collectPanelEvents(s, "uidemo", panelFrame(t, clear))
 	if len(panels) != 1 || panels[0].Op != "clear" {
 		t.Fatalf("want clear op broadcast, got %+v (status %v)", panels, status)
@@ -66,13 +66,14 @@ func TestDispatchPanelRejectsViolations(t *testing.T) {
 		from string
 		op   PanelOp
 	}{
-		{"foreign prefix", "other", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "uidemo-mode-panel"}},
-		{"missing component", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x"}},
-		{"append removed", "uidemo", PanelOp{Op: "append", Slot: "sidebar", ID: "x", Component: "uidemo-x"}},
+		{"foreign prefix", "other", PanelOp{Op: "set", Slot: "left", ID: "x", Component: "uidemo-mode-panel"}},
+		{"missing component", "uidemo", PanelOp{Op: "set", Slot: "left", ID: "x"}},
+		{"append removed", "uidemo", PanelOp{Op: "append", Slot: "left", ID: "x", Component: "uidemo-x"}},
 		{"unknown slot", "uidemo", PanelOp{Op: "set", Slot: "Footer", ID: "x", Component: "uidemo-x"}},
-		{"bad tag case", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "Uidemo-X"}},
-		{"tag without hyphen", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "uidemo"}},
-		{"missing id", "uidemo", PanelOp{Op: "set", Slot: "sidebar", Component: "uidemo-x"}},
+		{"legacy domain slot", "uidemo", PanelOp{Op: "set", Slot: "sidebar", ID: "x", Component: "uidemo-x"}},
+		{"bad tag case", "uidemo", PanelOp{Op: "set", Slot: "left", ID: "x", Component: "Uidemo-X"}},
+		{"tag without hyphen", "uidemo", PanelOp{Op: "set", Slot: "left", ID: "x", Component: "uidemo"}},
+		{"missing id", "uidemo", PanelOp{Op: "set", Slot: "left", Component: "uidemo-x"}},
 	}
 	for _, tc := range cases {
 		s := &Server{}
@@ -90,8 +91,8 @@ func TestDispatchPanelRejectsViolations(t *testing.T) {
 // field (now dropped) and props that are not valid JSON.
 func TestDispatchPanelRejectsRawPayloads(t *testing.T) {
 	raws := map[string]string{
-		"legacy html shape": `{"op":"set","slot":"sidebar","id":"x","html":"<b>hi</b>"}`,
-		"malformed props":   `{"op":"set","slot":"sidebar","id":"x","component":"uidemo-x","props":{`,
+		"legacy html shape": `{"op":"set","slot":"left","id":"x","html":"<b>hi</b>"}`,
+		"malformed props":   `{"op":"set","slot":"left","id":"x","component":"uidemo-x","props":{`,
 	}
 	for name, raw := range raws {
 		s := &Server{}

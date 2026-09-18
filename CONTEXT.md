@@ -61,7 +61,7 @@ Session View 的初始面：工作区选取（可留空）+ Agent Scheme 选择 
 _Avoid_: 欢迎页、空状态（规范名词是 New-session Face）
 
 **Status Bar**:
-Shell 底部的整宽信息栏（Layout 的 `statusbar` 槽位）。Shell 只负责几何与槽位，内容由各插件以 Panel Component 提供（如工作区、token 占用、模型名与模型总时长）。信息项是各插件对自身状态的观测投影，不是第二真源。
+Shell 区域 `bottom` 上的插件 status 组件集合（工作区、token 占用、模型名与模型总时长等）。Shell 只负责几何与槽位，内容由各插件以 Panel Component 提供。信息项是各插件对自身状态的观测投影，不是第二真源。槽位名是通用 `bottom`。
 _Avoid_: 状态栏插件、footer、ticker
 
 **Plugin Graph**:
@@ -113,7 +113,7 @@ _Avoid_: 清单、plugin config（config 是运行参数，不是 Manifest）
 _Avoid_: 前端、UI 进程、renderer（规范名词是 Render Medium）
 
 **Shell**:
-Web Render Medium 中项目提供的最薄骨架：按合并 Layout 渲染 chrome 与导航、提供 Design Token 与必要全局脚本（SDK 与组件装载器）。内容面（聊天、trace 等）不属骨架，由插件作者实现为 Panel Component 注册进页面，项目自有实现也不例外。
+Web Render Medium 中项目提供的最薄骨架：按合并 Layout 渲染**五块通用区域**（`top` / `bottom` / `left` / `center` / `right`，ADR-0031）与必要全局脚本（SDK 与组件装载器），并提供 Design Token。内容面不属骨架，由插件 Panel Component 嵌入区域；session 占用 `left`（rail）与 `center`（chat|trace workspace），项目自有实现也不例外。
 _Avoid_: 前端框架、主界面、聊天壳（规范名词是 Shell）
 
 **Frame**:
