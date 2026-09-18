@@ -517,6 +517,32 @@ func (a *agent) sessionWorkspace(sessionID string) string {
 	return out.Workspace
 }
 
+// sessionPermissionMode reads Session meta permissionMode (ADR-0033).
+// Empty / session down → workspace_write (default profile).
+func (a *agent) sessionPermissionMode(sessionID string) string {
+	raw, err := a.callCapJSON("session", "info", map[string]any{"sessionId": sessionID})
+	if err != nil {
+		return "workspace_write"
+	}
+	var out struct {
+		PermissionMode string `json:"permissionMode"`
+		Meta           struct {
+			PermissionMode string `json:"permissionMode"`
+		} `json:"meta"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	m := out.PermissionMode
+	if m == "" {
+		m = out.Meta.PermissionMode
+	}
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "read_only", "workspace_write", "full_access":
+		return strings.ToLower(strings.TrimSpace(m))
+	default:
+		return "workspace_write"
+	}
+}
+
 // policyDecide asks the policy Capability (ADR-0019). severity is the tool
 // author's declared risk (low|medium|high) from tools.list.
 //
@@ -526,11 +552,13 @@ func (a *agent) sessionWorkspace(sessionID string) string {
 // allow path is "no policy provider in this assembly at all": then there is no
 // gate to consult, so the historical allow behavior stands.
 func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, workspace, severity string) (string, string) {
+	mode := a.sessionPermissionMode(sessionID)
 	payload := map[string]any{
-		"tool":      tool,
-		"arguments": args,
-		"workspace": workspace,
-		"sessionId": sessionID,
+		"tool":            tool,
+		"arguments":       args,
+		"workspace":       workspace,
+		"sessionId":       sessionID,
+		"permissionMode":  mode,
 	}
 	if severity != "" {
 		payload["severity"] = severity
@@ -542,6 +570,7 @@ func (a *agent) policyDecide(sessionID, tool string, args json.RawMessage, works
 	var out struct {
 		Action string `json:"action"`
 		Reason string `json:"reason"`
+		Mode   string `json:"permissionMode"`
 	}
 	_ = json.Unmarshal(raw, &out)
 	if out.Action == "" {
@@ -721,11 +750,22 @@ func (a *agent) handleTodo(sessionID string, tc toolCall) (string, error) {
 }
 
 func (a *agent) logPolicyDecision(sessionID, tool, action, reason string) {
+	a.logPolicyDecisionMeta(sessionID, tool, action, reason, nil)
+}
+
+// logPolicyDecisionMeta records a policy verdict with extra meta (permissionMode, approved).
+func (a *agent) logPolicyDecisionMeta(sessionID, tool, action, reason string, meta map[string]any) {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["tool"] = tool
+	meta["action"] = action
+	meta["reason"] = reason
 	_ = a.appendOne(sessionID, map[string]any{
 		"type":    "policy_decision",
 		"role":    "host",
-		"content": tool + " 鈫?" + action,
-		"meta":    map[string]any{"tool": tool, "action": action, "reason": reason},
+		"content": tool + " -> " + action,
+		"meta":    meta,
 	})
 }
 
@@ -735,10 +775,12 @@ func (a *agent) callTool(sessionID string, tc toolCall, severity string) (string
 		args = json.RawMessage(`{}`)
 	}
 	workspace := a.sessionWorkspace(sessionID)
-	// Policy plugin owns the full verdict (including ask 鈫?Medium round-trip).
+	mode := a.sessionPermissionMode(sessionID)
+	// Policy plugin owns the full verdict (including ask Medium round-trip).
 	action, reason := a.policyDecide(sessionID, tc.Name, args, workspace, severity)
+	// Always land the ruling in Session Log (ADR-0033): allow and deny alike.
 	if action == "deny" {
-		a.logPolicyDecision(sessionID, tc.Name, "deny", reason)
+		a.logPolicyDecisionMeta(sessionID, tc.Name, "deny", reason, map[string]any{"permissionMode": mode})
 		return "error: denied by policy: " + reason, nil, nil
 	}
 	if action == "ask" {
@@ -746,10 +788,13 @@ func (a *agent) callTool(sessionID string, tc toolCall, severity string) (string
 		// the Medium itself. Default sandbox resolves ask inside decide.
 		ok := a.confirmTool(sessionID, tc.Name, args, workspace)
 		if !ok {
-			a.logPolicyDecision(sessionID, tc.Name, "ask-denied", reason)
+			a.logPolicyDecisionMeta(sessionID, tc.Name, "ask-denied", reason, map[string]any{"permissionMode": mode, "approved": false})
 			return "error: denied by user approval: " + reason, nil, nil
 		}
-		a.logPolicyDecision(sessionID, tc.Name, "ask-allowed", reason)
+		a.logPolicyDecisionMeta(sessionID, tc.Name, "ask-allowed", reason, map[string]any{"permissionMode": mode, "approved": true})
+	} else if action == "allow" {
+		// Sandbox may have already folded ask→allow inside decide; still record it.
+		a.logPolicyDecisionMeta(sessionID, tc.Name, "allow", reason, map[string]any{"permissionMode": mode})
 	}
 	payload := map[string]any{
 		"name":      tc.Name,

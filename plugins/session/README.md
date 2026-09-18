@@ -5,6 +5,7 @@ File-backed Session Log 插件：JSONL 追加事实流，提供会话与 Trace �
 ## 提供
 
 - Capability `session`：append / query / derive / info / list / create / current…
+  - `append` 接受可选 `ts`（UnixMilli）；`>0` 时沿用调用方时间戳（如 reasoning hop-end），否则由 session 盖章
 - 命令：`/session dump-trace | list | derive | current | info`
 - UI（ADR-0031：Shell 为 `top|bottom` + `left|center|right`；session 占 **左、中**）：
   - `session-rail` —— 挂 `left`：会话列表。**只按工作区路径分组**（ADR-0020）

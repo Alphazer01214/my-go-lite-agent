@@ -145,7 +145,7 @@ func extractPath(args json.RawMessage) string {
 	return ""
 }
 
-func decide(tool string, args json.RawMessage, workspace, severity string) (string, string) {
+func decide(tool string, args json.RawMessage, workspace, severity, permissionMode string) (string, string) {
 	merged := RulesFile{DefaultAction: "allow"}
 	if base, ok := loadRulesFile(filepath.Join(exeConfigDir(), "permissions.json")); ok {
 		if base.DefaultAction != "" {
@@ -184,8 +184,13 @@ func decide(tool string, args json.RawMessage, workspace, severity string) (stri
 			reason = "rule tool=" + r.Tool + " path=" + r.Path + " -> " + r.Action
 		}
 	}
+	// Explicit rules win (may widen or narrow the mode profile). ADR-0033.
 	if best != "" {
 		return best, reason
+	}
+	// Session permissionMode profile (ADR-0033) — default when no rule matched.
+	if action, why := modeProfile(permissionMode, severity, path, workspace); action != "" {
+		return action, why
 	}
 	// Severity map (plugin-declared tool risk) before bare defaultAction.
 	if severity != "" {
@@ -195,6 +200,66 @@ func decide(tool string, args json.RawMessage, workspace, severity string) (stri
 		}
 	}
 	return merged.DefaultAction, "defaultAction=" + merged.DefaultAction
+}
+
+// modeProfile maps Session permissionMode + tool severity to a default action
+// when no explicit permissions.json rule matched (ADR-0033).
+// mode is a default profile: explicit allow rules may override it.
+func modeProfile(mode, severity, path, workspace string) (string, string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "workspace_write"
+	}
+	sev := strings.ToLower(strings.TrimSpace(severity))
+	if sev == "" {
+		// Unknown severity: treat path-like medium as medium, else low.
+		sev = "low"
+	}
+	switch mode {
+	case "read_only":
+		switch sev {
+		case "low":
+			return "allow", "mode=read_only severity=low -> allow"
+		default:
+			return "deny", "mode=read_only severity=" + sev + " -> deny"
+		}
+	case "workspace_write":
+		switch sev {
+		case "low":
+			return "allow", "mode=workspace_write severity=low -> allow"
+		case "medium":
+			if pathInWorkspace(path, workspace) {
+				return "allow", "mode=workspace_write medium path in workspace -> allow"
+			}
+			return "deny", "mode=workspace_write medium path outside workspace -> deny"
+		default: // high
+			return "ask", "mode=workspace_write severity=" + sev + " -> ask"
+		}
+	case "full_access":
+		// Keep current product defaults; let severityPolicy handle the rest.
+		return "", ""
+	default:
+		return "", ""
+	}
+}
+
+func pathInWorkspace(path, workspace string) bool {
+	if path == "" {
+		// No path-like arg: treat as workspace-local (workspace tools without paths).
+		return true
+	}
+	if workspace == "" {
+		return false
+	}
+	ws := filepath.Clean(workspace)
+	p := filepath.Clean(path)
+	if !filepath.IsAbs(p) {
+		p = filepath.Clean(filepath.Join(ws, p))
+	}
+	if p == ws {
+		return true
+	}
+	return strings.HasPrefix(p, ws+string(os.PathSeparator))
 }
 
 func globalRulesPath() string {
@@ -343,11 +408,12 @@ func main() {
 	// returns the final allow|deny. Agent must not re-confirm.
 	s.Handle("policy", "decide", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
-			Tool      string          `json:"tool"`
-			Arguments json.RawMessage `json:"arguments"`
-			Workspace string          `json:"workspace"`
-			SessionID string          `json:"sessionId"`
-			Severity  string          `json:"severity"`
+			Tool            string          `json:"tool"`
+			Arguments       json.RawMessage `json:"arguments"`
+			Workspace       string          `json:"workspace"`
+			SessionID       string          `json:"sessionId"`
+			Severity        string          `json:"severity"`
+			PermissionMode  string          `json:"permissionMode"`
 		}
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &in); err != nil {
@@ -360,9 +426,14 @@ func main() {
 		if len(in.Arguments) == 0 {
 			in.Arguments = json.RawMessage(`{}`)
 		}
-		action, reason := decide(in.Tool, in.Arguments, in.Workspace, in.Severity)
+		mode := strings.ToLower(strings.TrimSpace(in.PermissionMode))
+		if mode == "" {
+			mode = "workspace_write"
+		}
+		action, reason := decide(in.Tool, in.Arguments, in.Workspace, in.Severity, mode)
+		approved := false
 		if action == "ask" {
-			approved := confirmViaHost(s, in.Tool, in.Arguments, in.Workspace, in.SessionID)
+			approved = confirmViaHost(s, in.Tool, in.Arguments, in.Workspace, in.SessionID)
 			if approved {
 				action = "allow"
 				reason = "user approved; " + reason
@@ -372,10 +443,12 @@ func main() {
 			}
 		}
 		return json.Marshal(map[string]any{
-			"action":   action,
-			"reason":   reason,
-			"tool":     in.Tool,
-			"severity": in.Severity,
+			"action":          action,
+			"reason":          reason,
+			"tool":            in.Tool,
+			"severity":        in.Severity,
+			"permissionMode":  mode,
+			"approved":        approved,
 		})
 	})
 	s.Handle("policy", "rules", func(req *pluginsdk.Request) (json.RawMessage, error) {

@@ -8,25 +8,67 @@ import (
 )
 
 func TestDecideDefaultAllow(t *testing.T) {
-	action, _ := decide("write_file", json.RawMessage(`{"path":"src/a.go"}`), t.TempDir(), "")
+	action, _ := decide("write_file", json.RawMessage(`{"path":"src/a.go"}`), t.TempDir(), "", "workspace_write")
 	if action != "allow" {
 		t.Fatalf("want allow, got %s", action)
 	}
 }
 
-func TestDecideSeverityAskWhenNoRule(t *testing.T) {
-	// No permissions.json: severity medium/high should ask by default policy.
-	action, reason := decide("write_file", json.RawMessage(`{"path":"src/a.go"}`), t.TempDir(), "medium")
-	if action != "ask" {
-		t.Fatalf("want ask for medium severity, got %s (%s)", action, reason)
-	}
-	action, _ = decide("shell", json.RawMessage(`{"command":"ls"}`), t.TempDir(), "high")
-	if action != "ask" {
-		t.Fatalf("want ask for high severity, got %s", action)
-	}
-	action, _ = decide("read_file", json.RawMessage(`{"path":"a.go"}`), t.TempDir(), "low")
+func TestModeProfileReadOnly(t *testing.T) {
+	ws := t.TempDir()
+	action, reason := decide("read_file", json.RawMessage(`{"path":"a.go"}`), ws, "low", "read_only")
 	if action != "allow" {
-		t.Fatalf("want allow for low severity, got %s", action)
+		t.Fatalf("read_only low: %s (%s)", action, reason)
+	}
+	action, reason = decide("write_file", json.RawMessage(`{"path":"a.go"}`), ws, "medium", "read_only")
+	if action != "deny" {
+		t.Fatalf("read_only medium: %s (%s)", action, reason)
+	}
+	action, _ = decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high", "read_only")
+	if action != "deny" {
+		t.Fatalf("read_only high: %s", action)
+	}
+}
+
+func TestModeProfileWorkspaceWrite(t *testing.T) {
+	ws := t.TempDir()
+	action, reason := decide("write_file", json.RawMessage(`{"path":"`+filepath.Join(ws, "a.go")+`"}`), ws, "medium", "workspace_write")
+	if action != "allow" {
+		t.Fatalf("ws write inside: %s (%s)", action, reason)
+	}
+	action, reason = decide("write_file", json.RawMessage(`{"path":"/etc/hosts"}`), ws, "medium", "workspace_write")
+	if action != "deny" {
+		t.Fatalf("ws write outside: %s (%s)", action, reason)
+	}
+	action, _ = decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high", "workspace_write")
+	if action != "ask" {
+		t.Fatalf("ws high shell: %s", action)
+	}
+}
+
+func TestModeProfileFullAccessUsesSeverityPolicy(t *testing.T) {
+	ws := t.TempDir()
+	// full_access: modeProfile declines; severityPolicy medium→ask by default.
+	action, reason := decide("write_file", json.RawMessage(`{"path":"x"}`), ws, "medium", "full_access")
+	if action != "ask" {
+		t.Fatalf("full_access medium: %s (%s)", action, reason)
+	}
+}
+
+func TestModeExplicitAllowOverridesProfile(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".liteagent")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rules := `{"rules":[{"tool":"write_file","action":"allow"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "permissions.json"), []byte(rules), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// read_only would deny write, but explicit allow wins (ADR-0033 default profile).
+	action, reason := decide("write_file", json.RawMessage(`{"path":"/tmp/x"}`), ws, "medium", "read_only")
+	if action != "allow" {
+		t.Fatalf("explicit allow must widen mode: %s (%s)", action, reason)
 	}
 }
 
@@ -40,9 +82,9 @@ func TestDecideRuleBeatsSeverity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "permissions.json"), []byte(rules), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	action, reason := decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high")
+	action, reason := decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high", "workspace_write")
 	if action != "allow" {
-		t.Fatalf("explicit rule must beat severity, got %s (%s)", action, reason)
+		t.Fatalf("explicit rule must beat severity/mode, got %s (%s)", action, reason)
 	}
 }
 
@@ -56,15 +98,15 @@ func TestDecideProjectDenyOverrides(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "permissions.json"), []byte(rules), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	action, reason := decide("shell", json.RawMessage(`{"command":"rm -rf /"}`), ws, "high")
+	action, reason := decide("shell", json.RawMessage(`{"command":"rm -rf /"}`), ws, "high", "full_access")
 	if action != "deny" {
 		t.Fatalf("want deny shell, got %s (%s)", action, reason)
 	}
-	action, _ = decide("write_file", json.RawMessage(`{"path":"src/a.go"}`), ws, "medium")
+	action, _ = decide("write_file", json.RawMessage(`{"path":"src/a.go"}`), ws, "medium", "full_access")
 	if action != "ask" {
 		t.Fatalf("want ask write_file, got %s", action)
 	}
-	action, _ = decide("read_file", json.RawMessage(`{"path":"src/a.go"}`), ws, "low")
+	action, _ = decide("read_file", json.RawMessage(`{"path":"src/a.go"}`), ws, "low", "full_access")
 	if action != "allow" {
 		t.Fatalf("want allow read_file, got %s", action)
 	}

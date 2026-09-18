@@ -65,7 +65,7 @@ Shell 区域 `bottom` 上的插件 status 组件集合（工作区、token 占�
 _Avoid_: 状态栏插件、footer、ticker
 
 **Plugin Graph**:
-`/api/plugins` 暴露的插件关系图：节点为插件 / Capability / Host / UI 槽位，边为 provides、consumes、host-uses、ui-mount、dependsOn 与 scheme 拉取。节点带挂载状态（mounted / available / degraded / missing），真源是 Discovery 目录而非当前已挂载集——懒挂载（Autostart + Scheme ensure）下只有这样图才是完整的。调试面，不参与运行时决策。
+`/api/plugins` 暴露的插件关系图：节点为插件 / Capability / Host / UI 槽位，边为 provides、consumes、host-uses、ui-mount、dependsOn 与 scheme 拉取。节点带挂载状态（mounted / available / degraded / missing / disabled），真源是 Discovery 目录而非当前已挂载集——懒挂载（Autostart + Scheme ensure）下只有这样图才是完整的。调试面，不参与运行时决策。disabled 来自 Host 插件开关（ADR-0032）。
 _Avoid_: 依赖树、拓扑图（可作口语）、assembly 图
 
 **Panel**:
@@ -201,11 +201,15 @@ _Avoid_: 插件配置文件（磁盘 config.json 只是持久化）、Manifest �
 _Avoid_: 工作目录、项目路径、repo root（口语可用，规范名词是 Workspace）
 
 **Permission**:
-对一次工具调用的 allow / ask / deny 裁决及规则集合。由 provides `policy` 的插件持有规则；Agent Loop 在执行工具前查询。不是路由中间件。承载它的官方插件名为 sandbox（commit 6226445 由 permission 改名）；本词条描述裁决概念，插件名见 Sandbox。
+对一次工具调用的 allow / ask / deny 裁决及规则集合。由 provides `policy` 的插件持有规则；Agent Loop 在执行工具前查询。不是路由中间件。承载它的官方插件名为 sandbox（commit 6226445 由 permission 改名）；本词条描述裁决概念，插件名见 Sandbox。可叠加 Session Permission Mode 作默认档。
 _Avoid_: 审批流、ACL、Interceptor（已废弃）、权限系统（过泛）
 
+**Session Permission Mode**:
+Session 元数据上的代理权限档：`read_only` | `workspace_write` | `full_access`（默认 workspace_write）。与 Workspace 同构（ADR-0033）；policy.decide 消费之。无显式 permissions.json 规则命中时作为默认档；显式 allow 可放宽模式。不是 Agent Scheme 的 allowedTools 门禁。
+_Avoid_: 会话权限系统、agent mode（与 Agent Scheme 混淆）、read-only tools 名单
+
 **Sandbox**:
-官方 Policy 插件（provides `policy`）：持有 permissions 规则并按 Tool Severity 给出 allow / ask / deny 裁决。ask 经 Host `agent.request` 回到 Render Medium 确认。是 Permission 概念的默认实现，可被任何 provides `policy` 的插件替换（ADR-0019）。
+官方 Policy 插件（provides `policy`）：持有 permissions 规则并按 Tool Severity 与 Session Permission Mode 给出 allow / ask / deny 裁决。ask 经 Host `agent.request`/`agent.confirm` 回到 Render Medium 确认（Web 为 Session View 聊天确认卡）。是 Permission 概念的默认实现，可被任何 provides `policy` 的插件替换（ADR-0019）。
 _Avoid_: 沙箱进程、OS sandbox（语义不同，指操作系统级隔离，属 Phase 2+ backlog）、权限插件
 
 **Tool Severity**:

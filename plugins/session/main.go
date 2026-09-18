@@ -92,6 +92,7 @@ type sessionItem struct {
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegationDepth,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
+	PermissionMode  string `json:"permissionMode,omitempty"`
 }
 
 type Fact struct {
@@ -100,8 +101,9 @@ type Fact struct {
 	Role    string          `json:"role"`
 	Content string          `json:"content"`
 	Meta    json.RawMessage `json:"meta,omitempty"`
-	// Ts is append time (UnixMilli). Loaded facts keep their original ts;
-	// facts written before this field existed have ts=0.
+	// Ts is fact time (UnixMilli): caller-provided when append ts>0, else
+	// append time. Loaded facts keep their original ts; facts written before
+	// this field existed have ts=0.
 	Ts int64 `json:"ts,omitempty"`
 }
 
@@ -124,6 +126,39 @@ type SessionMeta struct {
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegationDepth,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
+	// PermissionMode is the Session agent permission profile (ADR-0033).
+	// Empty means DefaultPermissionMode.
+	PermissionMode string `json:"permissionMode,omitempty"`
+}
+
+// Permission modes (ADR-0033).
+const (
+	ModeReadOnly       = "read_only"
+	ModeWorkspaceWrite = "workspace_write"
+	ModeFullAccess     = "full_access"
+	// DefaultPermissionMode applies when SessionMeta.PermissionMode is empty.
+	DefaultPermissionMode = ModeWorkspaceWrite
+)
+
+// NormalizePermissionMode maps empty → default; invalid → default.
+func NormalizePermissionMode(m string) string {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case ModeReadOnly:
+		return ModeReadOnly
+	case ModeWorkspaceWrite:
+		return ModeWorkspaceWrite
+	case ModeFullAccess:
+		return ModeFullAccess
+	case "":
+		return DefaultPermissionMode
+	default:
+		return DefaultPermissionMode
+	}
+}
+
+// EffectivePermissionMode returns the Session's mode with the default applied.
+func EffectivePermissionMode(m SessionMeta) string {
+	return NormalizePermissionMode(m.PermissionMode)
 }
 
 type store struct {
@@ -134,12 +169,43 @@ type store struct {
 	file *os.File
 }
 
+// appendIn is the session.append request body after sessionId routing.
+type appendIn struct {
+	Type    string          `json:"type"`
+	Role    string          `json:"role"`
+	Content string          `json:"content"`
+	Meta    json.RawMessage `json:"meta"`
+	// Ts is optional caller timestamp (UnixMilli). <=0 → session stamps now.
+	Ts int64 `json:"ts,omitempty"`
+}
+
 type registry struct {
 	mu       sync.Mutex
 	sessions map[string]*store
 	meta     map[string]SessionMeta
 	dataDir  string
 }
+
+// New struct definition:
+
+// type sessionMeta struct {
+
+// }
+// type SessionManager struct {
+// 	registry *registry
+// }
+
+// type Session struct {
+// 	ID string `json:"id"`
+// 	ParentID string `json:"parentId,omitempty"`
+// 	ChildrenIDs []string `json:"childrenIds,omitempty"`
+// 	IsParent bool `json:"isParent"`
+// 	Title string `json:"title"`
+// 	Seq int `json:"seq"`
+// 	Workspace string `json:"workspace,omitempty"`
+
+// 	CreatedAt time.Time `json:"createdAt"`
+// }
 
 func dataDir() string {
 	if v := os.Getenv("SESSION_DATA_DIR"); v != "" {
@@ -259,6 +325,10 @@ func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 			ex.Workspace = m.Workspace
 			changed = true
 		}
+		if m.PermissionMode != "" && ex.PermissionMode != m.PermissionMode {
+			ex.PermissionMode = NormalizePermissionMode(m.PermissionMode)
+			changed = true
+		}
 		if m.DelegationDepth > 0 && ex.DelegationDepth != m.DelegationDepth {
 			ex.DelegationDepth = m.DelegationDepth
 			changed = true
@@ -274,12 +344,7 @@ func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 			r.mu.Unlock()
 			if raw, err := json.Marshal(ex); err == nil {
 				st := r.openStore(id)
-				_, _ = st.append(struct {
-					Type    string          `json:"type"`
-					Role    string          `json:"role"`
-					Content string          `json:"content"`
-					Meta    json.RawMessage `json:"meta"`
-				}{Type: "session_meta", Role: "host", Meta: raw})
+				_, _ = st.append(appendIn{Type: "session_meta", Role: "host", Meta: raw})
 			}
 			return ex, false, nil
 		}
@@ -294,20 +359,20 @@ func (r *registry) create(id string, m SessionMeta) (SessionMeta, bool, error) {
 			m.DelegationDepth = 1
 		}
 	}
-	if m.CreatedAt == 0 {
+		if m.CreatedAt == 0 {
 		m.CreatedAt = time.Now().UnixMilli()
+	}
+	if m.PermissionMode == "" {
+		m.PermissionMode = DefaultPermissionMode
+	} else {
+		m.PermissionMode = NormalizePermissionMode(m.PermissionMode)
 	}
 	r.meta[id] = m
 	r.mu.Unlock()
 	st := r.openStore(id)
 	// Persist parent/origin/depth so restart keeps the Subagent tree.
 	if raw, err := json.Marshal(m); err == nil {
-		_, _ = st.append(struct {
-			Type    string          `json:"type"`
-			Role    string          `json:"role"`
-			Content string          `json:"content"`
-			Meta    json.RawMessage `json:"meta"`
-		}{Type: "session_meta", Role: "host", Meta: raw})
+		_, _ = st.append(appendIn{Type: "session_meta", Role: "host", Meta: raw})
 	}
 	return m, true, nil
 }
@@ -343,17 +408,16 @@ func (st *store) load() {
 	}
 }
 
-func (st *store) append(in struct {
-	Type    string          `json:"type"`
-	Role    string          `json:"role"`
-	Content string          `json:"content"`
-	Meta    json.RawMessage `json:"meta"`
-}) (Fact, error) {
+func (st *store) append(in appendIn) (Fact, error) {
 	if in.Role == "" {
 		return Fact{}, &protocol.FrameError{Code: "bad_payload", Message: "role is required"}
 	}
 	if in.Type == "" {
 		in.Type = "message"
+	}
+	ts := in.Ts
+	if ts <= 0 {
+		ts = time.Now().UnixMilli()
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -363,7 +427,7 @@ func (st *store) append(in struct {
 		Role:    in.Role,
 		Content: in.Content,
 		Meta:    in.Meta,
-		Ts:      time.Now().UnixMilli(),
+		Ts:      ts,
 	}
 	st.facts = append(st.facts, f)
 	if st.file != nil {
@@ -540,6 +604,7 @@ func main() {
 				Origin:          m.Origin,
 				DelegationDepth: m.DelegationDepth,
 				Workspace:       m.Workspace,
+				PermissionMode:  EffectivePermissionMode(m),
 			})
 		}
 		if list == nil {
@@ -555,6 +620,7 @@ func main() {
 			Origin          string `json:"origin"`
 			DelegationDepth int    `json:"delegationDepth"`
 			Workspace       string `json:"workspace"`
+			PermissionMode  string `json:"permissionMode"`
 		}
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &in); err != nil {
@@ -565,11 +631,18 @@ func main() {
 			// Mint a fresh id (ADR-0012): empty create must not collapse onto "default".
 			in.SessionID = fmt.Sprintf("s-%d", time.Now().UnixNano())
 		}
+		// Subagent inherits parent permissionMode when the caller left it unset (ADR-0033).
+		if in.PermissionMode == "" && in.ParentSession != "" && in.Origin == "subagent" {
+			if pm, ok := reg.meta[normalizeID(in.ParentSession)]; ok && pm.PermissionMode != "" {
+				in.PermissionMode = pm.PermissionMode
+			}
+		}
 		m, created, err := reg.create(in.SessionID, SessionMeta{
 			ParentSession:   in.ParentSession,
 			Origin:          in.Origin,
 			DelegationDepth: in.DelegationDepth,
 			Workspace:       in.Workspace,
+			PermissionMode:  in.PermissionMode,
 		})
 		if err != nil {
 			return nil, err
@@ -583,30 +656,66 @@ func main() {
 			currentMu.Unlock()
 		}
 		return json.Marshal(map[string]any{
-			"sessionId": id,
-			"created":   created,
-			"meta":      m,
+			"sessionId":      id,
+			"created":        created,
+			"permissionMode": EffectivePermissionMode(m),
+			"meta":           m,
+		})
+	})
+
+	s.Handle("session", "setPermissionMode", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			SessionID      string `json:"sessionId"`
+			PermissionMode string `json:"permissionMode"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		id := normalizeID(in.SessionID)
+		mode := strings.ToLower(strings.TrimSpace(in.PermissionMode))
+		switch mode {
+		case ModeReadOnly, ModeWorkspaceWrite, ModeFullAccess:
+		case "":
+			return nil, &protocol.FrameError{Code: "bad_arguments", Message: "permissionMode required"}
+		default:
+			return nil, &protocol.FrameError{
+				Code:    "bad_arguments",
+				Message: "permissionMode must be read_only|workspace_write|full_access",
+			}
+		}
+		reg.mu.Lock()
+		ex, ok := reg.meta[id]
+		if !ok {
+			// Open store so the Session exists; keep other fields empty.
+			ex = SessionMeta{CreatedAt: time.Now().UnixMilli()}
+		}
+		ex.PermissionMode = mode
+		reg.meta[id] = ex
+		reg.mu.Unlock()
+		st := reg.openStore(id)
+		if raw, err := json.Marshal(ex); err == nil {
+			_, _ = st.append(appendIn{Type: "session_meta", Role: "host", Content: "permissionMode=" + mode, Meta: raw})
+		}
+		return json.Marshal(map[string]any{
+			"ok":             true,
+			"sessionId":      id,
+			"permissionMode": mode,
+			"meta":           ex,
 		})
 	})
 
 	s.Handle("session", "append", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
-			SessionID string          `json:"sessionId"`
-			Type      string          `json:"type"`
-			Role      string          `json:"role"`
-			Content   string          `json:"content"`
-			Meta      json.RawMessage `json:"meta"`
+			SessionID string `json:"sessionId"`
+			appendIn
 		}
 		if err := json.Unmarshal(req.Payload, &in); err != nil {
 			return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
 		}
 		st := reg.openStore(in.SessionID)
-		f, err := st.append(struct {
-			Type    string          `json:"type"`
-			Role    string          `json:"role"`
-			Content string          `json:"content"`
-			Meta    json.RawMessage `json:"meta"`
-		}{Type: in.Type, Role: in.Role, Content: in.Content, Meta: in.Meta})
+		f, err := st.append(in.appendIn)
 		if err != nil {
 			return nil, err
 		}
@@ -657,6 +766,7 @@ func main() {
 			"origin":          m.Origin,
 			"delegationDepth": m.DelegationDepth,
 			"createdAt":       m.CreatedAt,
+			"permissionMode":  EffectivePermissionMode(m),
 			"meta":            m,
 		})
 	})

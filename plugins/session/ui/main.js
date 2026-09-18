@@ -613,6 +613,13 @@ class SessionRail extends HTMLElement {
           const title = s.title || id;
           const item = document.createElement('div');
           item.className = 'sess-item' + (id === this._current ? ' active' : '');
+          if (window.__liteApprovalPending && window.__liteApprovalPending[id]) {
+            const pb = document.createElement('span');
+            pb.className = 'appr-badge';
+            pb.textContent = '待确认';
+            pb.title = '该会话有工具等待确认';
+            item.appendChild(pb);
+          }
           if (s.origin === 'subagent') {
             const badge = document.createElement('span');
             badge.className = 'badge';
@@ -750,6 +757,30 @@ const VIEW_CSS = `
   .w-chip.on { color:#0b1020; background:var(--la-accent,#7aa2f7); border-color:var(--la-accent,#7aa2f7); font-weight:600; }
   .w-hint { font-size:11px; color:var(--la-dim,#9aa0a6); margin-top:8px; line-height:1.55; }
   .w-cand { display:flex; flex-direction:column; gap:4px; margin-top:8px; }
+  /* Permission mode (ADR-0033) + in-chat tool approval (no browser modal). */
+  .perm-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .perm-bar select { background:var(--la-bg,#0f1115); border:1px solid var(--la-line,#2a2f3a);
+    color:var(--la-ink,#e8eaed); border-radius:6px; padding:3px 8px; font-size:11px;
+    font-family:var(--la-mono,monospace); }
+  .appr-card { border:1px solid var(--la-accent,#7aa2f7); border-radius:10px; padding:10px 12px;
+    margin:8px 0; background:var(--la-panel,#161a22); max-width:40rem; }
+  .appr-card.done-allow { border-color:var(--la-ok,#9ece6a); }
+  .appr-card.done-deny { border-color:var(--la-err,#f7768e); }
+  .appr-card .appr-title { font-size:12px; font-weight:600; color:var(--la-ink,#e8eaed);
+    font-family:var(--la-mono,monospace); margin-bottom:6px; }
+  .appr-card .appr-meta { font-size:11px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace);
+    margin-bottom:6px; word-break:break-all; }
+  .appr-card pre { margin:0 0 8px; padding:8px; background:var(--la-bg,#0f1115); border-radius:6px;
+    font-size:11px; max-height:120px; overflow:auto; white-space:pre-wrap; word-break:break-all;
+    color:var(--la-ink,#e8eaed); }
+  .appr-actions { display:flex; gap:8px; align-items:center; }
+  .appr-actions button { border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;
+    border:1px solid var(--la-line,#2a2f3a); background:transparent; color:var(--la-ink,#e8eaed); }
+  .appr-actions .ok { border-color:var(--la-ok,#9ece6a); color:var(--la-ok,#9ece6a); }
+  .appr-actions .no { border-color:var(--la-err,#f7768e); color:var(--la-err,#f7768e); }
+  .appr-actions .st { font-size:11px; color:var(--la-dim,#9aa0a6); font-family:var(--la-mono,monospace); }
+  .appr-badge { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:999px;
+    font-size:9px; border:1px solid #e0af68; color:#e0af68; font-family:var(--la-mono,monospace); }
 `;
 
 class SessionView extends HTMLElement {
@@ -764,6 +795,12 @@ class SessionView extends HTMLElement {
     this._wsCandidates = [];
     this._schemes = [];
     this._scheme = '';
+    // Session Permission Mode (ADR-0033): default workspace_write.
+    this._permMode = 'workspace_write';
+    // Live tool-approval cards keyed by Host approval id.
+    this._approvals = new Map();
+    // Pending approvals for other sessions (rail badge).
+    this._pendingOther = new Map();
     this._running = false;
     this._streamBuf = '';
     this._reasoningBuf = '';
@@ -837,19 +874,104 @@ class SessionView extends HTMLElement {
   }
   async onToolApproval(d) {
     if (!d || !d.id) return;
-    if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) return;
-    const args = d.arguments ? JSON.stringify(d.arguments) : '';
-    const ok = window.confirm('Allow tool ' + d.tool + '?\n' + args.slice(0, 400));
-    this.appendPre(ok ? ('allowed ' + d.tool) : ('denied ' + d.tool), ok ? 'message' : 'message error');
-    // Reply to the Host approval face (ADR-0029): the Medium waits <20s and
-    // then the policy layer fails closed — send the ruling before that.
+    // Other Session: rail badge only — never auto-approve (ADR-0029 first-wins).
+    if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) {
+      const sid = d.sessionId || 'default';
+      this._pendingOther.set(sid, (this._pendingOther.get(sid) || 0) + 1);
+      if (!window.__liteApprovalPending) window.__liteApprovalPending = {};
+      window.__liteApprovalPending[sid] = (window.__liteApprovalPending[sid] || 0) + 1;
+      try { LiteAgent.emit('__approval_pending', { sessionId: sid, tool: d.tool }); } catch (e) {}
+      return;
+    }
+    // Welcome face / no current session yet: still show the card in this view.
+    this.queueOr(() => this.renderApprovalCard(d));
+  }
+
+  renderApprovalCard(d) {
+    const flow = this._flow();
+    if (!flow) return;
+    const card = document.createElement('div');
+    card.className = 'appr-card';
+    card.dataset.apprId = d.id;
+    const title = document.createElement('div');
+    title.className = 'appr-title';
+    title.textContent = '工具确认 · ' + (d.tool || '(unknown tool)');
+    const meta = document.createElement('div');
+    meta.className = 'appr-meta';
+    meta.textContent = 'session=' + (d.sessionId || 'default') +
+      (d.workspace ? '  ws=' + d.workspace : '') +
+      '  id=' + d.id;
+    const pre = document.createElement('pre');
+    let argsText = '';
     try {
-      await fetch('/api/tool-approval', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: d.id, approved: ok })
-      });
-    } catch (e) { /* approval reply is best-effort; a lost ruling times out to deny */ }
+      argsText = typeof d.arguments === 'string' ? d.arguments : JSON.stringify(d.arguments || {}, null, 2);
+    } catch (e) { argsText = String(d.arguments || ''); }
+    pre.textContent = (argsText || '{}').slice(0, 2000);
+    const actions = document.createElement('div');
+    actions.className = 'appr-actions';
+    const st = document.createElement('span');
+    st.className = 'st';
+    const deadline = Date.now() + 20000;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      if (card.classList.contains('done-allow') || card.classList.contains('done-deny')) return;
+      if (left <= 0) {
+        st.textContent = '超时 · Host 将拒绝';
+        return;
+      }
+      st.textContent = left + 's 内确认（超时按拒绝）';
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    const btnOk = document.createElement('button');
+    btnOk.type = 'button';
+    btnOk.className = 'ok';
+    btnOk.textContent = '允许';
+    const btnNo = document.createElement('button');
+    btnNo.type = 'button';
+    btnNo.className = 'no';
+    btnNo.textContent = '拒绝';
+    const reply = async (approved) => {
+      clearInterval(timer);
+      btnOk.disabled = true;
+      btnNo.disabled = true;
+      card.classList.add(approved ? 'done-allow' : 'done-deny');
+      st.textContent = approved ? '已允许' : '已拒绝';
+      this.appendPre((approved ? 'allowed ' : 'denied ') + (d.tool || ''), approved ? 'message' : 'message error');
+      try {
+        const res = await fetch('/api/tool-approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: d.id, approved: approved })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (body && body.ok === false) {
+          st.textContent = 'Host 已决/超时 · ' + (body.error || '');
+          card.classList.add('done-deny');
+        }
+      } catch (e) {
+        st.textContent = '应答失败 · Host 超时将拒绝';
+        card.classList.add('done-deny');
+      }
+    };
+    btnOk.onclick = () => reply(true);
+    btnNo.onclick = () => reply(false);
+    actions.appendChild(btnOk);
+    actions.appendChild(btnNo);
+    actions.appendChild(st);
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(pre);
+    card.appendChild(actions);
+    flow.appendChild(card);
+    flow.scrollTop = flow.scrollHeight;
+  }
+
+  paintRailPending() {
+    // Rail component listens to __approval_pending; nothing to paint in view shadow.
+    if (this._pendingOther && this._pendingOther.size && this._familyBar) {
+      // Keep family bar for session tree; pending is rail-owned.
+    }
   }
   disconnectedCallback() {
     this._offs.forEach(off => off());
@@ -911,6 +1033,7 @@ class SessionView extends HTMLElement {
   async refreshFamilyBar() {
     if (!this._familyBar) return;
     this._familyBar.innerHTML = '';
+    // perm bar is re-attached after family content is rebuilt
     try {
       const res = await LiteAgent.call('session', 'list', {});
       const list = (res && res.ok !== false && res.result && res.result.sessions) || [];
@@ -943,6 +1066,7 @@ class SessionView extends HTMLElement {
         });
       }
     } catch (e) { /* family bar is best-effort */ }
+    if (this._mode === 'chat') this.renderPermBar();
   }
   async enterSession(id) {
     if (!id) return;
@@ -1065,7 +1189,10 @@ class SessionView extends HTMLElement {
       const body = f.content || '';
       if (!body) return;
       const step = (f.meta && f.meta.step) || '';
-      const row = this.makeDisc('think', 'Thinking', step ? 'step ' + step : '', body, false);
+      const parts = [];
+      if (step) parts.push('step ' + step);
+      if (f.ts) parts.push(fmtTs(f.ts));
+      const row = this.makeDisc('think', 'Thinking', parts.join(' · '), body, false);
       this._root.querySelector('.flow').appendChild(row);
       return;
     }
@@ -1140,6 +1267,7 @@ class SessionView extends HTMLElement {
     this.setSendState(false);
     this.setUsageBar(null);
     if (this._familyBar) this._familyBar.innerHTML = '';
+    if (this._mode === 'welcome') this._permMode = this._permMode || 'workspace_write';
     if (this._usageBar) this._usageBar.style.display = 'none';
     if (this._ctxPanel) { this._ctxPanel.classList.remove('open'); this._ctxPanel.innerHTML = ''; }
     this.renderWelcome();
@@ -1219,7 +1347,89 @@ class SessionView extends HTMLElement {
     schRow.appendChild(hint);
     card.appendChild(schRow);
 
+    // Permission mode chips (ADR-0033).
+    const permRow = document.createElement('div');
+    permRow.className = 'w-row';
+    permRow.appendChild(this._wLabel('会话权限 Permission Mode'));
+    const pchips = document.createElement('div');
+    pchips.className = 'w-chips';
+    const modes = [
+      { id: 'read_only', label: '只读 read_only' },
+      { id: 'workspace_write', label: '工作区可写 workspace_write' },
+      { id: 'full_access', label: '完全访问 full_access' }
+    ];
+    modes.forEach(m => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'w-chip' + (m.id === this._permMode ? ' on' : '');
+      b.textContent = m.label;
+      b.title = '创建会话时写入 Session 元数据；可随时在会话头修改';
+      b.onclick = () => { this._permMode = m.id; this.renderWelcome(); };
+      pchips.appendChild(b);
+    });
+    permRow.appendChild(pchips);
+    const phint = document.createElement('div');
+    phint.className = 'w-hint';
+    phint.textContent = 'read_only：未命中规则的写/shell 拒绝 · workspace_write：工作区内写放行、shell 需确认 · full_access：按 severityPolicy。显式 permissions.json 规则可放宽模式。';
+    permRow.appendChild(phint);
+    card.appendChild(permRow);
+
     flow.appendChild(card);
+  }
+
+  renderPermBar() {
+    if (!this._familyBar) return null;
+    let bar = this._familyBar.querySelector('.perm-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'perm-bar';
+      this._familyBar.appendChild(bar);
+    }
+    bar.innerHTML = '';
+    const lab = document.createElement('span');
+    lab.className = 'f-label';
+    lab.textContent = '权限';
+    const sel = document.createElement('select');
+    [['read_only', '只读'], ['workspace_write', '工作区可写'], ['full_access', '完全访问']].forEach(([v, t]) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = t + ' (' + v + ')';
+      if (v === this._permMode) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = () => this.applyPermissionMode(sel.value);
+    bar.appendChild(lab);
+    bar.appendChild(sel);
+    return bar;
+  }
+
+  async applyPermissionMode(mode) {
+    if (!this._sid) {
+      this._permMode = mode;
+      if (this._mode === 'welcome') this.renderWelcome();
+      return;
+    }
+    if (mode === this._permMode) return;
+    this._permMode = mode;
+    try {
+      const b = await LiteAgent.call('session', 'setPermissionMode', {
+        sessionId: this._sid, permissionMode: mode
+      });
+      if (!b || b.ok === false) throw new Error((b && b.error) || 'set failed');
+      LiteAgent.emit('__notice', { text: 'permissionMode → ' + mode, cls: 'message' });
+      this.renderPermBar();
+    } catch (e) {
+      LiteAgent.emit('__notice', { text: 'permissionMode 设置失败: ' + e, cls: 'message error' });
+    }
+  }
+
+  async loadPermissionMode() {
+    if (!this._sid) return;
+    try {
+      const b = await LiteAgent.call('session', 'info', { sessionId: this._sid });
+      const r = b && b.ok !== false ? b.result : null;
+      this._permMode = (r && r.permissionMode) || 'workspace_write';
+    } catch (e) { this._permMode = 'workspace_write'; }
+    if (this._mode === 'chat') this.renderPermBar();
   }
   _wLabel(text) {
     const l = document.createElement('div');
@@ -1275,7 +1485,11 @@ class SessionView extends HTMLElement {
     this.setSendState(true);
     try {
       const ws = (this._ws || '').trim();
-      const b = await LiteAgent.call('session', 'create', { workspace: ws, origin: 'web' });
+      const b = await LiteAgent.call('session', 'create', {
+        workspace: ws,
+        origin: 'web',
+        permissionMode: this._permMode || 'workspace_write'
+      });
       if (!b || b.ok === false) throw new Error((b && b.error) || 'session.create failed');
       const id = (b.result && b.result.sessionId) || '';
       if (!id) throw new Error('session.create returned no id');
@@ -1284,8 +1498,11 @@ class SessionView extends HTMLElement {
       this._sid = id;
       window.__liteSessionId = id;
       if (this._usageBar) this._usageBar.style.display = '';
+      if (b.result && b.result.permissionMode) this._permMode = b.result.permissionMode;
+      this.renderPermBar();
       LiteAgent.emit('__session', id); // rail highlight + trace follow
       await this.reload();
+      this.loadPermissionMode();
       this.appendUser(text);
       this.beginTurn();
       const sent = await LiteAgent.callCap('agent', 'loop', 'turn', { input: text, sessionId: id, allowSubagent: true });
@@ -1317,6 +1534,9 @@ class SessionView extends HTMLElement {
     this._running = false;
     this.setSendState(false);
     this.setUsageBar(null);
+    this._approvals = new Map();
+    this.renderPermBar();
+    this.loadPermissionMode();
     this.reload();
   }
   onStreamEvent(d) {

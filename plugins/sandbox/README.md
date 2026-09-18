@@ -1,25 +1,36 @@
 # sandbox
 
-沙箱 / 权限规则插件：提供 Policy Capability（ADR-0019）。Agent Loop 在执行工具前查询裁决。
+沙箱 / 权限规则插件：提供 Policy Capability（ADR-0019 / ADR-0033）。Agent Loop 在执行工具前查询裁决。
 
 ## 提供
 
 - Capability `policy`
-  - `decide` `{tool, arguments, workspace, sessionId, severity}` → `{action, reason, severity}`
-  - 返回给 Agent 的 `action` 是**最终** `allow` / `deny`：规则或 severity 映射为 `ask` 时，本插件经 Host `agent.confirm` 走 Medium 确认后收成 allow|deny
-- Capability `config`（Web Settings）
+  - `decide` `{tool, arguments, workspace, sessionId, severity, permissionMode}` → `{action, reason, severity, permissionMode, approved}`
+  - 返回给 Agent 的 `action` 是**最终** `allow` / `deny`：规则或 severity/模式映射为 `ask` 时，本插件经 Host `agent.confirm` 走 Medium 确认后收成 allow|deny
+- Capability `config`（Web Settings，兼容默认）
   - `schema` / `get` / `set` / `reload`
   - 可写字段：
     - `defaultAction`（`allow` | `ask` | `deny`）
-    - `severityPolicy`：`{low|medium|high → allow|ask|deny}`（无显式规则时按工具严重程度拦截）
+    - `severityPolicy`：`{low|medium|high → allow|ask|deny}`（`full_access` 或无 Session 模式时的回退）
 
-## 裁决顺序
+## Session Permission Mode（ADR-0033）
 
-1. 显式 `rules`（deny > ask > allow）
-2. **severityPolicy**（工具 schema 上插件作者声明的 `severity`）
-3. `defaultAction`
+Session 元数据 `permissionMode`（`read_only` | `workspace_write` | `full_access`，默认 `workspace_write`）由 agent 传入 decide。
 
-`ask` 在本插件内完成 Medium 往返（`agent.confirm` → Host `OnToolApproval` → CLI/Web）。
+**裁决序：**
+
+1. 显式 `rules`（deny > ask > allow）——**可放宽**模式
+2. 无规则命中 → 模式档：
+
+| mode | low | medium | high |
+|------|-----|--------|------|
+| `read_only` | allow | deny | deny |
+| `workspace_write` | allow | path∈Workspace→allow，否则 deny | ask |
+| `full_access` | severityPolicy / defaultAction | 同左 | 同左 |
+
+3. 兜底 `defaultAction`
+
+最终 allow/deny 由 agent 写入 Session Log `policy_decision`（含 permissionMode）。
 
 ## 规则来源（后者覆盖前者，浅合并）
 
@@ -27,14 +38,6 @@
 2. `<Workspace>/.liteagent/permissions.json`（项目层优先）
 
 规则字段：`{tool, path, action}`；可选 `severityPolicy`。
-
-## 默认 severity（工具作者声明）
-
-| tool | severity | 默认映射 |
-|------|----------|----------|
-| read_file / grep / glob / load_skill / web_* | low | allow |
-| write_file / edit_file | medium | ask |
-| shell | high | ask |
 
 ## Manifest
 
