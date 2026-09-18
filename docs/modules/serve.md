@@ -33,7 +33,7 @@
 | 常量 | `DefaultCallTimeout`（30s）、`DefaultShutdownGrace`（2s）、`HostCap`、Presentation/UI/Commands 相关 |
 | 类型 | `Server`、`CallResult`、`RegistrySnapshot`、`EnsurePluginsResult`、`Event`、`Subscriber` |
 | 函数 | `Start`、`CallByFace`、`Registry`、`RegisterApproval`、`MarshalPayload`、`TruncateRunes`、`SetDebug` |
-| 方法 | `Close`、`CallByPlugin`、`EnsurePlugins`、`SetCatalog`、`SetPluginsDir`、`MountedPluginNames`、`DegradedNames`、`Subscribe`、`Cards`、`Panels`、`AgentRequest`、`AgentInject` |
+| 方法 | `Close`、`CallByPlugin`、`EnsurePlugins`、`SetCatalog`、`SetPluginsDir`、`MountedPluginNames`、`DegradedNames`、`Subscribe`、`Cards`、`Panels`、`AgentRequest`、`AgentInject`、`SetPluginEnabled`、`DisabledPluginNames`、`CallHost` |
 
 ## 核心数据结构
 
@@ -75,6 +75,13 @@ plugin stdout → readLoop → handleFromPlugin
 ## `host.ensurePlugins`
 
 Payload `{names:[...]}` → 重扫 catalog（若设了 pluginsDir）→ `assembly.ResolveClosure` → 已挂载/UI → Mounted；否则 launch。幂等（ADR-0023）。Agent Scheme `dependsPlugins` 由此拉起工具插件。
+
+## 插件启用开关（ADR-0032）
+
+- 持久化：`<pluginsDir>/.plugin-switch.json` `{"disabled":[...]}`
+- Host 方法：`host.setPluginEnabled` `{name, enabled}`、`host.pluginSwitch`
+- 关：立即卸载进程/UI，Autostart / EnsurePlugins / ensureAlive / launch 均跳过
+- `ensurePlugins` 响应含 `disabled[]`；RegistrySnapshot / Plugin Graph 含 disabled
 
 ## Deferred `agent.*`（ADR-0030）
 

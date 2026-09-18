@@ -66,6 +66,8 @@ export function createLoader(page, panelHost, onError) {
         // /api/plugins reports the whole Discovery catalog (the plugin graph
         // draws from it), but only mounted plugins have live Panel Components:
         // an unmounted plugin's UI dir is not even served under /plugin-ui/.
+        // Disabled (ADR-0032) is never mounted.
+        if (p.disabled) return false;
         if (p.state && p.state !== 'mounted') return false;
         return true;
       }).sort(function (a, c) { return (a.name || '').localeCompare(c.name || ''); });

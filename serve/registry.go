@@ -18,6 +18,8 @@ type RegistrySnapshot struct {
 	Faces map[string][]string
 	// Degraded lists plugins whose consumes are currently unmet (ADR-0022).
 	Degraded []string
+	// Disabled lists plugins the user switch turned off (ADR-0032).
+	Disabled []string
 	// ReconcileGen counts registry re-evaluations since Start.
 	ReconcileGen int
 }
@@ -47,6 +49,7 @@ func (s *Server) registry() RegistrySnapshot {
 		out.Degraded = append(out.Degraded, n)
 	}
 	sort.Strings(out.Degraded)
+	out.Disabled = disabledNamesLocked(s.disabled)
 	return out
 }
 

@@ -109,5 +109,7 @@
 | 0029 | Medium 展示钩子为订阅列表，非单槽 |
 | 0030 | Host/Medium L0-only；按插件名路由；`CurrentProtocol = 5`（被 0031 升到 6 的槽位面另见）；`agent.*` Deferred |
 | 0031 | Shell 五块通用区域 `top\|bottom\|left\|center\|right`；session 占左+中（rail / chat+trace）；`CurrentProtocol = 6` |
+| 0032 | Host 插件启用开关：disabled 集合为 Autostart+dependsOn 之上的减法覆盖；关=卸载+禁再挂 |
+| 0033 | Session Permission Mode（`read_only\|workspace_write\|full_access`）为 Session 元数据；模式是默认档，显式规则可放宽；确认走 Session View 聊天卡 |
 
 **明确不做**：同进程插件、Waterfall/Interceptor、Host 内建 Loop、Assembly 白名单作日常真源、Host 合并 tools、Medium/CLI 领域启动 flag 与领域 HTTP 面、恢复 cap 注册表路由。

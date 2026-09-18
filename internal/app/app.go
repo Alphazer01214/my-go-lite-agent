@@ -100,15 +100,20 @@ func runAssembly(pluginsDir, assemblyPath string, dump bool, capName, method str
 }
 
 // startMounted starts the Server for plan and attaches the Discovery catalog
-// so ensurePlugins can mount later (ADR-0023).
+// so ensurePlugins can mount later (ADR-0023). Plugin-switch denylist (ADR-0032)
+// is applied before launch.
 func startMounted(pluginsDir string, plan assembly.Plan) (*serve.Server, error) {
 	res := discovery.Scan(pluginsDir)
-	srv, err := serve.Start(plan.Mounted)
+	disabled := serve.LoadPluginSwitchFile(serve.SwitchPath(pluginsDir))
+	mounted := serve.FilterMountedFound(plan.Mounted, disabled)
+	srv, err := serve.Start(mounted)
 	if err != nil {
 		return nil, err
 	}
 	srv.SetCatalog(res)
+	// SetPluginsDir reloads the switch store into Host memory.
 	srv.SetPluginsDir(pluginsDir)
+	srv.SetDisabledSet(disabled)
 	return srv, nil
 }
 

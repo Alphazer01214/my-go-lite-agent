@@ -46,6 +46,10 @@ type Server struct {
 	// (agent.confirm, ADR-0029). All registered faces are asked in parallel;
 	// the first responder wins the ruling. No faces deny (safe default).
 	approvals []func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
+	// disabled is the user plugin-switch denylist (ADR-0032, L0 by name).
+	disabled map[string]bool
+	// switchPath is where the denylist persists (usually <pluginsDir>/.plugin-switch.json).
+	switchPath string
 }
 
 // HostCap is the Capability for Host cross-cutting methods (ensurePlugins).
@@ -59,10 +63,13 @@ func (s *Server) SetCatalog(res discovery.Result) {
 }
 
 // SetPluginsDir records the Discovery root so EnsurePlugins can re-scan a stale catalog.
+// Also loads the plugin-switch store from that root (ADR-0032).
 func (s *Server) SetPluginsDir(dir string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.pluginsDir = dir
+	s.switchPath = SwitchPath(dir)
+	s.mu.Unlock()
+	s.LoadPluginSwitch()
 }
 
 // MountedPluginNames lists process/UI plugins currently mounted (for /lp).
@@ -107,6 +114,7 @@ func Start(mounted []discovery.Found) (*Server, error) {
 		gen:       make(map[string]int),
 		mountedUI: make(map[string]bool),
 		degraded:  make(map[string]bool),
+		disabled:  make(map[string]bool),
 	}
 	job, err := newJob()
 	if err != nil {
@@ -115,6 +123,10 @@ func Start(mounted []discovery.Found) (*Server, error) {
 	} else {
 		s.job = job
 	}
+	// Boot filter: honor any already-persisted plugin switch (ADR-0032).
+	// Callers may SetPluginsDir first; path may still be empty → no-op load.
+	s.LoadPluginSwitch()
+	mounted = FilterMountedFound(mounted, s.DisabledPluginNamesSet())
 	if err := s.registerProvides(mounted); err != nil {
 		// Configuration error (duplicate capability owner): visible, continue —
 		// the registry will simply not route the conflicting capability.
@@ -136,6 +148,19 @@ func Start(mounted []discovery.Found) (*Server, error) {
 	}
 	s.reconcileConsumes()
 	return s, nil
+}
+
+// DisabledPluginNamesSet returns the denylist as a map (boot filter helper).
+func (s *Server) DisabledPluginNamesSet() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.disabled))
+	for k, v := range s.disabled {
+		if v {
+			out[k] = true
+		}
+	}
+	return out
 }
 
 // CallByFace routes a Host-addressed face call into a Plugin that declared the

@@ -68,6 +68,9 @@ func (s *Server) ensureCatalog() discovery.Result {
 
 func (s *Server) launch(found discovery.Found) error {
 	name := found.Manifest.Name
+	if s.IsPluginDisabled(name) {
+		return fmt.Errorf("plugin %s is disabled", name)
+	}
 	entry := found.Manifest.ResolveEntry(found.Dir)
 	cmd := exec.Command(entry)
 	stdin, err := cmd.StdinPipe()
@@ -181,6 +184,10 @@ func (s *Server) markUnhealthy(pluginName string, gen int) {
 
 func (s *Server) ensureAlive(name string) error {
 	s.mu.Lock()
+	if s.disabled[name] {
+		s.mu.Unlock()
+		return fmt.Errorf("plugin %s is disabled", name)
+	}
 	p := s.plugins[name]
 	if p == nil {
 		s.mu.Unlock()

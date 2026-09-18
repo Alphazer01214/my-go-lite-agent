@@ -34,6 +34,10 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 			s.handleEnsurePlugins(from, f)
 		case "plugins":
 			s.handleHostPlugins(from, f)
+		case "setPluginEnabled":
+			s.handleSetPluginEnabled(from, f)
+		case "pluginSwitch":
+			s.handlePluginSwitch(from, f)
 		default:
 			_ = s.writeTo(from, &protocol.Frame{
 				V: f.V, ID: f.ID, Type: protocol.TypeRes, To: f.To, Cap: f.Cap,
@@ -273,33 +277,60 @@ func (s *Server) rejectPanel(from, reason string) {
 }
 
 // handleHostPlugins returns the live mount snapshot (L0 observability).
-// Payload shape: {plugins:[{name, provides:[...], healthy, ui}]}
+// Payload shape: {plugins:[{name, provides:[...], healthy, ui, disabled}], disabled:[]}
 func (s *Server) handleHostPlugins(from string, f *protocol.Frame) {
 	res := &protocol.Frame{
 		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method, To: HostCap,
 	}
-	s.mu.Lock()
-	type plug struct {
-		Name     string   `json:"name"`
-		Provides []string `json:"provides,omitempty"`
-		Healthy  bool     `json:"healthy"`
-		UI       bool     `json:"ui,omitempty"`
+	snap := s.hostPluginsSnapshot()
+	res.Payload = MarshalPayload(snap)
+	_ = s.writeTo(from, res)
+}
+
+// handleSetPluginEnabled toggles the Host plugin switch (ADR-0032).
+func (s *Server) handleSetPluginEnabled(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method, To: HostCap,
 	}
-	out := struct {
-		Plugins []plug `json:"plugins"`
-	}{Plugins: []plug{}}
-	for name, p := range s.plugins {
-		item := plug{Name: name, Healthy: p != nil && p.healthy}
-		if p != nil {
-			item.Provides = append([]string(nil), p.found.Manifest.Provides...)
+	var in struct {
+		Name    string          `json:"name"`
+		Enabled json.RawMessage `json:"enabled"`
+	}
+	if len(f.Payload) > 0 {
+		if err := json.Unmarshal(f.Payload, &in); err != nil {
+			res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			_ = s.writeTo(from, res)
+			return
 		}
-		out.Plugins = append(out.Plugins, item)
 	}
-	for name := range s.mountedUI {
-		out.Plugins = append(out.Plugins, plug{Name: name, UI: true, Healthy: true})
+	enabled := false
+	if len(in.Enabled) > 0 && string(in.Enabled) != "null" {
+		if err := json.Unmarshal(in.Enabled, &enabled); err != nil {
+			res.Error = &protocol.FrameError{Code: "bad_arguments", Message: "enabled must be boolean"}
+			_ = s.writeTo(from, res)
+			return
+		}
 	}
-	s.mu.Unlock()
+	if in.Name == "" {
+		res.Error = &protocol.FrameError{Code: "bad_arguments", Message: "name is required"}
+		_ = s.writeTo(from, res)
+		return
+	}
+	out, err := s.SetPluginEnabled(in.Name, enabled)
+	if err != nil {
+		res.Error = &protocol.FrameError{Code: "set_plugin_enabled_failed", Message: err.Error()}
+		_ = s.writeTo(from, res)
+		return
+	}
 	res.Payload = MarshalPayload(out)
+	_ = s.writeTo(from, res)
+}
+
+func (s *Server) handlePluginSwitch(from string, f *protocol.Frame) {
+	res := &protocol.Frame{
+		V: f.V, ID: f.ID, Type: protocol.TypeRes, Cap: f.Cap, Method: f.Method, To: HostCap,
+	}
+	res.Payload = MarshalPayload(map[string]any{"disabled": s.DisabledPluginNames()})
 	_ = s.writeTo(from, res)
 }
 
@@ -330,9 +361,10 @@ func (s *Server) handleEnsurePlugins(from string, f *protocol.Frame) {
 
 // EnsurePluginsResult is the ensurePlugins response (ADR-0023).
 type EnsurePluginsResult struct {
-	Mounted []string `json:"mounted"`
-	Missing []string `json:"missing"`
-	Failed  []string `json:"failed,omitempty"`
+	Mounted  []string `json:"mounted"`
+	Missing  []string `json:"missing"`
+	Failed   []string `json:"failed,omitempty"`
+	Disabled []string `json:"disabled,omitempty"`
 }
 
 // EnsurePlugins idempotently mounts catalog plugins by name (UI-only allowed).
@@ -346,12 +378,17 @@ func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
 
 	var toLaunch []discovery.Found
 	for _, p := range mountedSet {
+		name := p.Manifest.Name
+		if s.IsPluginDisabled(name) {
+			out.Disabled = append(out.Disabled, name)
+			continue
+		}
 		s.mu.Lock()
-		_, alive := s.plugins[p.Manifest.Name]
-		_, ui := s.mountedUI[p.Manifest.Name]
+		_, alive := s.plugins[name]
+		_, ui := s.mountedUI[name]
 		s.mu.Unlock()
 		if alive || ui {
-			out.Mounted = append(out.Mounted, p.Manifest.Name)
+			out.Mounted = append(out.Mounted, name)
 			continue
 		}
 		toLaunch = append(toLaunch, p)

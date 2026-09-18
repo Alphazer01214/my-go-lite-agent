@@ -41,7 +41,8 @@ const STATE = {
   mounted: { stroke: '#9ece6a', fill: '#161a22', text: '#e8eaed', dash: '', label: 'mounted' },
   available: { stroke: '#4b5563', fill: '#12161f', text: '#9aa0a6', dash: '5 3', label: 'available' },
   degraded: { stroke: '#f7768e', fill: '#2a1620', text: '#f7768e', dash: '3 2', label: 'degraded' },
-  missing: { stroke: '#e0af68', fill: '#1a1620', text: '#e0af68', dash: '2 3', label: 'missing' }
+  missing: { stroke: '#e0af68', fill: '#1a1620', text: '#e0af68', dash: '2 3', label: 'missing' },
+  disabled: { stroke: '#6b7280', fill: '#1a1a1a', text: '#6b7280', dash: '1 4', label: 'disabled' }
 };
 
 const EDGE = {
@@ -307,6 +308,51 @@ function renderDetail(side, data, selected, onSelect) {
       text: 'autostart',
       style: 'font-size:9px;font-family:var(--la-mono);padding:1px 5px;border-radius:4px;border:1px solid #7aa2f766;color:#7aa2f7;margin-left:6px'
     }));
+    // Plugin enable switch (ADR-0032). Autostart cores may be turned off — warn, do not block.
+    const enabled = p.state !== 'disabled' && !p.disabled;
+    const sw = el('button', {
+      type: 'button',
+      text: enabled ? 'On' : 'Off',
+      title: enabled
+        ? '关闭插件：立即卸载并禁止再挂（Autostart/ensure 均生效）'
+        : '启用插件：清除禁用标记；何时再挂载取决于 Autostart / scheme',
+      style: 'margin-left:auto;cursor:pointer;border-radius:6px;padding:2px 8px;font-size:11px;font-family:var(--la-mono);' +
+        (enabled
+          ? 'background:#16281a;border:1px solid #9ece6a66;color:#9ece6a'
+          : 'background:#1a1a1a;border:1px solid #4b5563;color:#9aa0a6')
+    });
+    sw.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (enabled && p.autostart) {
+        if (!window.confirm('「' + p.name + '」是 autostart 核心插件，关闭后聊天/装配可能不可用。仍要关闭？')) return;
+      }
+      sw.disabled = true;
+      try {
+        const res = await LiteAgent.callCap('host', 'host', 'setPluginEnabled', {
+          name: p.name,
+          enabled: !enabled
+        });
+        if (!res || res.ok === false) {
+          window.alert('切换失败：' + ((res && res.error) || 'unknown'));
+          return;
+        }
+        LiteAgent.emit('__notice', {
+          text: 'plugin ' + p.name + ' → ' + (!enabled ? 'on' : 'off (disabled)'),
+          cls: 'message'
+        });
+        LiteAgent.emit('__plugin-switch', { name: p.name, enabled: !enabled });
+        invalidatePluginsCache();
+        // Re-open the panel so the graph/state refreshes immediately.
+        const rootEl = document.getElementById('main-overlay');
+        if (rootEl) rootEl.innerHTML = '';
+        openPluginsPanel();
+      } catch (err) {
+        window.alert('切换失败：' + err);
+      } finally {
+        sw.disabled = false;
+      }
+    });
+    nameRow.appendChild(sw);
     card.appendChild(nameRow);
     if (p.description) {
       card.appendChild(el('div', { style: 'font-size:11px;color:var(--la-dim);margin-top:4px;line-height:1.35', text: p.description }));
@@ -390,6 +436,7 @@ function renderDetail(side, data, selected, onSelect) {
     '<span><i style="display:inline-block;width:10px;height:10px;border:1px solid #9ece6a;background:#161a22;vertical-align:middle;margin-right:5px"></i>mounted（已挂载）</span>' +
     '<span><i style="display:inline-block;width:10px;height:10px;border:1px dashed #4b5563;background:#12161f;vertical-align:middle;margin-right:5px"></i>available（待 scheme 拉起）</span>' +
     '<span><i style="display:inline-block;width:10px;height:10px;border:1px dashed #f7768e;background:#2a1620;vertical-align:middle;margin-right:5px"></i>degraded（consumes 未满足）</span>' +
+    '<span><i style="display:inline-block;width:10px;height:10px;border:1px dashed #6b7280;background:#1a1a1a;vertical-align:middle;margin-right:5px"></i>disabled（用户关闭）</span>' +
     '<span style="color:var(--la-dim);margin-top:4px">edges</span>' +
     '<span><i style="display:inline-block;width:18px;height:2px;background:#9ece6a;vertical-align:middle;margin-right:4px"></i>provides (plugin → cap)</span>' +
     '<span><i style="display:inline-block;width:18px;height:2px;background:#7aa2f7;vertical-align:middle;margin-right:4px"></i>host-uses (cap → Host)</span>' +
@@ -430,6 +477,7 @@ function paint(root, data, close) {
     style: 'font-size:11px;font-weight:400;color:var(--la-dim);font-family:var(--la-mono)',
     text: 'mounted ' + (summary.mounted != null ? summary.mounted : '?') +
       ' / ' + (summary.discovered != null ? summary.discovered : '?') +
+      (summary.disabled && summary.disabled.length ? ' · off ' + summary.disabled.length : '') +
       (data.scheme ? ' · scheme ' + data.scheme : '')
   }));
   const btnClose = el('button', { type: 'button', text: 'Close' });
@@ -479,10 +527,11 @@ export function invalidatePluginsCache() {
   snapshot = null;
 }
 
-// Live invalidation: scheme switch / session select can mount plugins.
+// Live invalidation: scheme switch / session select / plugin switch can mount or unmount.
 if (window.LiteAgent && window.LiteAgent.on) {
   window.LiteAgent.on('__scheme', () => { invalidatePluginsCache(); prefetchPlugins(); });
   window.LiteAgent.on('__session', () => { invalidatePluginsCache(); prefetchPlugins(); });
+  window.LiteAgent.on('__plugin-switch', () => { invalidatePluginsCache(); prefetchPlugins(); });
 }
 
 export function openPluginsPanel() {

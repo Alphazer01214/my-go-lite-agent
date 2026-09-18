@@ -430,8 +430,12 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	}
 	var out json.RawMessage
 	var err error
-	// hostFaces (config|commands|ui) go through CallByFace validation.
-	if capName == "config" || capName == "commands" || capName == "ui" {
+	// Host L0 faces: Medium may address Host by name (ensurePlugins, plugin switch).
+	// ADR-0030: no domain HTTP — these methods are lifecycle/observability only.
+	if target == serve.HostCap || target == "host" {
+		out, err = serve.CallHost(s.opts.Srv, in.Method, in.Payload)
+	} else if capName == "config" || capName == "commands" || capName == "ui" {
+		// hostFaces (config|commands|ui) go through CallByFace validation.
 		out, err = serve.CallByFace(s.opts.Srv, target, capName, in.Method, in.Payload)
 	} else {
 		out, err = s.opts.Srv.CallByPlugin(target, capName, in.Method, in.Payload)
@@ -501,6 +505,8 @@ const (
 	StateDegraded = "degraded"
 	// StateMissing is a name referenced by dependsOn that Discovery never saw.
 	StateMissing = "missing"
+	// StateDisabled is a Plugin the Host switch turned off (ADR-0032).
+	StateDisabled = "disabled"
 )
 
 // graphEdge is one directed dependency in the plugin graph.
@@ -585,11 +591,13 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		Schemes     []string             `json:"schemes,omitempty"`
 		Commands    []plugin.CommandSpec `json:"commands,omitempty"`
 		Degraded    bool                 `json:"degraded,omitempty"`
+		Disabled    bool                 `json:"disabled,omitempty"`
 		UI          *uiItem              `json:"ui,omitempty"`
 	}
 
 	live := map[string]bool{}
 	degraded := map[string]bool{}
+	disabled := map[string]bool{}
 	reconcileGen := 0
 	registryProvides := map[string]string{}
 	if s.opts.Srv != nil {
@@ -599,9 +607,14 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		for _, n := range reg.Degraded {
 			degraded[n] = true
 		}
+		for _, n := range reg.Disabled {
+			disabled[n] = true
+		}
 		registryProvides = reg.Provides
 		for _, n := range s.opts.Srv.MountedPluginNames() {
-			live[n] = true
+			if !disabled[n] {
+				live[n] = true
+			}
 		}
 	}
 
@@ -617,7 +630,9 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range s.opts.Plan.Mounted {
 		addFound(p)
-		live[p.Manifest.Name] = true
+		if !disabled[p.Manifest.Name] {
+			live[p.Manifest.Name] = true
+		}
 	}
 	if s.opts.PluginsDir != "" {
 		if res := discovery.Scan(s.opts.PluginsDir); len(res.Plugins) > 0 {
@@ -653,6 +668,9 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stateOf := func(name string) string {
+		if disabled[name] {
+			return StateDisabled
+		}
 		if degraded[name] {
 			return StateDegraded
 		}
@@ -661,8 +679,8 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		}
 		return StateAvailable
 	}
-	// Catalog order: mounted first, then degraded, then available; stable by name.
-	rank := map[string]int{StateMounted: 0, StateDegraded: 1, StateAvailable: 2}
+	// Catalog order: mounted first, then degraded, then available/disabled; stable by name.
+	rank := map[string]int{StateMounted: 0, StateDegraded: 1, StateAvailable: 2, StateDisabled: 3, StateMissing: 4}
 	sort.SliceStable(order, func(i, j int) bool {
 		ri, rj := rank[stateOf(order[i])], rank[stateOf(order[j])]
 		if ri != rj {
@@ -741,6 +759,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			DependsOn: p.Manifest.DependsOn, Autostart: p.Manifest.Autostart,
 			State: st, HostFaces: p.Manifest.HostFaces, Tools: tools, Schemes: pulledBy[name],
 			Commands: p.Manifest.Commands, Degraded: degraded[p.Manifest.Name],
+			Disabled: disabled[p.Manifest.Name],
 		}
 		node := graphNode{
 			ID: p.Manifest.Name, Kind: "plugin", Label: p.Manifest.Name,
@@ -902,10 +921,25 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			"mounted":      len(mountedNames),
 			"mountedNames": mountedNames,
 			"degraded":     len(degraded),
+			"disabled":     disabledNamesMapKeys(disabled),
 			"missing":      missing,
 			"reconcileGen": reconcileGen,
 		},
 	})
+}
+
+func disabledNamesMapKeys(m map[string]bool) []string {
+	var out []string
+	for k, v := range m {
+		if v {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 func (s *Server) handlePluginUI(w http.ResponseWriter, r *http.Request) {
