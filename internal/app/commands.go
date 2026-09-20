@@ -19,9 +19,6 @@ type commandPlane struct {
 	pluginsDir string
 	manifests  map[string]plugin.Manifest
 	mounted    []string
-	// web is set when the plane backs the Web Medium: CLI-only content
-	// (one-shot flags, /exit) is filtered from /help output (BUG-09).
-	web bool
 }
 
 func newCommandPlane(srv *serve.Server, pluginsDir string, plan assembly.Plan) *commandPlane {
@@ -91,18 +88,6 @@ func hasHostFace(m plugin.Manifest, face string) bool {
 	return false
 }
 
-// handle runs a slash line for the CLI (prints to stdout).
-func (cp *commandPlane) handle(line string) (quit bool, err error) {
-	out, quit, err := cp.handleOut(line)
-	if out != "" {
-		fmt.Print(out)
-		if !strings.HasSuffix(out, "\n") {
-			fmt.Println()
-		}
-	}
-	return quit, err
-}
-
 // handleOut runs a slash line and returns printable output (Web Shell uses this).
 func (cp *commandPlane) handleOut(line string) (output string, quit bool, err error) {
 	line = strings.TrimSpace(line)
@@ -118,8 +103,6 @@ func (cp *commandPlane) handleOut(line string) (output string, quit bool, err er
 	rest := strings.TrimSpace(strings.TrimPrefix(body, fields[0]))
 
 	switch name {
-	case "exit":
-		return "", true, nil
 	case "help":
 		return cp.helpText(rest), false, nil
 	case "lp":
@@ -168,7 +151,7 @@ func splitCommandRest(rest string) (sub, args string) {
 }
 
 func (cp *commandPlane) nativeAndPluginNames() []string {
-	names := []string{"help", "lp", "refresh", "exit"}
+	names := []string{"help", "lp", "refresh"}
 	names = append(names, cp.mounted...)
 	return names
 }
@@ -214,26 +197,10 @@ func (cp *commandPlane) helpText(pluginName string) string {
 	b.WriteString("  /help [plugin]     Show this help, or a plugin's commands\n")
 	b.WriteString("  /lp                List mounted plugins (name, version, provides)\n")
 	b.WriteString("  /refresh           Rescan manifests and broadcast config.reload (no hot-plug)\n")
-	if !cp.web {
-		b.WriteString("  /exit              Quit (CLI only)\n")
-	}
 	b.WriteString("\nPlugin commands:\n")
 	b.WriteString("  Use /<plugin> to list its commands, or /<plugin> <cmd> [args].\n")
 	b.WriteString("  Mounted plugins and their commands are listed below.\n")
-	if cp.web {
-		// Read-only commands only: production launch has no CLI flags (ADR-0030)
-		// and /exit has no effect when the panel is a browser tab (BUG-09).
-		b.WriteString("  只读子命令；生产启动无 CLI flag（ADR-0030）。\n")
-	} else {
-		b.WriteString("\nCLI flags (one-shot, not slash):\n")
-		b.WriteString("  -turn TEXT           Run one default-Loop turn\n")
-		b.WriteString("  -context-list N      Print last N prepare messages after the run\n")
-		b.WriteString("  -session-derive      Print Model Context from session.derive\n")
-		b.WriteString("  -session-query       Print Session Log facts\n")
-		b.WriteString("  -session-append JSON Append facts\n")
-		b.WriteString("  -invoke / -frame-cap / -frame-method / -invoke-payload\n")
-		b.WriteString("                       Host-initiated Frame call into a plugin\n")
-	}
+	b.WriteString("  只读子命令；进程生命周期不归浏览器面板管。\n")
 	b.WriteString("\nPlugins:\n")
 	if len(cp.mounted) == 0 {
 		b.WriteString("  (none)\n")
@@ -291,7 +258,7 @@ func (cp *commandPlane) pluginsText() string {
 	return b.String()
 }
 
-// agentSchemeLabel reads the active Agent Scheme for REPL /lp banners through
+// agentSchemeLabel reads the active Agent Scheme for the /lp banner through
 // the agent-presets Capability (ADR-0027): Host never reaches into agent config.
 func agentSchemeLabel(srv *serve.Server) string {
 	if srv == nil {
@@ -308,6 +275,7 @@ func agentSchemeLabel(srv *serve.Server) string {
 	return res.DefaultScheme
 }
 
+// suggestCommand returns the closest slash candidates for an unknown command.
 func suggestCommand(input string, candidates []string) []string {
 	var out []string
 	for _, c := range candidates {
@@ -316,6 +284,46 @@ func suggestCommand(input string, candidates []string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// completeSlash returns completion candidates for a line that may start with /.
+func (cp *commandPlane) completeSlash(line string) []string {
+	if !strings.HasPrefix(line, "/") {
+		return nil
+	}
+	body := line[1:]
+	// /plugin subcommand
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		name := strings.ToLower(body[:i])
+		m, ok := cp.manifests[name]
+		if !ok {
+			return nil
+		}
+		prefix := body[i+1:]
+		var out []string
+		for _, c := range m.Commands {
+			cand := "/" + name + " " + c.Name
+			if strings.HasPrefix(cand, "/"+name+" "+prefix) || prefix == "" {
+				out = append(out, cand)
+			}
+		}
+		return out
+	}
+	// /partial → native + plugin names
+	native := []string{"/help", "/lp", "/refresh"}
+	var out []string
+	for _, n := range native {
+		if strings.HasPrefix(n, line) {
+			out = append(out, n)
+		}
+	}
+	for _, name := range cp.mounted {
+		cand := "/" + name
+		if strings.HasPrefix(cand, line) {
+			out = append(out, cand)
+		}
+	}
 	return out
 }
 

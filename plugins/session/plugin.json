@@ -3,12 +3,13 @@
   "version": "0.5.0",
   "protocol": 6,
   "provides": [
-    "session"
+    "session",
+    "choice"
   ],
   "consumes": [],
   "entry": "session.exe",
   "autostart": true,
-  "description": "File-backed session log plugin (JSONL) with the session Web faces",
+  "description": "File-backed session log plugin (JSONL) with the session Web faces and the generic choice faces",
   "commands": [
     {
       "name": "dump-trace",

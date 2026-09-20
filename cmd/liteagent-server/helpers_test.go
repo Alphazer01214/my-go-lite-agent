@@ -22,7 +22,7 @@ func moduleRoot(t *testing.T) string {
 var binCache sync.Map // pkg -> built exe path (per test-binary process)
 
 // buildPkg builds a package once per test-binary process and shares the exe
-// across tests (mirrors cmd/liteagent-cli's helper).
+// across tests (host-side fixture helper).
 func buildPkg(t *testing.T, root, pkg string) string {
 	t.Helper()
 	if v, ok := binCache.Load(pkg); ok {
@@ -98,7 +98,7 @@ func writeTestLayout(t *testing.T) string {
 }
 
 // stubLLMMain / buildStubLLMBin: deterministic test LLM built from a temp module
-// (mirrors cmd/liteagent-cli). No fixture package lives in the repo.
+// No fixture package lives in the repo.
 const stubLLMMain = `package main
 
 import (

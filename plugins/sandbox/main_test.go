@@ -14,19 +14,24 @@ func TestDecideDefaultAllow(t *testing.T) {
 	}
 }
 
-func TestModeProfileReadOnly(t *testing.T) {
+func TestModeProfileAsk(t *testing.T) {
 	ws := t.TempDir()
-	action, reason := decide("read_file", json.RawMessage(`{"path":"a.go"}`), ws, "low", "read_only")
+	action, reason := decide("read_file", json.RawMessage(`{"path":"a.go"}`), ws, "low", "ask")
 	if action != "allow" {
-		t.Fatalf("read_only low: %s (%s)", action, reason)
+		t.Fatalf("ask low: %s (%s)", action, reason)
 	}
-	action, reason = decide("write_file", json.RawMessage(`{"path":"a.go"}`), ws, "medium", "read_only")
-	if action != "deny" {
-		t.Fatalf("read_only medium: %s (%s)", action, reason)
+	action, reason = decide("write_file", json.RawMessage(`{"path":"a.go"}`), ws, "medium", "ask")
+	if action != "ask" {
+		t.Fatalf("ask medium: %s (%s)", action, reason)
 	}
-	action, _ = decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high", "read_only")
-	if action != "deny" {
-		t.Fatalf("read_only high: %s", action)
+	action, _ = decide("shell", json.RawMessage(`{"command":"ls"}`), ws, "high", "ask")
+	if action != "ask" {
+		t.Fatalf("ask high: %s", action)
+	}
+	// Legacy mode name still routes to the ask profile (ADR-0034).
+	action, _ = decide("write_file", json.RawMessage(`{"path":"a.go"}`), ws, "medium", "read_only")
+	if action != "ask" {
+		t.Fatalf("legacy read_only medium: %s", action)
 	}
 }
 
@@ -65,8 +70,8 @@ func TestModeExplicitAllowOverridesProfile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "permissions.json"), []byte(rules), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// read_only would deny write, but explicit allow wins (ADR-0033 default profile).
-	action, reason := decide("write_file", json.RawMessage(`{"path":"/tmp/x"}`), ws, "medium", "read_only")
+	// ask mode would ask on write, but explicit allow wins (ADR-0033 default profile).
+	action, reason := decide("write_file", json.RawMessage(`{"path":"/tmp/x"}`), ws, "medium", "ask")
 	if action != "allow" {
 		t.Fatalf("explicit allow must widen mode: %s (%s)", action, reason)
 	}

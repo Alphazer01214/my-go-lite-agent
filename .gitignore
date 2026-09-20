@@ -13,3 +13,6 @@ plugins/**/config.json
 
 # Agent working data (reports, memory) — not product
 .workbuddy/
+.claude/
+.zcode/
+.legacy/

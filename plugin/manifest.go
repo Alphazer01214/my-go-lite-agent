@@ -25,7 +25,7 @@ type UISpec struct {
 	Entry string `json:"entry"`
 	// Assets lists auxiliary files (css, html templates) the components
 	// fetch at runtime, relative to ui/. Declared files must exist (ADR-0011).
-	Assets []string `json:"assets,omitempty"`
+	Assets []string  `json:"assets,omitempty"`
 	Mounts []UIMount `json:"mounts,omitempty"`
 	// Trust reserves isolation (ADR-0012). Default/only implemented value: full.
 	Trust string `json:"trust,omitempty"`
@@ -35,10 +35,10 @@ type UISpec struct {
 
 // UIPage is a plugin-contributed layout page (ADR-0012).
 type UIPage struct {
-	Slug  string    `json:"slug"`
-	Title string    `json:"title,omitempty"`
-	Path  string    `json:"path"`
-	Slots []UISlot  `json:"slots"`
+	Slug  string   `json:"slug"`
+	Title string   `json:"title,omitempty"`
+	Path  string   `json:"path"`
+	Slots []UISlot `json:"slots"`
 }
 
 // UISlot is a slot declared on a contributed page.
@@ -95,11 +95,14 @@ func (u UISpec) NormalizedEntry() string {
 
 // Manifest is plugin.json next to a Plugin executable.
 type Manifest struct {
-	Name        string        `json:"name"`
-	Version     string        `json:"version"`
-	Protocol    int           `json:"protocol"`
-	Provides    []string      `json:"provides"`
-	Consumes    []string      `json:"consumes"`
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+	// Provides 插件对外提供的能力
+	Provides []string `json:"provides"`
+	Consumes []string `json:"consumes"`
+	// Requires 需要的 capabilities
+	Requires    []string      `json:"requires"`
 	Entry       string        `json:"entry"`
 	TimeoutMs   int           `json:"timeoutMs,omitempty"`
 	Description string        `json:"description,omitempty"`

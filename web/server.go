@@ -62,10 +62,6 @@ type Server struct {
 
 	// defaultWorkspace is applied to new Sessions when the client omits one (ADR-0020).
 	defaultWorkspace string
-	// pending tool approvals (policy.ask → Render Medium).
-	apprMu   sync.Mutex
-	apprNext int
-	apprWait map[string]chan bool
 }
 
 // Event is one SSE payload.
@@ -89,7 +85,6 @@ func New(opts Options) *Server {
 		hub:              make(map[chan Event]struct{}),
 		uiDirs:           map[string]string{},
 		defaultWorkspace: opts.DefaultWorkspace,
-		apprWait:         make(map[string]chan bool),
 	}
 	for _, p := range opts.Plan.Mounted {
 		if p.Manifest.UI != nil && p.Manifest.UI.Entry != "" {
@@ -103,9 +98,6 @@ func New(opts Options) *Server {
 				s.broadcast(Event{Topic: e.Topic, Data: e.Data})
 			},
 		})
-		// policy.ask 鈫?Web Medium (ADR-0019/0029): register the approval face;
-		// CLI and Web can both be registered without overwriting each other.
-		serve.RegisterApproval(opts.Srv, s.requestToolApproval)
 		// Seed replay with panels emitted during mount (before Subscribe).
 		for _, p := range opts.Srv.Panels() {
 			s.broadcast(Event{Topic: "panel", Data: p})
@@ -114,12 +106,11 @@ func New(opts Options) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/events", s.handleEvents)
-	// L0 Medium faces only (ADR-0030): generic call, commands, UI action, graph,
-	// and the approval reply face (ADR-0029: tool_approval SSE → POST ruling).
+	// L0 Medium faces only (ADR-0030): generic call, commands, UI action, graph.
+	// Plugin questions (e.g. session choice, ADR-0034) ride the generic /api/call.
 	mux.HandleFunc("/api/command", s.handleCommand)
 	mux.HandleFunc("/api/ui-action", s.handleUIAction)
 	mux.HandleFunc("/api/call", s.handleCall)
-	mux.HandleFunc("/api/tool-approval", s.handleToolApproval)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/layout", s.handleLayout)
 	mux.HandleFunc("/plugin-ui/", s.handlePluginUI)
@@ -274,68 +265,6 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	out, quit, err := s.opts.CommandPlane.HandleOut(in.Line)
 	writeJSON(w, map[string]any{"ok": err == nil, "quit": quit, "output": out, "error": errString(err)})
-}
-
-// requestToolApproval implements Host OnToolApproval for the Web Medium (ADR-0019).
-// Broadcasts tool_approval on SSE; waits for /api/tool-approval. Timeout denies.
-// The wait is deliberately shorter than serve.DefaultCallTimeout (30s): the
-// approval bubble lives inside a plugin-to-plugin Frame (sandbox → agent), so
-// if no ruling lands in time the enclosing call times out FIRST — and the
-// policy layer fails closed. A longer wait here would be dead code.
-const approvalWait = 20 * time.Second
-
-func (s *Server) requestToolApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
-	s.apprMu.Lock()
-	s.apprNext++
-	id := fmt.Sprintf("appr-%d", s.apprNext)
-	ch := make(chan bool, 1)
-	s.apprWait[id] = ch
-	s.apprMu.Unlock()
-	defer func() {
-		s.apprMu.Lock()
-		delete(s.apprWait, id)
-		s.apprMu.Unlock()
-	}()
-	s.broadcast(Event{Topic: "tool_approval", Data: map[string]any{
-		"id":        id,
-		"tool":      tool,
-		"arguments": json.RawMessage(arguments),
-		"workspace": workspace,
-		"sessionId": sessionID,
-	}})
-	select {
-	case ok := <-ch:
-		return ok
-	case <-time.After(approvalWait):
-		return false
-	}
-}
-
-func (s *Server) handleToolApproval(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var in struct {
-		ID       string `json:"id"`
-		Approved bool   `json:"approved"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
-		return
-	}
-	s.apprMu.Lock()
-	ch, ok := s.apprWait[in.ID]
-	s.apprMu.Unlock()
-	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "error": "unknown approval id"})
-		return
-	}
-	select {
-	case ch <- in.Approved:
-	default:
-	}
-	writeJSON(w, map[string]any{"ok": true, "approved": in.Approved})
 }
 
 func (s *Server) handleUIAction(w http.ResponseWriter, r *http.Request) {

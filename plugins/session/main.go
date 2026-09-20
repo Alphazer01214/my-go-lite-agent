@@ -131,20 +131,26 @@ type SessionMeta struct {
 	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
-// Permission modes (ADR-0033).
+// Permission modes (ADR-0033; renamed read_only → ask by ADR-0034, where
+// medium/high severity now route through the session choice faces instead of
+// denying).
 const (
-	ModeReadOnly       = "read_only"
+	ModeAsk            = "ask"
 	ModeWorkspaceWrite = "workspace_write"
 	ModeFullAccess     = "full_access"
+	// ModeReadOnly is the pre-ADR-0034 name of ModeAsk, kept only as a
+	// persisted-meta compat alias: NormalizePermissionMode maps it to ModeAsk.
+	ModeReadOnly = "read_only"
 	// DefaultPermissionMode applies when SessionMeta.PermissionMode is empty.
 	DefaultPermissionMode = ModeWorkspaceWrite
 )
 
-// NormalizePermissionMode maps empty → default; invalid → default.
+// NormalizePermissionMode maps empty → default; invalid → default; the legacy
+// read_only name → ModeAsk (ADR-0034).
 func NormalizePermissionMode(m string) string {
 	switch strings.ToLower(strings.TrimSpace(m)) {
-	case ModeReadOnly:
-		return ModeReadOnly
+	case ModeAsk, ModeReadOnly:
+		return ModeAsk
 	case ModeWorkspaceWrite:
 		return ModeWorkspaceWrite
 	case ModeFullAccess:
@@ -674,15 +680,16 @@ func main() {
 			}
 		}
 		id := normalizeID(in.SessionID)
-		mode := strings.ToLower(strings.TrimSpace(in.PermissionMode))
-		switch mode {
-		case ModeReadOnly, ModeWorkspaceWrite, ModeFullAccess:
-		case "":
+		if strings.TrimSpace(in.PermissionMode) == "" {
 			return nil, &protocol.FrameError{Code: "bad_arguments", Message: "permissionMode required"}
+		}
+		mode := NormalizePermissionMode(in.PermissionMode)
+		switch mode {
+		case ModeAsk, ModeWorkspaceWrite, ModeFullAccess:
 		default:
 			return nil, &protocol.FrameError{
 				Code:    "bad_arguments",
-				Message: "permissionMode must be read_only|workspace_write|full_access",
+				Message: "permissionMode must be ask|workspace_write|full_access",
 			}
 		}
 		reg.mu.Lock()
@@ -918,6 +925,85 @@ func main() {
 				Message: fmt.Sprintf("unknown command %q (try dump-trace|list|derive|current|info)", in.Command),
 			}
 		}
+	})
+
+	// Generic choice (ADR-0034): session owns the ask→render→respond loop.
+	// Askers block in choice.ask; the question fans out as an id-less evt
+	// (cap=choice, method=ask) that Host relays to Render Media opaquely, and
+	// Mediums answer via choice.respond. First responder wins; timeout yields
+	// {value:"", reason:"timeout"} and the caller decides what that means.
+	choices := newChoiceCenter()
+
+	s.Handle("choice", "ask", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			Kind      string          `json:"kind"`
+			Prompt    string          `json:"prompt"`
+			Options   []choiceOption  `json:"options"`
+			SessionID string          `json:"sessionId"`
+			Meta      json.RawMessage `json:"meta"`
+			TimeoutMS int             `json:"timeoutMs"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		if in.Kind == "" || in.Prompt == "" || len(in.Options) == 0 {
+			return nil, &protocol.FrameError{
+				Code:    "bad_arguments",
+				Message: "choice.ask requires kind, prompt and options",
+			}
+		}
+		timeout := choiceTimeout(in.TimeoutMS)
+		id, ch := choices.register()
+		askEvt, _ := json.Marshal(map[string]any{
+			"id":        id,
+			"kind":      in.Kind,
+			"prompt":    in.Prompt,
+			"options":   in.Options,
+			"sessionId": in.SessionID,
+			"meta":      in.Meta,
+			"timeoutMs": int(timeout / time.Millisecond),
+		})
+		if err := s.Emit("choice", "ask", askEvt); err != nil {
+			choices.drop(id)
+			return nil, err
+		}
+		var value, reason string
+		select {
+		case v := <-ch:
+			value, reason = v, "user"
+		case <-time.After(timeout):
+			value, reason = "", "timeout"
+			choices.drop(id)
+		}
+		resolvedEvt, _ := json.Marshal(map[string]any{
+			"id": id, "value": value, "reason": reason,
+		})
+		_ = s.Emit("choice", "resolved", resolvedEvt)
+		return json.Marshal(map[string]any{"value": value, "reason": reason})
+	})
+
+	s.Handle("choice", "respond", func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in struct {
+			ID    string `json:"id"`
+			Value string `json:"value"`
+		}
+		if len(req.Payload) > 0 {
+			if err := json.Unmarshal(req.Payload, &in); err != nil {
+				return nil, &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
+			}
+		}
+		if in.ID == "" {
+			return nil, &protocol.FrameError{Code: "bad_arguments", Message: "id is required"}
+		}
+		if !choices.resolve(in.ID, in.Value) {
+			return nil, &protocol.FrameError{
+				Code:    "unknown_choice",
+				Message: "choice already resolved, expired, or unknown: " + in.ID,
+			}
+		}
+		return json.Marshal(map[string]any{"ok": true})
 	})
 
 	_ = s.Serve()

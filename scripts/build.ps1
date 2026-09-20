@@ -273,7 +273,6 @@ function Install-PluginDir([string]$name) {
 
 if ($List) {
     Write-Host "Shipped targets:"
-    Write-Host "  liteagent-cli"
     Write-Host "  liteagent-server"
     foreach ($name in $shippedPlugins) {
         $hasEntry = $false
@@ -289,7 +288,6 @@ if ($List) {
 
 Push-Location $root
 try {
-    Build-Pkg "liteagent-cli" "./cmd/liteagent-cli" (Join-Path $dist "liteagent-cli.exe")
     Build-Pkg "liteagent-server" "./cmd/liteagent-server" (Join-Path $dist "liteagent-server.exe")
 
     # ── plugins ─────────────────────────────────────────────────────────────

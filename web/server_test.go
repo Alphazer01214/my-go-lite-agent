@@ -381,25 +381,44 @@ func TestReplayBuffer(t *testing.T) {
 	}
 }
 
-// TestToolApprovalRouteRegistered pins BUG-01 layer 2: the approval reply face
-// must be live on the HTTP mux — it used to be defined but never registered,
-// so a browser's ruling landed on a 404 and the gate silently opened.
-func TestToolApprovalRouteRegistered(t *testing.T) {
+// TestChoiceRespondRidesGenericCall pins the ADR-0034 answer path: plugin
+// questions are answered through the generic /api/call (to=session), which
+// must be live on the mux — a 404 here would leave the asker hanging until
+// its fail-closed timeout.
+func TestChoiceRespondRidesGenericCall(t *testing.T) {
 	s := New(Options{CommandPlane: nopCommands{}})
 	ts := httptest.NewServer(s.http.Handler)
 	defer ts.Close()
 
-	res, err := http.Post(ts.URL+"/api/tool-approval", "application/json", strings.NewReader(`{}`))
+	body, _ := json.Marshal(map[string]any{
+		"to":     "session",
+		"cap":    "choice",
+		"method": "respond",
+		"payload": map[string]any{
+			"id":    "choice-1",
+			"value": "allow",
+		},
+	})
+	res, err := http.Post(ts.URL+"/api/call", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(res.Body)
+	raw, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
-		t.Fatalf("/api/tool-approval must be registered (BUG-01), got 404")
+		t.Fatalf("/api/call must carry choice.respond, got 404")
 	}
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("want 400 for a ruling without an id, got %d: %s", res.StatusCode, body)
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("bad json: %v (%s)", err, raw)
+	}
+	// No session plugin is mounted in this fixture: the call must reach the
+	// Host and fail there (plugin not mounted), never at the HTTP layer.
+	if out.OK {
+		t.Fatalf("want ok=false without a mounted session plugin: %s", raw)
 	}
 }
 

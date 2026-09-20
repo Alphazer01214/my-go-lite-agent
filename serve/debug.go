@@ -10,7 +10,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
-// debugOn gates Host debug logging. Enabled by -debug on the CLI entries.
+// debugOn gates Host debug logging. Enabled by -debug on liteagent-server.
 // Logs go to stderr so they never mix with Render Medium stdout.
 var debugOn atomic.Bool
 

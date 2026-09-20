@@ -39,8 +39,8 @@ Host 不认识能力名，不解析领域 payload；会话、回合、工具编�
 - **Agent Scheme**：`chat` / `tool_calling` / `coding`（config 可自定义）；`dependsPlugins` + `allowedTools`
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages
 - `llm-openai`：OpenAI 兼容（DeepSeek 等），流式输出
-- CLI REPL / Web Shell（新建会话面 + 聊天 + 中心 Session Trace + 底栏信息区）
-- **Workspace**：Session 级项目根（CLI 默认 cwd，Web 会话可选）
+- Web Shell（新建会话面 + 聊天 + 中心 Session Trace + 底栏信息区）
+- **Workspace**：Session 级项目根（启动目录默认 cwd，新会话可选）
 - **coding Scheme**：filetools + shelltools + sandbox + skill-manager + project-context + webtools
 - **Tool severity sandbox**：工具 schema 声明 `severity`（low/medium/high），sandbox 按 `severityPolicy` 拦截（默认 medium/high→ask）；显式 rules 仍优先
 - 多 `tools` 插件共存；`$skill` 输入触发；Todo / Plan Constraint（提示约束）
@@ -74,9 +74,9 @@ bash scripts/build.sh --clean
 bash scripts/build.sh --list
 ```
 
-增量模式会对每个目标（cli / server / 各插件）做内容哈希（模块内依赖 `.go` + `go.mod`/`go.sum`；server 另含 `web/static`）。哈希未变且 `dist` 里已有产物时跳过 `go build`；`plugin.json` / `ui/` / README / examples 等资产始终刷新。缓存戳记在 `dist/.build-cache/`。
+增量模式会对每个目标（server / 各插件）做内容哈希（模块内依赖 `.go` + `go.mod`/`go.sum`；server 另含 `web/static`）。哈希未变且 `dist` 里已有产物时跳过 `go build`；`plugin.json` / `ui/` / README / examples 等资产始终刷新。缓存戳记在 `dist/.build-cache/`。
 
-产物在 `dist/`：`liteagent-cli`、`liteagent-server`、`plugins/`、`examples/`。
+产物在 `dist/`：`liteagent-server`、`plugins/`、`examples/`。
 
 ### 配置模型
 
@@ -94,27 +94,20 @@ export OPENAI_BASE_URL=https://api.deepseek.com/v1
 export OPENAI_MODEL=deepseek-chat
 ```
 
-也可编辑 `dist/plugins/llm-openai/config.json`，或在 REPL / Web 输入框里 `/llm-openai config set apiKey=sk-...`。
+也可编辑 `dist/plugins/llm-openai/config.json`，或在 Web 输入框里 `/llm-openai config set apiKey=sk-...`。
 
 **构建不会动你的密钥**：`config.json` 不进 git；重新构建时，dist 里已有的配置原样保留（首次构建才会从仓库根的 `plugins/llm-openai/config.json` 播种）。
 
 ### 跑起来
 
-启动只带 L0 项：`-plugins` / `-repl` / `-serve` / `-debug` / `-discover` / `-dump`（ADR-0030）。领域动作由已挂载插件的 command / UI 承接。
+启动只带 L0 项：`-plugins` / `-serve` / `-layout` / `-debug` / `-dump`（ADR-0030）。领域动作由已挂载插件的 command / UI 承接。
 
 ```powershell
-# 金路径：REPL 直接输入即走 agent 插件 loop.turn
-.\dist\liteagent-cli.exe -plugins dist\plugins -repl
-
-# Web
+# Web：浏览器直接输入即走 agent 插件 loop.turn
 .\dist\liteagent-server.exe -plugins dist\plugins -serve 127.0.0.1:8080
-
-# 通用点名诊断（不绑领域名）
-.\dist\liteagent-cli.exe -plugins dist\plugins -invoke agent -frame-cap loop -frame-method turn -invoke-payload '{"input":"你好"}'
 ```
 
 ```bash
-./dist/liteagent-cli -plugins dist/plugins -repl
 ./dist/liteagent-server -plugins dist/plugins -serve 127.0.0.1:8080
 ```
 
@@ -130,11 +123,11 @@ export OPENAI_MODEL=deepseek-chat
 
 Host 调试日志：加 `-debug` 后，Host 边界上的 Frame（方向 / 插件 / id / cap / method / payload）与插件启停会打到 **stderr**，不污染 stdout 的对话输出。
 
-Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json` 或 REPL 里 `/agent config set defaultScheme=coding`），进 REPL 对话；工作区可放 `.liteagent/permissions.json`、`.liteagent/skills/<name>/SKILL.md`、`AGENTS.md`。
+Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json` 或 Web 输入框里 `/agent config set defaultScheme=coding`），进 Web 对话；工作区可放 `.liteagent/permissions.json`、`.liteagent/skills/<name>/SKILL.md`、`AGENTS.md`。
 
 ## 常用命令
 
-**REPL / Web 输入框**
+**Web 输入框**
 
 | 命令 | 说明 |
 |------|------|
@@ -145,7 +138,7 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 | `/llm-openai config` | 模型配置 |
 | `/agent config` | Agent Scheme（defaultScheme） |
 
-原生 slash 仅 `/help` `/lp` `/refresh` `/exit`；其余能力在对应插件名下。
+原生 slash 仅 `/help` `/lp` `/refresh`；其余能力在对应插件名下。
 
 **Web 界面**
 
@@ -154,17 +147,7 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 - **Settings**：打开插件设置浮层。每个实现了 `config.schema`/`config.get` 的插件会出现在左侧列表，右侧按该插件自己的 schema 渲染表单；保存走 `config.set`（热生效）。插件也可注册自定义元素 `<plugin-name>-settings` 完全接管该面板。
 - **Plugins**：插件 / Capability / Host / UI 槽位的关系图。实线绿=已挂载，虚线灰=已发现但待拉起（由某个 Agent Scheme 的 `dependsPlugins` 决定），红=degraded（consumes 未满足），琥珀=dependsOn 引用了未发现的插件。
 
-**CLI 诊断（L0）**
-
-```powershell
--invoke PLUGIN     点名调用插件（诊断）
--frame-cap CAP     Frame cap（插件侧 dispatch key）
--frame-method M    Frame method
--invoke-payload J  JSON payload
--debug             Host Frame 调试日志（stderr）
-```
-
-产品启动**没有** `-turn` / `-session-*` / `-agent-*` / `-workspace` / `-context-list` / `-cards`（ADR-0030）。集成测试可在 `L0_TEST_COMPAT=1` 下使用隐藏兼容 flag。
+`-debug` 打开 Host Frame 调试日志（stderr）。
 
 ## 装配示例
 

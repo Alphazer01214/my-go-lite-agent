@@ -1,3 +1,5 @@
+// serve/router.go handles the Frame
+
 package serve
 
 import (
@@ -14,6 +16,7 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
+// routeRequest from: plugin  with frame
 func (s *Server) routeRequest(from string, f *protocol.Frame) {
 	// Host closed: reject star calls without an interceptor plane (ADR-0014).
 	s.mu.Lock()
@@ -44,13 +47,6 @@ func (s *Server) routeRequest(from string, f *protocol.Frame) {
 				Error: &protocol.FrameError{Code: "method_not_found", Message: "no handler for host." + f.Method},
 			})
 		}
-		return
-	}
-
-	// Deferred special case (ADR-0030): agent.request|inject|confirm stay on
-	// Host until #3 is reopened. Only business-cap branch allowed in Host.
-	if f.Cap == pluginsdk.AgentCap && (f.Method == "request" || f.Method == "inject" || f.Method == "confirm") {
-		s.handleAgentFromPlugin(from, f)
 		return
 	}
 
@@ -190,6 +186,16 @@ func (s *Server) collectEvent(from string, f *protocol.Frame) {
 	// (ADR-0026) — the Render Medium parses the public stream contract itself.
 	if f.Cap == PresentationCap && f.Method == PresentationStreamMethod {
 		s.publish(Event{Topic: "stream", Data: f.Payload})
+	}
+	// Generic plugin evt relay (ADR-0034): id-less evts outside the presentation
+	// contract fan out to Render Media opaquely — Host does not interpret
+	// cap, method, or payload. Id-tagged evts stay call-scoped (below).
+	if f.ID == "" && f.Cap != PresentationCap {
+		s.publish(Event{Topic: "evt", Data: map[string]any{
+			"cap":     f.Cap,
+			"method":  f.Method,
+			"payload": f.Payload,
+		}})
 	}
 	if f.ID == "" {
 		return
@@ -419,76 +425,3 @@ func (s *Server) EnsurePlugins(names []string) (*EnsurePluginsResult, error) {
 	return out, nil
 }
 
-// handleAgentFromPlugin serves Host-owned agent.request and agent.inject.
-func (s *Server) handleAgentFromPlugin(from string, f *protocol.Frame) {
-	res := &protocol.Frame{
-		V:      f.V,
-		ID:     f.ID,
-		Type:   protocol.TypeRes,
-		Cap:    f.Cap,
-		Method: f.Method,
-	}
-	switch f.Method {
-	case "request":
-		var in struct {
-			SessionID string    `json:"sessionId"`
-			Messages  []Message `json:"messages"`
-		}
-		if len(f.Payload) > 0 {
-			if err := json.Unmarshal(f.Payload, &in); err != nil {
-				res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
-				_ = s.writeTo(from, res)
-				return
-			}
-		}
-		out, err := s.AgentRequest(in.SessionID, in.Messages)
-		if err != nil {
-			if fe, ok := err.(*protocol.FrameError); ok {
-				res.Error = fe
-			} else {
-				res.Error = &protocol.FrameError{Code: "agent_request_failed", Message: err.Error()}
-			}
-			_ = s.writeTo(from, res)
-			return
-		}
-		res.Payload = MarshalPayload(out)
-		_ = s.writeTo(from, res)
-	case "inject":
-		out, err := s.AgentInject(f.Payload)
-		if err != nil {
-			if fe, ok := err.(*protocol.FrameError); ok {
-				res.Error = fe
-			} else {
-				res.Error = &protocol.FrameError{Code: "agent_inject_failed", Message: err.Error()}
-			}
-			_ = s.writeTo(from, res)
-			return
-		}
-		res.Payload = MarshalPayload(out)
-		_ = s.writeTo(from, res)
-	case "confirm":
-		var in struct {
-			Tool        string          `json:"tool"`
-			Arguments   json.RawMessage `json:"arguments"`
-			Workspace   string          `json:"workspace"`
-			SessionID   string          `json:"sessionId"`
-			Description string          `json:"description"`
-		}
-		if len(f.Payload) > 0 {
-			if err := json.Unmarshal(f.Payload, &in); err != nil {
-				res.Error = &protocol.FrameError{Code: "bad_payload", Message: err.Error()}
-				_ = s.writeTo(from, res)
-				return
-			}
-		}
-		approved := s.askApproval(in.Tool, in.Arguments, in.Workspace, in.SessionID)
-		res.Payload = MarshalPayload(map[string]any{"approved": approved})
-		_ = s.writeTo(from, res)
-	default:
-		res.Error = &protocol.FrameError{
-			Code:    "method_not_found",
-			Message: fmt.Sprintf("no handler for agent.%s", f.Method),
-		}
-		_ = s.writeTo(from, res)
-	}
-}

@@ -14,11 +14,14 @@ import (
 // forwards Payload opaquely. Cap/Method remain for the receiving Plugin's own
 // dispatch — Host must not branch on domain capability names.
 type Frame struct {
-	V       int             `json:"v"`
-	ID      string          `json:"id"`
-	Type    string          `json:"type"` // req | res | evt
-	To      string          `json:"to,omitempty"`
-	Cap     string          `json:"cap,omitempty"`
+	V    int    `json:"v"`
+	ID   string `json:"id"`
+	Type string `json:"type"` // req | res | evt
+	// To is the target plugin name. Empty for evt.
+	To string `json:"to,omitempty"`
+	// Cap is the capability name. Empty for evt.
+	Cap string `json:"cap,omitempty"`
+	// Method is the method name. Empty for evt.
 	Method  string          `json:"method,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	Error   *FrameError     `json:"error,omitempty"`
@@ -37,6 +40,9 @@ func (e *FrameError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// req: request
+// res: response
+// evt: event
 const (
 	TypeReq = "req"
 	TypeRes = "res"

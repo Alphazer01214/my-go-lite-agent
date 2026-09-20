@@ -58,9 +58,8 @@ func TestSetPluginEnabledPersistsAndUnlists(t *testing.T) {
 		switchPath:  SwitchPath(dir),
 		provides:    map[string]string{},
 		degraded:    map[string]bool{},
-		pending:     map[string]*wait{},
-		gen:         map[string]int{},
-		approvals:   nil,
+		pending:    map[string]*wait{},
+		gen:        map[string]int{},
 	}
 	out, err := s.SetPluginEnabled("demo", false)
 	if err != nil {

@@ -22,8 +22,8 @@ func (w webCommandPlane) HandleOut(line string) (string, bool, error) {
 }
 func (w webCommandPlane) Complete(prefix string) []string { return w.cp.completeSlash(prefix) }
 
-// runWebAndOptionalREPL mounts Plugins, starts the Web Medium, and optionally the CLI REPL.
-func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, withREPL bool, dump *bool) error {
+// runWeb mounts Plugins and starts the Web Medium.
+func runWeb(pluginsDir, assemblyPath, addr, layoutPath string, dump *bool) error {
 	plan, cfg, err := resolveAssembly(pluginsDir, assemblyPath, dump != nil && *dump)
 	if err != nil {
 		return err
@@ -74,7 +74,6 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 
 	probeCommandFaces(srv, plan.Mounted)
 	cp := newCommandPlane(srv, pluginsDir, plan)
-	cp.web = true // /help filters CLI-only flags for the Web Medium (BUG-09)
 
 	bind := addr
 	if strings.HasPrefix(bind, ":") {
@@ -111,11 +110,5 @@ func runWebAndOptionalREPL(pluginsDir, assemblyPath, addr, layoutPath string, wi
 		os.Exit(0)
 	}()
 
-	if withREPL {
-		// Combined Web+REPL (ADR-0029): both Medium approval faces are
-		// registered — the Web face answers browser confirms, the CLI face
-		// answers the interactive prompt, and the first responder wins.
-		return runREPLLoop(srv, cp)
-	}
 	select {}
 }

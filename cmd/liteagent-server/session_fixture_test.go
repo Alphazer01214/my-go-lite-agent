@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// buildSessionPluginDir mirrors the CLI-side fixture (cmd/liteagent-cli).
+// buildSessionPluginDir builds a minimal session plugin dir for integration tests.
 func buildSessionPluginDir(t *testing.T, root, pluginsDir, name string) {
 	t.Helper()
 	bin := buildPkg(t, root, "./plugins/session")

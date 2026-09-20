@@ -40,12 +40,8 @@ type Server struct {
 	gen          map[string]int
 	cards        []PresentationCard
 	panels       []PanelOp
-	subs         []*Subscriber
-	job          *jobHolder
-	// approvals are the registered Render Medium faces for policy.ask
-	// (agent.confirm, ADR-0029). All registered faces are asked in parallel;
-	// the first responder wins the ruling. No faces deny (safe default).
-	approvals []func(tool string, arguments json.RawMessage, workspace, sessionID string) bool
+	subs  []*Subscriber
+	job   *jobHolder
 	// disabled is the user plugin-switch denylist (ADR-0032, L0 by name).
 	disabled map[string]bool
 	// switchPath is where the denylist persists (usually <pluginsDir>/.plugin-switch.json).

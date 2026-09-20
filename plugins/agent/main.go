@@ -337,21 +337,11 @@ func (a *agent) deriveMessages(sessionID string) ([]message, error) {
 	return out.Messages, nil
 }
 
+// agentRequest rebuilds Model Context from the Session Log (ADR-0002). The
+// Host agent.request special case is gone (ADR-0034), so the agent always
+// derives through session.derive itself.
 func (a *agent) agentRequest(sessionID string) ([]message, error) {
-	payload := map[string]any{}
-	if sessionID != "" {
-		payload["sessionId"] = sessionID
-	}
-	raw, err := callJSON(a.s, "agent", "request", payload)
-	if err != nil {
-		// Fall back to session.derive when agent.request is unavailable.
-		return a.deriveMessages(sessionID)
-	}
-	var out struct {
-		Messages []message `json:"messages"`
-	}
-	_ = json.Unmarshal(raw, &out)
-	return out.Messages, nil
+	return a.deriveMessages(sessionID)
 }
 
 func (a *agent) assembleSystemPrompt() string {
@@ -536,7 +526,10 @@ func (a *agent) sessionPermissionMode(sessionID string) string {
 		m = out.Meta.PermissionMode
 	}
 	switch strings.ToLower(strings.TrimSpace(m)) {
-	case "read_only", "workspace_write", "full_access":
+	case "ask", "read_only":
+		// read_only is the pre-ADR-0034 name of ask.
+		return "ask"
+	case "workspace_write", "full_access":
 		return strings.ToLower(strings.TrimSpace(m))
 	default:
 		return "workspace_write"
@@ -620,21 +613,31 @@ func (a *agent) policyProviderMounted() bool {
 	return false
 }
 
+// confirmTool is the ask fallback when no policy provider resolves ask itself:
+// it routes through the Session plugin's generic choice faces (ADR-0034).
+// Only the explicit "allow" option approves; timeout and errors deny.
 func (a *agent) confirmTool(sessionID, tool string, args json.RawMessage, workspace string) bool {
-	raw, err := callJSON(a.s, "agent", "confirm", map[string]any{
-		"tool":      tool,
-		"arguments": args,
-		"workspace": workspace,
+	payload, _ := json.Marshal(map[string]any{
+		"kind":      "tool_approval",
+		"prompt":    "allow tool " + tool + "?",
+		"options":   []map[string]any{{"value": "allow", "label": "Allow"}, {"value": "deny", "label": "Deny", "danger": true}},
 		"sessionId": sessionID,
+		"meta": map[string]any{
+			"tool":      tool,
+			"arguments": args,
+			"workspace": workspace,
+		},
+		"timeoutMs": 20000,
 	})
+	raw, err := a.s.CallTo("session", "choice", "ask", payload)
 	if err != nil {
 		return false
 	}
 	var out struct {
-		Approved bool `json:"approved"`
+		Value string `json:"value"`
 	}
 	_ = json.Unmarshal(raw, &out)
-	return out.Approved
+	return out.Value == "allow"
 }
 
 func (a *agent) expandSkillTriggers(sessionID, workspace, input string) string {
@@ -1421,11 +1424,11 @@ func (a *agent) runTurn(sessionID, userInput string, allowSubagent bool, extraSy
 								} else if childRes != nil {
 									text = childRes.Assistant
 								}
-								_, _ = callJSON(a.s, "agent", "inject", map[string]any{
-									"sessionId": parent,
-									"role":      "system",
-									"content":   "Async subagent " + childID + " finished:\n" + text,
-								})
+								_ = a.appendOne(parent, map[string]any{
+								"type":    "message",
+								"role":    "system",
+								"content": "Async subagent " + childID + " finished:\n" + text,
+							})
 							}(childID, input, in.SystemPrompt, sessionID)
 							subagentUsed++
 							resultContent = "async subagent started: " + childID + " (result will be injected when ready)"

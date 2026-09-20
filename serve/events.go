@@ -1,13 +1,9 @@
 package serve
 
-import (
-	"encoding/json"
-	"reflect"
-)
-
-// Event is one fan-out payload for every Render Medium (CLI, Web, …).
+// Event is one fan-out payload for every Render Medium (Web, …).
+// Topics: presentation | status | stream | panel | evt (generic plugin relay).
 type Event struct {
-	Topic string // presentation | status | stream | panel
+	Topic string
 	Data  any
 }
 
@@ -32,51 +28,6 @@ func (s *Server) Subscribe(sub *Subscriber) (unsubscribe func()) {
 		}
 		s.subs = out
 	}
-}
-
-// RegisterApproval registers a Render Medium face for policy.ask approvals
-// (ADR-0029). Multiple faces may be registered concurrently — CLI prompt and
-// Web SSE never overwrite each other. Returns unsubscribe.
-func RegisterApproval(s *Server, fn func(tool string, arguments json.RawMessage, workspace, sessionID string) bool) func() {
-	return s.registerApproval(fn)
-}
-
-func (s *Server) registerApproval(fn func(tool string, arguments json.RawMessage, workspace, sessionID string) bool) func() {
-	s.mu.Lock()
-	s.approvals = append(s.approvals, fn)
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		out := s.approvals[:0]
-		for _, x := range s.approvals {
-			if x != nil && reflect.ValueOf(x).Pointer() != reflect.ValueOf(fn).Pointer() {
-				out = append(out, x)
-			}
-		}
-		s.approvals = out
-	}
-}
-
-// askApproval asks every registered approval face in parallel; the first
-// responder wins (ADR-0029). No faces or all-denies → deny (safe default).
-func (s *Server) askApproval(tool string, arguments json.RawMessage, workspace, sessionID string) bool {
-	s.mu.Lock()
-	fns := append([]func(string, json.RawMessage, string, string) bool(nil), s.approvals...)
-	s.mu.Unlock()
-	if len(fns) == 0 {
-		return false
-	}
-	if len(fns) == 1 {
-		return fns[0](tool, arguments, workspace, sessionID)
-	}
-	ch := make(chan bool, len(fns))
-	for _, fn := range fns {
-		go func(f func(string, json.RawMessage, string, string) bool) {
-			ch <- f(tool, arguments, workspace, sessionID)
-		}(fn)
-	}
-	return <-ch
 }
 
 func (s *Server) publish(e Event) {

@@ -15,7 +15,7 @@
 
 ## Session Permission Mode（ADR-0033）
 
-Session 元数据 `permissionMode`（`read_only` | `workspace_write` | `full_access`，默认 `workspace_write`）由 agent 传入 decide。
+Session 元数据 `permissionMode`（`ask` | `workspace_write` | `full_access`，默认 `workspace_write`；旧值 `read_only` 兼容映射为 `ask`，ADR-0034）由 agent 传入 decide。
 
 **裁决序：**
 
@@ -24,7 +24,7 @@ Session 元数据 `permissionMode`（`read_only` | `workspace_write` | `full_acc
 
 | mode | low | medium | high |
 |------|-----|--------|------|
-| `read_only` | allow | deny | deny |
+| `ask` | allow | ask | ask |
 | `workspace_write` | allow | path∈Workspace→allow，否则 deny | ask |
 | `full_access` | severityPolicy / defaultAction | 同左 | 同左 |
 

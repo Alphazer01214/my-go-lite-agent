@@ -228,7 +228,6 @@ install_plugin_dir() {
 
 if [[ $LIST -eq 1 ]]; then
   echo "Shipped targets:"
-  echo "  liteagent-cli"
   echo "  liteagent-server"
   for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
     tag="assets-only"
@@ -244,7 +243,6 @@ fi
 # ── main binaries ────────────────────────────────────────────────────────────
 pushd "$ROOT" >/dev/null
 
-build_pkg "liteagent-cli"    "./cmd/liteagent-cli"    "$DIST/liteagent-cli"
 build_pkg "liteagent-server" "./cmd/liteagent-server" "$DIST/liteagent-server"
 
 # ── plugins ──────────────────────────────────────────────────────────────────

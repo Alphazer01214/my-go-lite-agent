@@ -864,7 +864,7 @@ class SessionView extends HTMLElement {
     this._offs.push(LiteAgent.on('status', d => this.onStatusEvent(d)));
     this._offs.push(LiteAgent.on('session', d => this.onSessionFact(d)));
     this._offs.push(LiteAgent.on('__notice', d => this.onNotice(d)));
-    this._offs.push(LiteAgent.on('tool_approval', d => this.onToolApproval(d)));
+    this._offs.push(LiteAgent.on('evt', d => this.onPluginEvt(d)));
     // Announcement-driven, never onSessionChange: that fires immediately with
     // the Host's Current Session and would load history at boot (the Shell opens
     // on the new-session face by design).
@@ -872,96 +872,124 @@ class SessionView extends HTMLElement {
     this._offs.push(LiteAgent.on('__new', () => this.showWelcome()));
     this.showWelcome();
   }
-  async onToolApproval(d) {
+  // Generic plugin evt relay (ADR-0034): session choice ask/resolved ride
+  // topic "evt" as {cap:"choice", method, payload}.
+  onPluginEvt(d) {
+    if (!d || d.cap !== 'choice') return;
+    if (d.method === 'ask') this.onChoice(d.payload || {});
+    else if (d.method === 'resolved') this.onChoiceResolved(d.payload || {});
+  }
+  async onChoice(d) {
     if (!d || !d.id) return;
-    // Other Session: rail badge only — never auto-approve (ADR-0029 first-wins).
+    // Other Session: rail badge only — never answer for it (first-wins).
     if (this._sid && d.sessionId && !this.isCurrent(d.sessionId)) {
+      if (d.kind !== 'tool_approval') return;
       const sid = d.sessionId || 'default';
       this._pendingOther.set(sid, (this._pendingOther.get(sid) || 0) + 1);
       if (!window.__liteApprovalPending) window.__liteApprovalPending = {};
       window.__liteApprovalPending[sid] = (window.__liteApprovalPending[sid] || 0) + 1;
-      try { LiteAgent.emit('__approval_pending', { sessionId: sid, tool: d.tool }); } catch (e) {}
+      try { LiteAgent.emit('__approval_pending', { sessionId: sid, tool: (d.meta && d.meta.tool) || '' }); } catch (e) {}
       return;
     }
     // Welcome face / no current session yet: still show the card in this view.
-    this.queueOr(() => this.renderApprovalCard(d));
+    this.queueOr(() => this.renderChoiceCard(d));
   }
 
-  renderApprovalCard(d) {
+  onChoiceResolved(d) {
+    if (!d || !d.id) return;
     const flow = this._flow();
     if (!flow) return;
+    const card = flow.querySelector('[data-choice-id="' + d.id + '"]');
+    if (!card || card.classList.contains('done-allow') || card.classList.contains('done-deny')) return;
+    const timedOut = d.reason === 'timeout';
+    card.classList.add(timedOut || !d.value ? 'done-deny' : 'done-allow');
+    const st = card.querySelector('.st');
+    if (st) st.textContent = timedOut ? '超时 · 已按拒绝处理' : '已处理';
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  }
+
+  renderChoiceCard(d) {
+    const flow = this._flow();
+    if (!flow) return;
+    const meta = d.meta || {};
+    const isApproval = d.kind === 'tool_approval';
     const card = document.createElement('div');
     card.className = 'appr-card';
-    card.dataset.apprId = d.id;
+    card.dataset.choiceId = d.id;
     const title = document.createElement('div');
     title.className = 'appr-title';
-    title.textContent = '工具确认 · ' + (d.tool || '(unknown tool)');
-    const meta = document.createElement('div');
-    meta.className = 'appr-meta';
-    meta.textContent = 'session=' + (d.sessionId || 'default') +
-      (d.workspace ? '  ws=' + d.workspace : '') +
+    title.textContent = isApproval ? ('工具确认 · ' + (meta.tool || '(unknown tool)')) : ('选择 · ' + (d.kind || 'question'));
+    const info = document.createElement('div');
+    info.className = 'appr-meta';
+    info.textContent = 'session=' + (d.sessionId || 'default') +
+      (meta.workspace ? '  ws=' + meta.workspace : '') +
       '  id=' + d.id;
-    const pre = document.createElement('pre');
-    let argsText = '';
-    try {
-      argsText = typeof d.arguments === 'string' ? d.arguments : JSON.stringify(d.arguments || {}, null, 2);
-    } catch (e) { argsText = String(d.arguments || ''); }
-    pre.textContent = (argsText || '{}').slice(0, 2000);
+    if (d.prompt) {
+      const prompt = document.createElement('div');
+      prompt.className = 'appr-meta';
+      prompt.textContent = d.prompt;
+      card.appendChild(prompt);
+    }
+    let detailText = '';
+    if (isApproval) {
+      try {
+        detailText = typeof meta.arguments === 'string' ? meta.arguments : JSON.stringify(meta.arguments || {}, null, 2);
+      } catch (e) { detailText = String(meta.arguments || ''); }
+    } else if (meta && Object.keys(meta).length) {
+      try { detailText = JSON.stringify(meta, null, 2); } catch (e) { /* opaque meta stays hidden */ }
+    }
+    if (detailText) {
+      const pre = document.createElement('pre');
+      pre.textContent = detailText.slice(0, 2000);
+      card.appendChild(pre);
+    }
     const actions = document.createElement('div');
     actions.className = 'appr-actions';
     const st = document.createElement('span');
     st.className = 'st';
-    const deadline = Date.now() + 20000;
+    const deadline = Date.now() + (d.timeoutMs || 20000);
     const tick = () => {
       const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       if (card.classList.contains('done-allow') || card.classList.contains('done-deny')) return;
       if (left <= 0) {
-        st.textContent = '超时 · Host 将拒绝';
+        st.textContent = isApproval ? '超时 · Host 将拒绝' : '超时 · 已关闭';
         return;
       }
-      st.textContent = left + 's 内确认（超时按拒绝）';
+      st.textContent = isApproval ? (left + 's 内确认（超时按拒绝）') : (left + 's 内选择');
     };
     tick();
     const timer = setInterval(tick, 1000);
-    const btnOk = document.createElement('button');
-    btnOk.type = 'button';
-    btnOk.className = 'ok';
-    btnOk.textContent = '允许';
-    const btnNo = document.createElement('button');
-    btnNo.type = 'button';
-    btnNo.className = 'no';
-    btnNo.textContent = '拒绝';
-    const reply = async (approved) => {
+    const reply = async (op) => {
       clearInterval(timer);
-      btnOk.disabled = true;
-      btnNo.disabled = true;
-      card.classList.add(approved ? 'done-allow' : 'done-deny');
-      st.textContent = approved ? '已允许' : '已拒绝';
-      this.appendPre((approved ? 'allowed ' : 'denied ') + (d.tool || ''), approved ? 'message' : 'message error');
+      card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      const ok = isApproval ? op.value === 'allow' : !op.danger;
+      card.classList.add(ok ? 'done-allow' : 'done-deny');
+      st.textContent = '已选择 · ' + (op.label || op.value);
+      if (isApproval) {
+        this.appendPre((op.value === 'allow' ? 'allowed ' : 'denied ') + (meta.tool || ''), ok ? 'message' : 'message error');
+      }
       try {
-        const res = await fetch('/api/tool-approval', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: d.id, approved: approved })
-        });
-        const body = await res.json().catch(() => ({}));
+        const body = await LiteAgent.callCap('session', 'choice', 'respond', { id: d.id, value: op.value });
         if (body && body.ok === false) {
-          st.textContent = 'Host 已决/超时 · ' + (body.error || '');
+          st.textContent = '已决/超时 · ' + (body.error || '');
           card.classList.add('done-deny');
         }
       } catch (e) {
-        st.textContent = '应答失败 · Host 超时将拒绝';
+        st.textContent = '应答失败 · 超时将按拒绝处理';
         card.classList.add('done-deny');
       }
     };
-    btnOk.onclick = () => reply(true);
-    btnNo.onclick = () => reply(false);
-    actions.appendChild(btnOk);
-    actions.appendChild(btnNo);
+    (d.options || []).forEach(op => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = (isApproval ? op.value !== 'allow' : op.danger) ? 'no' : 'ok';
+      btn.textContent = op.label || op.value;
+      btn.onclick = () => reply(op);
+      actions.appendChild(btn);
+    });
     actions.appendChild(st);
     card.appendChild(title);
-    card.appendChild(meta);
-    card.appendChild(pre);
+    card.appendChild(info);
     card.appendChild(actions);
     flow.appendChild(card);
     flow.scrollTop = flow.scrollHeight;
@@ -1354,7 +1382,7 @@ class SessionView extends HTMLElement {
     const pchips = document.createElement('div');
     pchips.className = 'w-chips';
     const modes = [
-      { id: 'read_only', label: '只读 read_only' },
+      { id: 'ask', label: '逐次询问 ask' },
       { id: 'workspace_write', label: '工作区可写 workspace_write' },
       { id: 'full_access', label: '完全访问 full_access' }
     ];
@@ -1370,7 +1398,7 @@ class SessionView extends HTMLElement {
     permRow.appendChild(pchips);
     const phint = document.createElement('div');
     phint.className = 'w-hint';
-    phint.textContent = 'read_only：未命中规则的写/shell 拒绝 · workspace_write：工作区内写放行、shell 需确认 · full_access：按 severityPolicy。显式 permissions.json 规则可放宽模式。';
+    phint.textContent = 'ask：未命中规则的写/shell 弹卡逐次确认 · workspace_write：工作区内写放行、shell 需确认 · full_access：按 severityPolicy。显式 permissions.json 规则可放宽模式。';
     permRow.appendChild(phint);
     card.appendChild(permRow);
 
@@ -1390,7 +1418,7 @@ class SessionView extends HTMLElement {
     lab.className = 'f-label';
     lab.textContent = '权限';
     const sel = document.createElement('select');
-    [['read_only', '只读'], ['workspace_write', '工作区可写'], ['full_access', '完全访问']].forEach(([v, t]) => {
+    [['ask', '逐次询问'], ['workspace_write', '工作区可写'], ['full_access', '完全访问']].forEach(([v, t]) => {
       const o = document.createElement('option');
       o.value = v; o.textContent = t + ' (' + v + ')';
       if (v === this._permMode) o.selected = true;

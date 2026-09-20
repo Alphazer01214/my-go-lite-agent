@@ -216,13 +216,13 @@ func modeProfile(mode, severity, path, workspace string) (string, string) {
 		sev = "low"
 	}
 	switch mode {
-	case "read_only":
-		switch sev {
-		case "low":
-			return "allow", "mode=read_only severity=low -> allow"
-		default:
-			return "deny", "mode=read_only severity=" + sev + " -> deny"
+	case "ask", "read_only":
+		// read_only is the pre-ADR-0034 name (ADR-0034 renamed it to ask and
+		// turned medium/high from deny into an interactive choice round-trip).
+		if sev == "low" {
+			return "allow", "mode=ask severity=low -> allow"
 		}
+		return "ask", "mode=ask severity=" + sev + " -> ask"
 	case "workspace_write":
 		switch sev {
 		case "low":
@@ -266,24 +266,33 @@ func globalRulesPath() string {
 	return filepath.Join(exeConfigDir(), "permissions.json")
 }
 
-// confirmViaHost asks the Render Medium through Host agent.confirm.
-// Returns true only when the medium approved. Missing host/hook → deny.
-func confirmViaHost(s *pluginsdk.Server, tool string, args json.RawMessage, workspace, sessionID string) bool {
+// askSessionChoice hands a policy.ask ruling to the Session plugin's generic
+// choice faces (ADR-0034): sandbox blocks in choice.ask while the Session
+// Medium renders the question and answers via choice.respond. Only the
+// explicit "allow" option approves — timeout, error, and any other value deny
+// (fail-closed).
+func askSessionChoice(s *pluginsdk.Server, tool string, args json.RawMessage, workspace, sessionID string) bool {
 	payload, _ := json.Marshal(map[string]any{
-		"tool":      tool,
-		"arguments": args,
-		"workspace": workspace,
+		"kind":      "tool_approval",
+		"prompt":    "allow tool " + tool + "?",
+		"options":   []map[string]any{{"value": "allow", "label": "Allow"}, {"value": "deny", "label": "Deny", "danger": true}},
 		"sessionId": sessionID,
+		"meta": map[string]any{
+			"tool":      tool,
+			"arguments": args,
+			"workspace": workspace,
+		},
+		"timeoutMs": 20000,
 	})
-	raw, err := s.CallTo("agent", "agent", "confirm", payload)
+	raw, err := s.CallTo("session", "choice", "ask", payload)
 	if err != nil {
 		return false
 	}
 	var out struct {
-		Approved bool `json:"approved"`
+		Value string `json:"value"`
 	}
 	_ = json.Unmarshal(raw, &out)
-	return out.Approved
+	return out.Value == "allow"
 }
 
 func loadGlobalRules() RulesFile {
@@ -404,7 +413,7 @@ func handleConfigCap(method string, payload json.RawMessage) (json.RawMessage, e
 func main() {
 	s := pluginsdk.New()
 	// policy.decide: resolve action; on ask, this plugin owns the Medium
-	// round-trip via Host agent.confirm (sandbox → Host → CLI/Web), then
+	// round-trip via the Session plugin's choice faces (ADR-0034), then
 	// returns the final allow|deny. Agent must not re-confirm.
 	s.Handle("policy", "decide", func(req *pluginsdk.Request) (json.RawMessage, error) {
 		var in struct {
@@ -433,7 +442,7 @@ func main() {
 		action, reason := decide(in.Tool, in.Arguments, in.Workspace, in.Severity, mode)
 		approved := false
 		if action == "ask" {
-			approved = confirmViaHost(s, in.Tool, in.Arguments, in.Workspace, in.SessionID)
+			approved = askSessionChoice(s, in.Tool, in.Arguments, in.Workspace, in.SessionID)
 			if approved {
 				action = "allow"
 				reason = "user approved; " + reason
