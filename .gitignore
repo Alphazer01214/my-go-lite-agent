@@ -15,4 +15,4 @@ plugins/**/config.json
 .workbuddy/
 .claude/
 .zcode/
-.legacy/
+#.legacy/
