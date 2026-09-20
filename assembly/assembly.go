@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/tomori/my-go-lite-agent/discovery"
+	"github.com/tomori/my-go-lite-agent/internal/discovery"
 )
 
 // Config is the user-facing Assembly file (JSON).

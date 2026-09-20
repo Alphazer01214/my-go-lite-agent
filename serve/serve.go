@@ -40,8 +40,8 @@ type Server struct {
 	gen          map[string]int
 	cards        []PresentationCard
 	panels       []PanelOp
-	subs  []*Subscriber
-	job   *jobHolder
+	subs         []*Subscriber
+	job          *jobHolder
 	// disabled is the user plugin-switch denylist (ADR-0032, L0 by name).
 	disabled map[string]bool
 	// switchPath is where the denylist persists (usually <pluginsDir>/.plugin-switch.json).

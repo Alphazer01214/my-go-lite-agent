@@ -21,6 +21,29 @@
 - `host_faces` host 提供的挂载点，作用类似能力，例如 `commands` 表示需要 host 提供命令， `config` 表示需要 host 提供配置入口。
 - `webui` 见示例
 
+## WebUI Config
+
+### WebUI
+- `entry` UI入口，例如 `main.js`
+- `assets` 数组，包括css html
+- `mounts`
+- `pages`
+
+### Mount
+- `page` 装载页面名
+- `slot` 装载位置, 包括 left, right, top, bottom, center
+- `component` element 标签名
+- `property` json
+
+### Page
+- `title`
+- `slug`
+- `path` 路由路径
+- `slots` slot 数组
+
+### Slot
+
+
 ## 示例
 `agent/plugin.json`
 ```json

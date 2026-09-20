@@ -8,9 +8,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/tomori/my-go-lite-agent/internal/layout"
+
+	"github.com/tomori/my-go-lite-agent/internal/web"
+
 	"github.com/tomori/my-go-lite-agent/assembly"
-	"github.com/tomori/my-go-lite-agent/layout"
-	"github.com/tomori/my-go-lite-agent/web"
 )
 
 type webCommandPlane struct {
