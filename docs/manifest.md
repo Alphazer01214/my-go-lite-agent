@@ -45,7 +45,7 @@
     "llm"
   ],
   "entry": "agent.exe",
-  "timeoutMs": 180000,
+  "timeout_ms": 180000,
   "description": "Default Agent Plugin: composes llm/session/tools via the star (ADR-0016)",
   "commands": [
     {
