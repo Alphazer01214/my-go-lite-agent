@@ -54,10 +54,18 @@ Host 挂到该 pending 调用的 wait.events，不广播
 2. ForwardID 表示 **Host转发的ID或目标插件回复的ID**，格式为 `fwd-xxx`
 
 在 Host 中维护了 id-wait 的 pending map 实现回调处理 
+
 ### 消息传输过程
-一次传输需要进行完整的检查。host 层面包括：
-- 插件是否存在
-- 是否被禁用
+一次传输需要进行完整的检查。
+
+#### req
+- is host closed
+- is cap == host?
+- is target == from?
+- is target plugin mounted? disabled? 
+
+#### res
+
 
 ### 格式
 - 4byte 消息长度

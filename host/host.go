@@ -62,7 +62,8 @@ type wait struct {
 	// frameID is the caller's frame id
 	frameID string
 	// kind
-	kind WaitKind
+	kind   WaitKind
+	events []*Frame
 
 	capability string
 	method     string

@@ -134,7 +134,18 @@ func (h *Host) handleResponse(frame *Frame) error {
 	return nil
 }
 
+// handleEvent only accept EVENT with frame.ID = "plugin-xxx"
 func (h *Host) handleEvent(from string, frame *Frame) error {
+	// TODO: broadcast to all plugins that have declared the capability
+	h.mu.Lock()
+	wt, ok := h.pending[frame.ID]
+	if !ok {
+		h.mu.Unlock()
+		return nil
+	}
+	// TODO: handle the stream (callback) event
+	wt.events = append(wt.events, frame)
+	h.mu.Unlock()
 	return nil
 }
 
