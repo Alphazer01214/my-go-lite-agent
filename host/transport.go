@@ -3,7 +3,6 @@ package host
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -24,14 +23,13 @@ type Frame struct {
 	Method string `json:"method,omitempty"`
 	// Payload is the payload of the frame.
 	Payload json.RawMessage `json:"payload,omitempty"`
-	// Err is the structured error carried on a res frame.
-	Err *FrameError `json:"err,omitempty"`
+	// ErrorMsg is the error message.
+	ErrorMsg string `json:"error_msg,omitempty"`
 }
 
-// FrameError is the structured error on a res frame. It implements error.
-type FrameError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+type CallResult struct {
+	Frame  *Frame
+	Events []*Frame
 }
 
 func (e *FrameError) Error() string {
@@ -44,32 +42,7 @@ func (e *FrameError) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// Is reports whether target is a *FrameError with the same Code.
-func (e *FrameError) Is(target error) bool {
-	if e == nil {
-		return target == nil
-	}
-	t, ok := target.(*FrameError)
-	return ok && t != nil && t.Code == e.Code
-}
-
-// Errorf builds a *FrameError with wire code and formatted message.
-func Errorf(code, format string, args ...any) *FrameError {
-	return &FrameError{Code: code, Message: fmt.Sprintf(format, args...)}
-}
-
-// AsFrameError unwraps err to *FrameError when possible.
-func AsFrameError(err error) (*FrameError, bool) {
-	if err == nil {
-		return nil, false
-	}
-	var fe *FrameError
-	if errors.As(err, &fe) {
-		return fe, true
-	}
-	return nil, false
-}
-
+// WriteFrame writes a Frame to the given writer, prefixing it with its length.
 func WriteFrame(w io.Writer, f *Frame) error {
 	data, err := json.Marshal(f)
 	if err != nil {
@@ -90,6 +63,7 @@ func WriteFrame(w io.Writer, f *Frame) error {
 	return nil
 }
 
+// ReadFrame reads a Frame from the given reader, expecting a length-prefixed JSON body.
 func ReadFrame(r io.Reader) (*Frame, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
@@ -110,7 +84,21 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	return &frame, nil
 }
 
-func (h *Host) routeRequest(from string, frame *Frame) error {
+func (h *Host) route(from string, frame *Frame) error {
+	switch frame.Type {
+	case FrameRequest:
+		return h.handleRequest(from, frame)
+	case FrameResponse:
+		return h.handleResponse(frame)
+	case FrameEvent:
+		return h.handleEvent(from, frame)
+	default:
+		return fmt.Errorf("unknown frame type")
+	}
+}
+
+// handleRequest only accept req with frame.ID = "plugin-xxx"
+func (h *Host) handleRequest(from string, frame *Frame) error {
 	if frame.To == HostCapability || frame.Capability == HostCapability {
 		// TODO: host.* method dispatch
 		return Errorf(CodeMethodNotFound, "no handler for host.%s", frame.Method)
@@ -124,14 +112,55 @@ func (h *Host) routeRequest(from string, frame *Frame) error {
 	return h.forward(from, frame.To, frame)
 }
 
+// handleResponse only accept res with frame.ID = "fwd-xxx"
+func (h *Host) handleResponse(frame *Frame) error {
+	h.mu.Lock()
+	wt, ok := h.pending[frame.ID]
+	if !ok {
+		h.mu.Unlock()
+		return fmt.Errorf("response for unknown frame: %s", frame.ID)
+	}
+	delete(h.pending, frame.ID)
+	h.mu.Unlock()
+	// TODO host
+
+	// if is plugin.
+	res := *frame
+	res.ID = wt.frameID
+	if err := h.write(wt.caller, &res); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *Host) handleEvent(from string, frame *Frame) error {
+	return nil
+}
+
+// replyError sends the error to the **caller** by write
+func (h *Host) replyError(caller string, originalID string, capability string,
+	method string, message string) {
+	_ = h.write(caller, &Frame{
+		ID:         originalID,
+		Capability: capability,
+		Method:     method,
+		ErrorMsg:   message,
+	})
+}
+
+// forward sends a req frame from one plugin to another, and waits for the response.
+// Only called when the endpoint is a plugin (not itself, not host)
 func (h *Host) forward(from string, to string, frame *Frame) error {
 	if err := h.alive(to); err != nil {
 		return err
 	}
 
 	h.mu.Lock()
+	// Here handles the frame original plugin(from) sent
+	// the frame is turned into a wait in pending, with the **fwd** key
+	// the fwd key (fwd-xxxxxx) marks the frame is waiting for a response
 	h.seq++
-	forwardID := ForwardIDPrefix + fmt.Sprintf("%d", h.seq)
 	wt := &wait{
 		kind:       WaitPlugin,
 		caller:     from,
@@ -141,6 +170,8 @@ func (h *Host) forward(from string, to string, frame *Frame) error {
 		method:     frame.Method,
 		payload:    append(json.RawMessage(nil), frame.Payload...),
 	}
+	// pending[fwd-xxx] = wait{plugin-xxx}
+	forwardID := fmt.Sprintf("fwd-%d", h.seq)
 	h.pending[forwardID] = wt
 	p := h.plugins[to]
 	h.mu.Unlock()
@@ -152,15 +183,22 @@ func (h *Host) forward(from string, to string, frame *Frame) error {
 		return Errorf(CodePluginNotMounted, "plugin %s not mounted", to)
 	}
 
-	out := *frame
-	out.ID = forwardID
-	out.To = to
-	if err := h.write(out); err != nil {
+	// Here the frame is forwarded, with the fwd-xxx
+	forwardFrame := *frame
+	forwardFrame.ID = forwardID
+	forwardFrame.To = frame.To
+
+	if err := h.write(to, &forwardFrame); err != nil {
 		h.mu.Lock()
 		delete(h.pending, forwardID)
 		h.mu.Unlock()
 		return err
 	}
+	return nil
+
+}
+
+func (h *Host) broadcast(from string, frame *Frame) error {
 	return nil
 }
 

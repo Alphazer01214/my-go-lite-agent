@@ -1,6 +1,9 @@
 package host
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // 错误一律以 error 表达：
 //   - 线格式用 Code*（写入 Frame.Err.Code）
@@ -245,3 +248,10 @@ const (
 	PluginStateDisabled  = "disabled"
 	PluginStateMissing   = "missing"
 )
+
+func Errorf(code string, format string, args ...interface{}) *FrameError {
+	return &FrameError{
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+	}
+}

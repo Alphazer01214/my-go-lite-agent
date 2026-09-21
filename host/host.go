@@ -3,6 +3,7 @@ package host
 // host/host.go 处理主要的插件服务逻辑
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os/exec"
 	"sync"
@@ -18,12 +19,15 @@ type Host struct {
 	// plugin name -> proc
 	plugins map[string]*proc
 	// pending wait map
-	// plugin name -> wait
+	// plugin id -> wait
+	// id is the forward id (fwd-xxxxxx) or host call id (host-xxxxxx)
 	pending map[string]*wait
 	// provides the capability of the host to the plugins
 	// register: <provide capability>-<plugin name>
 	// must unique
 	provides map[string]string
+	// disabled plugin name -> true
+	disabled map[string]bool
 	// discoveries is the result of scanning the pluginDir for binaries
 	// including their manifests,
 	discoveries plugin.Discoveries
@@ -32,6 +36,9 @@ type Host struct {
 	seq int
 
 	mountedUI map[string]bool
+
+	// hlog is the host log CALLBACK function
+	hlog func(message string)
 }
 
 type proc struct {
@@ -62,9 +69,6 @@ type wait struct {
 	payload    json.RawMessage
 }
 
-type pluginProc struct {
-}
-
 func (h *Host) SetPluginDir(dir string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -75,6 +79,41 @@ func (h *Host) SetDiscoveries(discoveries plugin.Discoveries) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.discoveries = discoveries
+}
+
+func (h *Host) SetLogFunc(logFunc func(message string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.hlog = logFunc
+}
+
+func (h *Host) GetMountedPlugins() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var mounted []string
+	for name := range h.plugins {
+		mounted = append(mounted, name)
+	}
+	return mounted
+}
+
+func (h *Host) mountPlugin(dis plugin.Discovery) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	manifest := dis.Manifest
+	if _, ok := h.plugins[manifest.Name]; ok {
+		return fmt.Errorf("plugin %v has been mounted", manifest.Name)
+	}
+	for _, capability := range manifest.Provides {
+		if existing, ok := h.provides[capability]; ok {
+			return fmt.Errorf("capability %v is already provided by plugin %v", capability, existing)
+		}
+	}
+	return nil
+}
+
+func (h *Host) mountUI() error {
+	return nil
 }
 
 // alive reports whether the named plugin is mounted and healthy.
@@ -90,4 +129,33 @@ func (h *Host) alive(name string) error {
 		return Errorf(CodePluginDown, "plugin %s is not healthy", name)
 	}
 	return nil
+}
+
+func Run(discoveries plugin.Discoveries) (*Host, error) {
+	h := &Host{
+		plugins:     make(map[string]*proc),
+		pending:     make(map[string]*wait),
+		provides:    make(map[string]string),
+		discoveries: discoveries,
+		disabled:    make(map[string]bool),
+		mountedUI:   make(map[string]bool),
+		hlog:        defaultLogFunc,
+	}
+
+	plugins := discoveries.Plugins
+	// TODO 试图加载所有插件（无论冲突），然后在完毕后列出冲突警告
+	for _, p := range plugins {
+		if err := h.mountPlugin(p); err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
+}
+
+func refresh() {
+
+}
+
+func defaultLogFunc(message string) {
+	fmt.Println(message)
 }
