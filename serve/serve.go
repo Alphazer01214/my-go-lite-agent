@@ -34,14 +34,15 @@ type Server struct {
 	degraded map[string]bool
 	// reconcileGen counts full registry re-evaluations (observability, /api/plugins).
 	reconcileGen int
-	pending      map[string]*wait
-	closed       bool
-	seq          int
-	gen          map[string]int
-	cards        []PresentationCard
-	panels       []PanelOp
-	subs         []*Subscriber
-	job          *jobHolder
+	// pending forward-id -> wait
+	pending map[string]*wait
+	closed  bool
+	seq     int
+	gen     map[string]int
+	cards   []PresentationCard
+	panels  []PanelOp
+	subs    []*Subscriber
+	job     *jobHolder
 	// disabled is the user plugin-switch denylist (ADR-0032, L0 by name).
 	disabled map[string]bool
 	// switchPath is where the denylist persists (usually <pluginsDir>/.plugin-switch.json).

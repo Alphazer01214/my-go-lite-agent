@@ -1,6 +1,7 @@
 package host
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
@@ -8,31 +9,37 @@ import (
 
 // register.go 注册插件
 
-// register registers the MOUNTED plugins
+// register registers the MOUNTED plugins' provides into the host registry.
 func (h *Host) register(scans []plugin.Discovery) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	var errs []error
 	for _, scan := range scans {
 		manifest := scan.Manifest
 		if err := h.registerProvides(manifest); err != nil {
-			errs = append(errs, fmt.Errorf("can't register plugin %v: %w", manifest.Name, err))
+			errs = append(errs, fmt.Errorf("register plugin %s: %w", manifest.Name, err))
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("register plugins failed: %w", errs)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (h *Host) registerProvides(manifest plugin.Manifest) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for _, provide := range manifest.Provides {
-		h.mu.Lock()
-		if plg, ok := h.provides[provide]; ok && plg != manifest.Name {
-			return fmt.Errorf("plugin %v wants to register capability %v, but it is already provided by %v", manifest.Name, provide, plg)
+		// tools 允许多属主：只登记第一个，路由不查这张表。
+		if provide == ToolsCapability {
+			if _, ok := h.provides[provide]; !ok {
+				h.provides[provide] = manifest.Name
+			}
+			continue
+		}
+		if owner, ok := h.provides[provide]; ok && owner != manifest.Name {
+			return Errorf(
+				CodeCapabilityConflict,
+				"plugin %s wants to provide %s, already provided by %s",
+				manifest.Name, provide, owner,
+			)
 		}
 		h.provides[provide] = manifest.Name
-		h.mu.Unlock()
 	}
 	return nil
 }

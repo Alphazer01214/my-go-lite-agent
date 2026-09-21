@@ -28,6 +28,8 @@ type Host struct {
 	// including their manifests,
 	discoveries plugin.Discoveries
 	pluginsDir  string
+	// seq
+	seq int
 
 	mountedUI map[string]bool
 }
@@ -52,6 +54,8 @@ type wait struct {
 	target string
 	// frameID is the caller's frame id
 	frameID string
+	// kind
+	kind WaitKind
 
 	capability string
 	method     string
@@ -71,4 +75,19 @@ func (h *Host) SetDiscoveries(discoveries plugin.Discoveries) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.discoveries = discoveries
+}
+
+// alive reports whether the named plugin is mounted and healthy.
+// nil means alive; otherwise a *FrameError implementing error.
+func (h *Host) alive(name string) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	plg, ok := h.plugins[name]
+	if !ok || plg == nil {
+		return Errorf(CodePluginNotMounted, "plugin %s not mounted", name)
+	}
+	if !plg.healthy {
+		return Errorf(CodePluginDown, "plugin %s is not healthy", name)
+	}
+	return nil
 }
