@@ -35,6 +35,7 @@ type Host struct {
 	// seq
 	seq    int
 	closed bool
+	gen    map[string]int
 
 	mountedUI map[string]bool
 
@@ -50,6 +51,7 @@ type proc struct {
 	// stdin is the ONLY way to write Frame into the pipeline
 	// then read from stdout(always occupied)
 	stdin   io.Writer
+	gen     int
 	mu      sync.Mutex
 	healthy bool
 	timeout time.Duration
@@ -130,6 +132,7 @@ func Run(discoveries plugin.Discoveries) (*Host, error) {
 		discoveries: discoveries,
 		disabled:    make(map[string]bool),
 		mountedUI:   make(map[string]bool),
+		gen:         make(map[string]int),
 		hlog:        defaultLogFunc,
 	}
 

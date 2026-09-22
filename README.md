@@ -8,7 +8,7 @@
    ▼
 ┌──────────── Host（L0 薄内核）─────────┐
 │  Discovery · Assembly · 生命周期       │
-│  按插件名转发（Frame To + 不透明载荷） │
+│  按 (capability, method) 转发（不透明载荷） │
 │  通用事件/应答 · hostFaces · ensure    │
 └───┬──────────┬──────────┬──────────┬──┘
     │          │          │          │
@@ -34,7 +34,7 @@ Host 不认识能力名，不解析领域 payload；会话、回合、工具编�
 
 - 进程外插件（stdin/stdout JSON Frame），崩溃隔离
 - **Autostart + dependsOn**：Manifest 根集 + 依赖闭包；不再依赖日常 Assembly 白名单（ADR-0021）
-- **L0 转发**：Host 按插件名寻址（Frame `to` + 不透明 payload），不按能力名分支（ADR-0030）
+- **L0 转发**：Host 按 `(capability, method)` 路由到唯一属主，payload 不透明；插件名仅供日志/依赖图（见 [docs/protocol.md](docs/protocol.md)）
 - Session Log 不变量 + Agent 插件（提供 `loop`，自行组合 llm/session/tools）
 - **Agent Scheme**：`chat` / `tool_calling` / `coding`（config 可自定义）；`dependsPlugins` + `allowedTools`
 - Context Manager：System Prompt 组装、上下文占用、查看进入模型的 messages

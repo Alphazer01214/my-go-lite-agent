@@ -74,16 +74,16 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	return &frame, nil
 }
 
-func (h *Host) route(from string, frame *Frame) error {
+func (h *Host) route(from string, frame *Frame) {
 	switch frame.Type {
 	case FrameRequest:
-		return h.handleRequest(from, frame)
+		h.handleRequest(from, frame)
 	case FrameResponse:
-		return h.handleResponse(frame)
+		h.handleResponse(frame)
 	case FrameEvent:
-		return h.handleEvent(from, frame)
+		h.handleEvent(from, frame)
 	default:
-		return fmt.Errorf("unknown frame type")
+		return
 	}
 }
 
@@ -204,11 +204,12 @@ func (h *Host) broadcast(from string, frame *Frame) error {
 }
 
 func (h *Host) write(to string, frame *Frame) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+
 	if err := h.alive(to); err != nil {
 		return err
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	plg := h.plugins[to]
 	plg.mu.Lock()
 	defer plg.mu.Unlock()
@@ -223,8 +224,9 @@ func (h *Host) read(name string, gen int, stdout io.Reader) {
 		frame, err := ReadFrame(stdout)
 		if err != nil {
 			h.hlog(fmt.Sprintf("read frame error: %v", err))
-			h.
+			h.markUnhealthy(name, gen)
+			return
 		}
-
+		h.route(name, frame)
 	}
 }

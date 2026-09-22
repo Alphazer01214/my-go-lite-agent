@@ -27,14 +27,31 @@ func (h *Host) launch(discovery plugin.Discovery) error {
 	if err != nil {
 		return err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
+	// stderr, err := cmd.StderrPipe()
+	// if err != nil {
+	// 	return err
+	// }
+	if err := cmd.Start(); err != nil {
 		return err
 	}
+	h.mu.Lock()
+	h.gen[manifest.Name]++
+	gen := h.gen[manifest.Name]
+	h.plugins[manifest.Name] = &proc{
+		discovery: discovery,
+		cmd:       cmd,
+		stdin:     stdin,
+		gen:       gen,
+		healthy:   true,
+	}
+	h.mu.Unlock()
+
+	go h.read(manifest.Name, gen, stdout)
+	return nil
 
 }
 
-func (h *Host) markUnhealthy(name string) {
+func (h *Host) markUnhealthy(name string, gen int) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -46,4 +63,5 @@ func (h *Host) markUnhealthy(name string) {
 		return
 	}
 	p.healthy = false
+	h.mu.Unlock()
 }
