@@ -33,10 +33,9 @@ func (h *Host) registerProvides(manifest plugin.Manifest) error {
 			continue
 		}
 		if owner, ok := h.provides[provide]; ok && owner != manifest.Name {
-			return Errorf(
-				CodeCapabilityConflict,
-				"plugin %s wants to provide %s, already provided by %s",
-				manifest.Name, provide, owner,
+			return fmt.Errorf(
+				"plugin %s wants to provide %s, already provided by %s: %w",
+				manifest.Name, provide, owner, ErrCapabilityConflict,
 			)
 		}
 		h.provides[provide] = manifest.Name

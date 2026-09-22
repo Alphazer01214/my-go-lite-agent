@@ -12,6 +12,7 @@ type Manifest struct {
 	Protocol  int    `json:"protocol"`
 	Autostart bool   `json:"autostart,omitempty"`
 	// Entry: for example agent or agent.exe
+	// executable only
 	Entry     string `json:"entry"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 

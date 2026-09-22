@@ -32,16 +32,6 @@ type CallResult struct {
 	Events []*Frame
 }
 
-func (e *FrameError) Error() string {
-	if e == nil {
-		return ""
-	}
-	if e.Message == "" {
-		return e.Code
-	}
-	return e.Code + ": " + e.Message
-}
-
 // WriteFrame writes a Frame to the given writer, prefixing it with its length.
 func WriteFrame(w io.Writer, f *Frame) error {
 	data, err := json.Marshal(f)
@@ -49,7 +39,7 @@ func WriteFrame(w io.Writer, f *Frame) error {
 		return err
 	}
 	if len(data) > FrameMaxSize {
-		return Errorf(CodeFrameTooLarge, "frame size %d exceeds max %d", len(data), FrameMaxSize)
+		return fmt.Errorf("frame size %d exceeds max %d: %w", len(data), FrameMaxSize, ErrFrameTooLarge)
 	}
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(data)))
@@ -71,7 +61,7 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	}
 	size := int(binary.BigEndian.Uint32(header[:]))
 	if size <= 0 || size > FrameMaxSize {
-		return nil, Errorf(CodeFrameTooLarge, "invalid frame length %d", size)
+		return nil, fmt.Errorf("invalid frame length %d: %w", size, ErrFrameTooLarge)
 	}
 	data := make([]byte, size)
 	if _, err := io.ReadFull(r, data); err != nil {
@@ -101,13 +91,13 @@ func (h *Host) route(from string, frame *Frame) error {
 func (h *Host) handleRequest(from string, frame *Frame) error {
 	if frame.To == HostCapability || frame.Capability == HostCapability {
 		// TODO: host.* method dispatch
-		return Errorf(CodeMethodNotFound, "no handler for host.%s", frame.Method)
+		return fmt.Errorf("no handler for host.%s: %w", frame.Method, ErrMethodNotFound)
 	}
 	if frame.To == "" {
 		return ErrToRequired
 	}
 	if frame.To == from {
-		return Errorf(CodeCallSelf, "plugin %s cannot call itself", from)
+		return fmt.Errorf("plugin %s cannot call itself: %w", from, ErrCallSelf)
 	}
 	return h.forward(from, frame.To, frame)
 }
@@ -191,7 +181,7 @@ func (h *Host) forward(from string, to string, frame *Frame) error {
 		h.mu.Lock()
 		delete(h.pending, forwardID)
 		h.mu.Unlock()
-		return Errorf(CodePluginNotMounted, "plugin %s not mounted", to)
+		return fmt.Errorf("plugin %s not mounted: %w", to, ErrPluginNotMounted)
 	}
 
 	// Here the frame is forwarded, with the fwd-xxx
@@ -226,4 +216,15 @@ func (h *Host) write(to string, frame *Frame) error {
 		return err
 	}
 	return nil
+}
+
+func (h *Host) read(name string, gen int, stdout io.Reader) {
+	for {
+		frame, err := ReadFrame(stdout)
+		if err != nil {
+			h.hlog(fmt.Sprintf("read frame error: %v", err))
+			h.
+		}
+
+	}
 }

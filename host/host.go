@@ -33,7 +33,8 @@ type Host struct {
 	discoveries plugin.Discoveries
 	pluginsDir  string
 	// seq
-	seq int
+	seq    int
+	closed bool
 
 	mountedUI map[string]bool
 
@@ -98,19 +99,8 @@ func (h *Host) GetMountedPlugins() []string {
 	return mounted
 }
 
-func (h *Host) mountPlugin(dis plugin.Discovery) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	manifest := dis.Manifest
-	if _, ok := h.plugins[manifest.Name]; ok {
-		return fmt.Errorf("plugin %v has been mounted", manifest.Name)
-	}
-	for _, capability := range manifest.Provides {
-		if existing, ok := h.provides[capability]; ok {
-			return fmt.Errorf("capability %v is already provided by plugin %v", capability, existing)
-		}
-	}
-	return nil
+func (h *Host) IsPluginDisabled(name string) bool {
+	return h.disabled[name]
 }
 
 func (h *Host) mountUI() error {
@@ -118,16 +108,16 @@ func (h *Host) mountUI() error {
 }
 
 // alive reports whether the named plugin is mounted and healthy.
-// nil means alive; otherwise a *FrameError implementing error.
+// nil means alive; otherwise an error (sentinel via errors.Is).
 func (h *Host) alive(name string) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	plg, ok := h.plugins[name]
 	if !ok || plg == nil {
-		return Errorf(CodePluginNotMounted, "plugin %s not mounted", name)
+		return fmt.Errorf("plugin %s not mounted: %w", name, ErrPluginNotMounted)
 	}
 	if !plg.healthy {
-		return Errorf(CodePluginDown, "plugin %s is not healthy", name)
+		return fmt.Errorf("plugin %s is not healthy: %w", name, ErrPluginDown)
 	}
 	return nil
 }
@@ -143,13 +133,14 @@ func Run(discoveries plugin.Discoveries) (*Host, error) {
 		hlog:        defaultLogFunc,
 	}
 
-	plugins := discoveries.Plugins
+	//plugins := discoveries.Plugins
 	// TODO 试图加载所有插件（无论冲突），然后在完毕后列出冲突警告
-	for _, p := range plugins {
-		if err := h.mountPlugin(p); err != nil {
-			return nil, err
-		}
-	}
+	// TODO mount plugins
+	//for _, p := range plugins {
+	//	if err := h.mountPlugin(p); err != nil {
+	//		return nil, err
+	//	}
+	//}
 	return h, nil
 }
 

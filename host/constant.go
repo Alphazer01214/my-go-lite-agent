@@ -1,14 +1,14 @@
 package host
 
 import (
-	"fmt"
+	"errors"
 	"time"
 )
 
 // 错误一律以 error 表达：
 //   - 线格式用 Code*（写入 Frame.Err.Code）
-//   - Go 侧用 Err*（*FrameError，实现 error，可用 errors.Is 按 Code 比较）
-//   - 需要附带 message 时用 Errorf(Code, ...)
+//   - Go 侧用 Err*（error 哨兵，可用 errors.Is 比较）
+//   - 需要附带 message 时用 fmt.Errorf
 
 // constant.go 集中定义 Host 运行时用到的全部契约常量。
 // 破坏线协议 / host 方法名 / hostFaces / 错误码时，先改这里再改实现。
@@ -104,34 +104,34 @@ const (
 	CodePanelRejected = "panel_rejected"
 )
 
-// 哨兵错误（error）。比较请用 errors.Is(err, ErrXxx) 或 errors.Is(err, SomeFrameErr)。
-// 需要 message 时不要改这些 var，用 Errorf(CodeXxx, "...")。
+// 哨兵错误（error）。比较请用 errors.Is(err, ErrXxx)。
+// 需要附带 message 时用 fmt.Errorf("...: %w", ErrXxx)。
 var (
 	// 路由 / 寻址
-	ErrHostClosed       = &FrameError{Code: CodeHostClosed}
-	ErrToRequired       = &FrameError{Code: CodeToRequired}
-	ErrRouteFailed      = &FrameError{Code: CodeRouteFailed}
-	ErrMethodNotFound   = &FrameError{Code: CodeMethodNotFound}
-	ErrPluginNotMounted = &FrameError{Code: CodePluginNotMounted}
-	ErrPluginDown       = &FrameError{Code: CodePluginDown}
-	ErrPluginDisabled   = &FrameError{Code: CodePluginDisabled}
-	ErrTimeout          = &FrameError{Code: CodeTimeout}
-	ErrHandlerError     = &FrameError{Code: CodeHandlerError}
-	ErrCallSelf         = &FrameError{Code: CodeCallSelf}
-	ErrHostServerClosed = &FrameError{Code: CodeHostServerClosed}
+	ErrHostClosed       = errors.New(CodeHostClosed)
+	ErrToRequired       = errors.New(CodeToRequired)
+	ErrRouteFailed      = errors.New(CodeRouteFailed)
+	ErrMethodNotFound   = errors.New(CodeMethodNotFound)
+	ErrPluginNotMounted = errors.New(CodePluginNotMounted)
+	ErrPluginDown       = errors.New(CodePluginDown)
+	ErrPluginDisabled   = errors.New(CodePluginDisabled)
+	ErrTimeout          = errors.New(CodeTimeout)
+	ErrHandlerError     = errors.New(CodeHandlerError)
+	ErrCallSelf         = errors.New(CodeCallSelf)
+	ErrHostServerClosed = errors.New(CodeHostServerClosed)
 	// 载荷 / 参数
-	ErrBadPayload    = &FrameError{Code: CodeBadPayload}
-	ErrBadArguments  = &FrameError{Code: CodeBadArguments}
-	ErrFrameTooLarge = &FrameError{Code: CodeFrameTooLarge}
+	ErrBadPayload    = errors.New(CodeBadPayload)
+	ErrBadArguments  = errors.New(CodeBadArguments)
+	ErrFrameTooLarge = errors.New(CodeFrameTooLarge)
 	// Host 横切方法失败
-	ErrEnsurePluginsFailed    = &FrameError{Code: CodeEnsurePluginsFailed}
-	ErrSetPluginEnabledFailed = &FrameError{Code: CodeSetPluginEnabledFailed}
+	ErrEnsurePluginsFailed    = errors.New(CodeEnsurePluginsFailed)
+	ErrSetPluginEnabledFailed = errors.New(CodeSetPluginEnabledFailed)
 	// 注册表
-	ErrCapabilityConflict = &FrameError{Code: CodeCapabilityConflict}
+	ErrCapabilityConflict = errors.New(CodeCapabilityConflict)
 	// hostFaces 门禁
-	ErrHostFaceNotDeclared = &FrameError{Code: CodeHostFaceNotDeclared}
+	ErrHostFaceNotDeclared = errors.New(CodeHostFaceNotDeclared)
 	// Panel 结构校验
-	ErrPanelRejected = &FrameError{Code: CodePanelRejected}
+	ErrPanelRejected = errors.New(CodePanelRejected)
 )
 
 // ---------------------------------------------------------------------------
@@ -249,9 +249,4 @@ const (
 	PluginStateMissing   = "missing"
 )
 
-func Errorf(code string, format string, args ...interface{}) *FrameError {
-	return &FrameError{
-		Code:    code,
-		Message: fmt.Sprintf(format, args...),
-	}
-}
+
