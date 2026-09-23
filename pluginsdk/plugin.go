@@ -38,8 +38,7 @@ type Plugin struct {
 	handlers map[string]HandleFunc
 	// pending maps outbound Call id to its waiter
 	pending map[string]chan *protocol.Frame
-	// writeMu serializes stdout (Call + Dispatch may run concurrently)
-	writeMu sync.Mutex
+	events  map[string]chan *Event
 	stdin   *os.File
 	stdout  *os.File
 
@@ -53,6 +52,7 @@ func NewPlugin(name string) *Plugin {
 		name:     name,
 		handlers: make(map[string]HandleFunc),
 		pending:  make(map[string]chan *protocol.Frame),
+		events:   make(map[string]chan *Event),
 		stdin:    os.Stdin,
 		stdout:   os.Stdout,
 	}
@@ -106,9 +106,11 @@ func (p *Plugin) Listen() error {
 		}
 		switch frame.Type {
 		case protocol.FrameRequest:
-			go p.Dispatch(frame)
+			go p.dispatch(frame)
 		case protocol.FrameResponse:
-			p.complete(frame)
+			go p.complete(frame)
+		case protocol.FrameEvent:
+			// go p.deliver(frame)
 		default:
 			// v1: evt / unknown types are ignored (forward compatible)
 		}
@@ -139,9 +141,9 @@ func (p *Plugin) complete(frame *protocol.Frame) {
 	ch <- frame
 }
 
-// Dispatch handles one inbound req and writes exactly one res (same id).
+// dispatch handles one inbound req and writes exactly one res (same id).
 // Unknown capability.method → method_not_found; handler error → code or handler_error.
-func (p *Plugin) Dispatch(frame *protocol.Frame) {
+func (p *Plugin) dispatch(frame *protocol.Frame) {
 	key := frame.Capability + "." + frame.Method
 	p.mu.Lock()
 	h, ok := p.handlers[key]
@@ -176,6 +178,28 @@ func (p *Plugin) Dispatch(frame *protocol.Frame) {
 		}
 	}
 	_ = p.writeFrame(res)
+}
+
+// deliver a event to
+func (p *Plugin) deliver(frame *protocol.Frame) {
+	key := frame.Capability + "." + frame.Method
+	p.mu.Lock()
+	ch, ok := p.pending[key]
+	p.mu.Unlock()
+	if !ok {
+		// TODO log: no event channel for key
+		return
+	}
+	ch <- frame
+}
+
+func (p *Plugin) toEvent(frame *protocol.Frame) *Event {
+	return &Event{
+		ID:         frame.ID,
+		Capability: frame.Capability,
+		Method:     frame.Method,
+		Payload:    frame.Payload,
+	}
 }
 
 // Call invokes capability.method through Host (star topology).
@@ -218,8 +242,53 @@ func (p *Plugin) Call(capability string, method string, payload json.RawMessage)
 	return res.Payload, nil
 }
 
+// CallWithCallback
 func (p *Plugin) CallWithCallback(capability string, method string, payload json.RawMessage, callback func(event *Event)) (json.RawMessage, error) {
+	id := fmt.Sprintf("%s-%d", p.name, p.seq.Add(1))
+	ch := make(chan *protocol.Frame, 1)
+	p.mu.Lock()
+	p.pending[id] = ch
+	p.mu.Unlock()
 
+	frame := protocol.Frame{
+		Version:    protocol.FrameVersion,
+		ID:         id,
+		Type:       protocol.FrameRequest,
+		Capability: capability,
+		Method:     method,
+		Payload:    payload,
+	}
+
+	if err := p.writeFrame(&frame); err != nil {
+		p.mu.Lock()
+		delete(p.pending, id)
+		p.mu.Unlock()
+		return nil, fmt.Errorf("write call %s.%s: %w", capability, method, err)
+	}
+
+	for {
+		select {
+		case res := <-ch:
+			if res == nil {
+				return nil, fmt.Errorf("call %s.%s: connection closed", capability, method)
+			}
+			if res.ErrorCode != "" || res.ErrorMsg != "" {
+				code := res.ErrorCode
+				if code == "" {
+					code = CodeHandlerError
+				}
+				return nil, ErrCode(code, res.ErrorMsg)
+			}
+			if res.Type == protocol.FrameEvent {
+				callback(p.toEvent(res))
+			}
+			if res.Type == protocol.FrameResponse {
+				return res.Payload, nil
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 // Emit sends an evt Frame (no response expected), and no specific target
@@ -250,7 +319,7 @@ func (p *Plugin) EmitWithID(id string, capability string, method string, payload
 
 // writeFrame serializes one Frame onto stdout.
 func (p *Plugin) writeFrame(frame *protocol.Frame) error {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return protocol.WriteFrame(p.stdout, frame)
 }

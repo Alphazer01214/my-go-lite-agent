@@ -105,10 +105,6 @@ func (h *Host) IsPluginDisabled(name string) bool {
 	return h.disabled[name]
 }
 
-func (h *Host) mountUI() error {
-	return nil
-}
-
 // alive reports whether the named plugin is mounted and healthy.
 // nil means alive; otherwise an error (sentinel via errors.Is).
 func (h *Host) alive(name string) error {
