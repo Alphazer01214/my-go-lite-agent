@@ -60,7 +60,7 @@ type proc struct {
 type wait struct {
 	// caller is the plugin name that called the wait
 	caller string
-	// target is the plugin name that the caller is waiting for
+	// target is the resolved owner plugin process name (Host-internal routing result)
 	target string
 	// frameID is the caller's frame id
 	frameID string

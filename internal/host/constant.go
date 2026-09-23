@@ -3,32 +3,38 @@ package host
 import (
 	"errors"
 	"time"
+
+	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
 // 错误一律以 error 表达：
-//   - 线格式用 Code*（写入 Frame.Err.Code）
+//   - 线格式用 Code*（写入 Frame.ErrorCode）
 //   - Go 侧用 Err*（error 哨兵，可用 errors.Is 比较）
 //   - 需要附带 message 时用 fmt.Errorf
 
 // constant.go 集中定义 Host 运行时用到的全部契约常量。
-// 破坏线协议 / host 方法名 / hostFaces / 错误码时，先改这里再改实现。
+// 线格式 Frame / 编解码 / 版本见 protocol 包（单一定义）。
+// 破坏 host 方法名 / hostFaces / 错误码时，先改这里再改实现。
 
 // ---------------------------------------------------------------------------
-// Frame 线协议（Host ↔ Plugin）
+// Frame 线协议 — 唯一定义在 protocol；此处别名方便 Host 内部使用
 // ---------------------------------------------------------------------------
+
+type Frame = protocol.Frame
 
 const (
-	// FrameEvent / FrameRequest / FrameResponse 是 Frame.Type 的合法取值。
-	FrameEvent    = "evt"
-	FrameRequest  = "req"
-	FrameResponse = "res"
+	FrameEvent     = protocol.FrameEvent
+	FrameRequest   = protocol.FrameRequest
+	FrameResponse  = protocol.FrameResponse
+	FrameVersion   = protocol.FrameVersion
+	FrameMaxSize   = protocol.FrameMaxSize
+	HostCapability = protocol.HostCapability
+)
 
-	// FrameVersion 是当前 Host↔Plugin 线协议版本。
-	// 新 host 包使用独立字段命名：version / capability / err（与旧 protocol 包不兼容）。
-	FrameVersion = 1
-
-	// FrameMaxSize 是单帧 JSON body 上限（16MB），超限拒绝读写。
-	FrameMaxSize = 16 << 20
+var (
+	WriteFrame       = protocol.WriteFrame
+	ReadFrame        = protocol.ReadFrame
+	ErrFrameTooLarge = protocol.ErrFrameTooLarge
 )
 
 // ---------------------------------------------------------------------------
@@ -36,15 +42,12 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	// HostCapability 是宿主横切方法的 capability 名（to=host 或 capability=host）。
-	HostCapability = "host"
-
 	// ToolsCapability 允许多属主（filetools/shelltools/webtools/skill-manager 等）。
-	// Host 注册表对它不做唯一属主约束；路由仍按插件名点对点。
+	// Host 注册表对它不做唯一属主约束；路由仍按 (capability, method)，不按插件名。
 	ToolsCapability = "tools"
 )
 
-// Host L0 方法（to/capability == host 时分派）。领域方法不得出现在此列表。
+// Host L0 方法（capability == host 时分派）。领域方法不得出现在此列表。
 const (
 	HostMethodPlugins          = "plugins"
 	HostMethodEnsurePlugins    = "ensurePlugins"
@@ -75,33 +78,25 @@ const (
 	FaceMethodSet    = "set"
 )
 
-// Frame.Err.Code 线格式错误码（稳定契约，插件/Medium 可依赖）。
+// Frame.Err.Code 线格式错误码（稳定契约；字符串值在 protocol 包）。
 const (
-	// 路由 / 寻址
-	CodeHostClosed       = "host_closed"
-	CodeToRequired       = "to_required"
-	CodeRouteFailed      = "route_failed"
-	CodeMethodNotFound   = "method_not_found"
-	CodePluginNotMounted = "plugin_not_mounted"
-	CodePluginDown       = "plugin_down"
-	CodePluginDisabled   = "plugin_disabled"
-	CodeTimeout          = "timeout"
-	CodeHandlerError     = "handler_error"
-	CodeCallSelf         = "call_self"
-	CodeHostServerClosed = "server_closed"
-	// 载荷 / 参数
-	CodeBadPayload    = "bad_payload"
-	CodeBadArguments  = "bad_arguments"
-	CodeFrameTooLarge = "frame_too_large"
-	// Host 横切方法失败
-	CodeEnsurePluginsFailed    = "ensure_plugins_failed"
-	CodeSetPluginEnabledFailed = "set_plugin_enabled_failed"
-	// 注册表
-	CodeCapabilityConflict = "capability_conflict"
-	// hostFaces 门禁
-	CodeHostFaceNotDeclared = "host_face_not_declared"
-	// Panel 结构校验（Host 只校验结构，不校验业务语义）
-	CodePanelRejected = "panel_rejected"
+	CodeHostClosed             = protocol.CodeHostClosed
+	CodeRouteFailed            = protocol.CodeRouteFailed
+	CodeMethodNotFound         = protocol.CodeMethodNotFound
+	CodePluginNotMounted       = protocol.CodePluginNotMounted
+	CodePluginDown             = protocol.CodePluginDown
+	CodePluginDisabled         = protocol.CodePluginDisabled
+	CodeTimeout                = protocol.CodeTimeout
+	CodeHandlerError           = protocol.CodeHandlerError
+	CodeHostServerClosed       = protocol.CodeHostServerClosed
+	CodeBadPayload             = protocol.CodeBadPayload
+	CodeBadArguments           = protocol.CodeBadArguments
+	CodeFrameTooLarge          = protocol.CodeFrameTooLarge
+	CodeEnsurePluginsFailed    = protocol.CodeEnsurePluginsFailed
+	CodeSetPluginEnabledFailed = protocol.CodeSetPluginEnabledFailed
+	CodeCapabilityConflict     = protocol.CodeCapabilityConflict
+	CodeHostFaceNotDeclared    = protocol.CodeHostFaceNotDeclared
+	CodePanelRejected          = protocol.CodePanelRejected
 )
 
 // 哨兵错误（error）。比较请用 errors.Is(err, ErrXxx)。
@@ -109,7 +104,6 @@ const (
 var (
 	// 路由 / 寻址
 	ErrHostClosed       = errors.New(CodeHostClosed)
-	ErrToRequired       = errors.New(CodeToRequired)
 	ErrRouteFailed      = errors.New(CodeRouteFailed)
 	ErrMethodNotFound   = errors.New(CodeMethodNotFound)
 	ErrPluginNotMounted = errors.New(CodePluginNotMounted)
@@ -117,12 +111,11 @@ var (
 	ErrPluginDisabled   = errors.New(CodePluginDisabled)
 	ErrTimeout          = errors.New(CodeTimeout)
 	ErrHandlerError     = errors.New(CodeHandlerError)
-	ErrCallSelf         = errors.New(CodeCallSelf)
 	ErrHostServerClosed = errors.New(CodeHostServerClosed)
 	// 载荷 / 参数
-	ErrBadPayload    = errors.New(CodeBadPayload)
-	ErrBadArguments  = errors.New(CodeBadArguments)
-	ErrFrameTooLarge = errors.New(CodeFrameTooLarge)
+	ErrBadPayload   = errors.New(CodeBadPayload)
+	ErrBadArguments = errors.New(CodeBadArguments)
+	// ErrFrameTooLarge 别名见上方（protocol.ErrFrameTooLarge）
 	// Host 横切方法失败
 	ErrEnsurePluginsFailed    = errors.New(CodeEnsurePluginsFailed)
 	ErrSetPluginEnabledFailed = errors.New(CodeSetPluginEnabledFailed)
@@ -248,5 +241,3 @@ const (
 	PluginStateDisabled  = "disabled"
 	PluginStateMissing   = "missing"
 )
-
-

@@ -90,9 +90,9 @@ func TestWebServeShellAndMessage(t *testing.T) {
 		t.Fatalf("shell missing five-region layout")
 	}
 
-	// Start a turn via L0 /api/call (ADR-0030: no /api/message).
+	// Start a turn via L0 /api/call (no plugin-name addressing).
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/call", strings.NewReader(
-		`{"to":"agent","cap":"loop","method":"turn","payload":{"input":"web-hello","allowSubagent":true}}`))
+		`{"cap":"loop","method":"turn","payload":{"input":"web-hello","allowSubagent":true}}`))
 	req.Header.Set("Content-Type", "application/json")
 	mres, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -201,7 +201,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 
 	// One turn then history should include user text.
 	req2, _ := http.NewRequest(http.MethodPost, base+"/api/call", strings.NewReader(
-		`{"to":"agent","cap":"loop","method":"turn","payload":{"input":"hist-marker","allowSubagent":true}}`))
+		`{"cap":"loop","method":"turn","payload":{"input":"hist-marker","allowSubagent":true}}`))
 	req2.Header.Set("Content-Type", "application/json")
 	mres, err := http.DefaultClient.Do(req2)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestWebCommandOutputAndHistory(t *testing.T) {
 
 	// History rehydrates through the session Capability via the star route
 	// (ADR-0011): /api/history and /api/trace are both retired.
-	callBody := strings.NewReader(`{"to":"session","cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
+	callBody := strings.NewReader(`{"cap":"session","method":"query","payload":{"sessionId":"","afterSeq":0,"limit":0}}`)
 	hres, err := http.Post(base+"/api/call", "application/json", callBody)
 	if err != nil {
 		t.Fatal(err)

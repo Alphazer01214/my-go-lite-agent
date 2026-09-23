@@ -343,8 +343,9 @@ Host 内建 Capability **`host`**。调用方只需 `capability=host` + `method=
 
 | 契约 | 参考实现（演进中） |
 |------|-------------------|
-| Frame / 读写 | `internal/host/transport.go` |
-| 契约常量 | `internal/host/constant.go` |
+| Frame / 读写 / 线错误码 | `protocol/frame.go`、`protocol/errors.go`（**唯一定义**） |
+| Host 路由 / 转发 | `internal/host/transport.go` |
+| Host 契约别名与运行时常量 | `internal/host/constant.go` |
 | Manifest | `internal/plugin/manifest.go` |
 | 发现 | `internal/plugin/discovery.go` |
-| pluginsdk | `pluginsdk/`（按 §4 实现） |
+| pluginsdk | `pluginsdk/`（按 §4 实现，插件只 import 本包） |

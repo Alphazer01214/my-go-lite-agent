@@ -1,77 +1,17 @@
 package host
 
 import (
-	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
 
-// Frame is one complete Host↔Plugin message: length-prefixed JSON body.
-type Frame struct {
-	// Version is the protocol version.
-	Version int `json:"version"`
-	// ID is the unique frame ID.
-	ID string `json:"id"`
-	// Type is the frame type evt/req/res.
-	Type string `json:"type"`
-	// To is the target plugin name. Empty for evt.
-	To string `json:"to,omitempty"`
-	// Capability is the capability name. Empty for evt.
-	Capability string `json:"capability,omitempty"`
-	// Method is the method name. Empty for evt.
-	Method string `json:"method,omitempty"`
-	// Payload is the payload of the frame.
-	Payload json.RawMessage `json:"payload,omitempty"`
-	// ErrorMsg is the error message.
-	ErrorMsg string `json:"error_msg,omitempty"`
-}
+// Frame 线类型与编解码的唯一定义在 protocol；Host 经别名使用（constant.go）。
 
 type CallResult struct {
 	Frame  *Frame
 	Events []*Frame
-}
-
-// WriteFrame writes a Frame to the given writer, prefixing it with its length.
-func WriteFrame(w io.Writer, f *Frame) error {
-	data, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	if len(data) > FrameMaxSize {
-		return fmt.Errorf("frame size %d exceeds max %d: %w", len(data), FrameMaxSize, ErrFrameTooLarge)
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(data)))
-	if _, err := w.Write(header[:]); err != nil {
-		return err
-	}
-	if _, err := w.Write(data); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ReadFrame reads a Frame from the given reader, expecting a length-prefixed JSON body.
-func ReadFrame(r io.Reader) (*Frame, error) {
-	var header [4]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, err
-	}
-	size := int(binary.BigEndian.Uint32(header[:]))
-	if size <= 0 || size > FrameMaxSize {
-		return nil, fmt.Errorf("invalid frame length %d: %w", size, ErrFrameTooLarge)
-	}
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
-	}
-	var frame Frame
-	if err := json.Unmarshal(data, &frame); err != nil {
-		return nil, err
-	}
-	return &frame, nil
 }
 
 func (h *Host) route(from string, frame *Frame) {
@@ -88,18 +28,48 @@ func (h *Host) route(from string, frame *Frame) {
 }
 
 // handleRequest only accept req with frame.ID = "plugin-xxx"
+// Target is resolved from the (capability, method) route table; self-call is a legal loopback.
 func (h *Host) handleRequest(from string, frame *Frame) error {
-	if frame.To == HostCapability || frame.Capability == HostCapability {
+	if frame.Capability == HostCapability {
 		// TODO: host.* method dispatch
-		return fmt.Errorf("no handler for host.%s: %w", frame.Method, ErrMethodNotFound)
+		err := fmt.Errorf("no handler for host.%s: %w", frame.Method, ErrMethodNotFound)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
+		return err
 	}
-	if frame.To == "" {
-		return ErrToRequired
+	if frame.Capability == "" || frame.Method == "" {
+		err := fmt.Errorf("capability and method are required: %w", ErrMethodNotFound)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
+		return err
 	}
-	if frame.To == from {
-		return fmt.Errorf("plugin %s cannot call itself: %w", from, ErrCallSelf)
+	owner := h.routeOwner(frame.Capability)
+	if owner == "" {
+		err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
+		return err
 	}
-	return h.forward(from, frame.To, frame)
+	if err := h.forward(from, owner, frame); err != nil {
+		code := CodeRouteFailed
+		// map sentinel errors to stable wire codes
+		switch {
+		case errors.Is(err, ErrPluginNotMounted):
+			code = CodePluginNotMounted
+		case errors.Is(err, ErrPluginDown):
+			code = CodePluginDown
+		case errors.Is(err, ErrPluginDisabled):
+			code = CodePluginDisabled
+		}
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
+		return err
+	}
+	return nil
+}
+
+// routeOwner resolves the owning plugin process name for a capability.
+// Internal only — never exposed as a Frame addressing field.
+func (h *Host) routeOwner(capability string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.provides[capability]
 }
 
 // handleResponse only accept res with frame.ID = "fwd-xxx"
@@ -139,21 +109,24 @@ func (h *Host) handleEvent(from string, frame *Frame) error {
 	return nil
 }
 
-// replyError sends the error to the **caller** by write
+// replyError synthesizes a res to the **caller** by write
 func (h *Host) replyError(caller string, originalID string, capability string,
-	method string, message string) {
+	method string, code string, message string) {
 	_ = h.write(caller, &Frame{
 		ID:         originalID,
+		Type:       FrameResponse,
 		Capability: capability,
 		Method:     method,
+		ErrorCode:  code,
 		ErrorMsg:   message,
 	})
 }
 
 // forward sends a req frame from one plugin to another, and waits for the response.
-// Only called when the endpoint is a plugin (not itself, not host)
-func (h *Host) forward(from string, to string, frame *Frame) error {
-	if err := h.alive(to); err != nil {
+// owner is the resolved plugin process name (Host-internal; not a Frame field).
+// Self-call (owner == from) is a legal loopback.
+func (h *Host) forward(from string, owner string, frame *Frame) error {
+	if err := h.alive(owner); err != nil {
 		return err
 	}
 
@@ -165,7 +138,7 @@ func (h *Host) forward(from string, to string, frame *Frame) error {
 	wt := &wait{
 		kind:       WaitPlugin,
 		caller:     from,
-		target:     to,
+		target:     owner,
 		frameID:    frame.ID,
 		capability: frame.Capability,
 		method:     frame.Method,
@@ -174,22 +147,21 @@ func (h *Host) forward(from string, to string, frame *Frame) error {
 	// pending[fwd-xxx] = wait{plugin-xxx}
 	forwardID := fmt.Sprintf("fwd-%d", h.seq)
 	h.pending[forwardID] = wt
-	p := h.plugins[to]
+	p := h.plugins[owner]
 	h.mu.Unlock()
 
 	if p == nil {
 		h.mu.Lock()
 		delete(h.pending, forwardID)
 		h.mu.Unlock()
-		return fmt.Errorf("plugin %s not mounted: %w", to, ErrPluginNotMounted)
+		return fmt.Errorf("plugin %s not mounted: %w", owner, ErrPluginNotMounted)
 	}
 
 	// Here the frame is forwarded, with the fwd-xxx
 	forwardFrame := *frame
 	forwardFrame.ID = forwardID
-	forwardFrame.To = frame.To
 
-	if err := h.write(to, &forwardFrame); err != nil {
+	if err := h.write(owner, &forwardFrame); err != nil {
 		h.mu.Lock()
 		delete(h.pending, forwardID)
 		h.mu.Unlock()
