@@ -35,13 +35,47 @@ type tool struct {
 }
 
 type chatRequest struct {
+	Model         string        `json:"model"`
+	Messages      []chatMessage `json:"messages"`
+	Tools         []tool        `json:"tools,omitempty"`
+	Stream        bool          `json:"stream,omitempty"`
+	StreamOptions struct {
+		IncludeUsage bool `json:"include_usage,omitempty"`
+	} `json:"stream_options,omitempty"`
 }
 
 type chatResponse struct {
+	Choices []struct {
+		Message chatMessage `json:"message"`
+	} `json:"choices"`
+	Usage Usage `json:"usage"`
 }
 
-type delta struct {
-	ID      string `json:"id"`
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type streamDelta struct {
 	Choices []struct {
-	}
+		Delta struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage Usage `json:"usage"`
+}
+
+func main() {
+
 }

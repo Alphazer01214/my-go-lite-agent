@@ -114,7 +114,7 @@ Host 维护 `pending[fwd-N] → {caller, original_id, …}` 以完成改写与�
 | 调用方插件 | — | 归因 evt（v1 SDK 不暴露读取 API，见下） |
 | 其它订阅方 | — | 广播 evt（**未实现**） |
 
-**SDK 面（v1）**：不暴露 `Emit` / `EmitTo`。evt **字段与语义以本文为准**；插件若手写帧发出 evt，Host 按上表处理。
+**SDK 面（v1）**：暴露 `Emit`（无 id）/ `EmitWithID`（归因）；无 `EmitTo`。归因 evt 由发起方 `CallWithCallback` 消费。
 
 ---
 
@@ -187,7 +187,7 @@ sequenceDiagram
     H->>H: owner[(llm,complete)]=B; pending[fwd-1]=session-1
     H->>B: req id=fwd-1 from=A cap=llm method=complete
     B-->>H: evt id=fwd-1（归因，可选）
-    H-->>A: （v1 SDK 不读旁路，仅 Host 挂 pending）
+    H-->>A: evt id=session-1 → CallWithCallback
     B->>H: res id=fwd-1 payload / error_code
     H->>A: res id=session-1 from=B
     H->>H: delete pending[fwd-1]
@@ -202,7 +202,7 @@ sequenceDiagram
 ### 4.1 进程身份
 
 ```text
-pluginsdk.New(name string) *Server
+pluginsdk.NewPlugin(name string) *Plugin
 ```
 
 - `name` 为**插件名**，进程创建时声明一次，应与目录名 / `plugin.json` 的 `name` 一致。
@@ -212,9 +212,9 @@ pluginsdk.New(name string) *Server
 ### 4.2 注册
 
 ```text
-Register(capability, method string, h handleFunc)
+Register(capability, method string, h Handler)  // Handler = NewHandler(fn)
 
-handleFunc func(payload json.RawMessage) (result json.RawMessage, err error)
+fn func(req *Request) (json.RawMessage, error)
 ```
 
 - 登记本进程的 `capability.method` handler。

@@ -159,6 +159,9 @@ Coding Scheme：先设 `defaultScheme=coding`（`dist/plugins/agent/config.json`
 
 - 插件索引（含状态标记：核四件 / 场景工具）：[plugins/README.md](plugins/README.md)
 - 术语与边界：[CONTEXT.md](CONTEXT.md)
+- 插件开发规范（包结构）：[docs/plugin-dev.md](docs/plugin-dev.md)
+- 插件清单：[docs/manifest.md](docs/manifest.md)
+- 插件接口：[docs/pluginsdk.md](docs/pluginsdk.md)
 - 架构决策：[docs/adr/](docs/adr/)
 - 模块开发文档：[docs/modules/](docs/modules/)
 - 线协议总览：[docs/protocol.md](docs/protocol.md)

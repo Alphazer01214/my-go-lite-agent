@@ -1,5 +1,7 @@
 # Manifest - 插件
 
+`plugin.json` 是插件包内 Host 注册的唯一依据。包结构与 `main.go` / `config.json` / `README.md` 职责见 [plugin-dev.md](plugin-dev.md)。
+
 ## 配置 manifest
 `plugin.json` 是插件的清单文件，用于描述插件的元数据和功能。
 主要包含如下字段：

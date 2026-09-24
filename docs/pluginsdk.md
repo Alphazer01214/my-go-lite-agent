@@ -9,24 +9,25 @@
 | API | 职责 |
 |-----|------|
 | `NewPlugin(name) *Plugin` | 创建运行时（绑定 stdio） |
+| `NewHandler(fn) Handler` / `WithInfo` / `Info` | 包装 handler，可选名称/描述 |
 | `Register(cap, method, handler)` | 登记入站 `req` 的 handler |
-| `Call(cap, method, payload)` | 同步外呼，等 `res` |
-| `CallWithCallback(cap, method, payload, callback)` | 同步外呼，过程中旁路收归因 `evt` |
-| `Emit(cap, method, payload)` | 发出无归属 `evt` |
-| `EmitWithID(id, cap, method, payload)` | 发出归因 `evt`（挂在某次 Call 上） |
-| `Serve() error` | 上报 handlers 并进入 `Listen` |
-| `ErrCode(code, msg) error` / `Code(err) string` | 稳定错误码 |
+| `Call(cap, method, payload)` | 同步外呼，等 `res`（归因 `evt` 丢弃） |
+| `CallWithCallback(..., callback)` | 同步外呼，归因 `evt` 进 `callback` |
+| `Emit` / `EmitWithID` | 发出无归属 / 归因 `evt` |
+| `Serve() error` | `host.register` 上报后进入 `Listen` |
+| `ListRegistered()` | 已注册键与 Handler 快照 |
+| `ErrCode` / `Code` | 稳定错误码 |
 
 ```text
 Call ──req──► Host ──► 对端 handler
-   ◄───────── res ──────────┘
+   ◄───────── res ──────────┘          // 收到 res 后 pending channel close
 
 CallWithCallback ──req──► …
    ◄── evt（0..n，callback）──
    ◄── res（1，返回值）──────
 
-Listen：stdin ──► req → handler │ res → 完成 Call │ evt → callback
-断连：pending 全关，Call 返回 connection closed
+Listen：req → handler │ 归因 evt → 该次 Call │ res → 完成并 close
+无 id evt → 丢弃；断连 → pending 全关，Call 返回 connection closed
 ```
 
 ---
@@ -50,9 +51,9 @@ type Request struct {
     Payload json.RawMessage
 }
 
-p.Register("session", "query", func(req *pluginsdk.Request) (json.RawMessage, error) {
+p.Register("session", "query", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
     return resultJSON, nil
-})
+}).WithInfo("query", "查询会话")) // WithInfo / Info 可选，不参与路由
 ```
 
 | 约定 | 行为 |
@@ -88,7 +89,7 @@ payload, err := p.CallWithCallback("llm", "complete", reqJSON,
 
 | 约定 | |
 |------|--|
-| 闭环 | 以 **`res` 为准**；`callback` 只收旁路过程 |
+| 闭环 | 以 **`res` 为准**；收到后 close channel |
 | 结束时机 | 收到 `res`（或断连）才返回；此前的归因 `evt` 进 `callback` |
 | 无 `callback` 的 `Call` | 归因 `evt` 丢弃，不打断闭环 |
 | 寻址 | 只写 `capability.method`；Host 转发到属主 |
@@ -146,14 +147,14 @@ func main() {
 }
 ```
 
-1. 后台 best-effort `Call("host", "register", …)` 上报 handlers；
+1. 后台 best-effort `Call("host", "register", …)` 上报 `(capability, method)`；
 2. `Listen` 阻塞至 stdin 关闭。
 
 | 入站 `type` | 行为 |
 |-------------|------|
 | `req` | 起 goroutine 执行 handler，写回一条 `res` |
-| `res` | 完成对应 `Call` 的 pending |
-| `evt` | 归因且命中 pending → `callback`；否则丢弃 |
+| `res` | 投递 pending 后 **close** channel |
+| `evt` | 有 id 且命中 pending → 该 channel（`Call` 丢弃 / `CallWithCallback` 进 callback）；无 id 或未命中 → 丢弃 |
 | 其它 | 忽略 |
 
 stdin 关闭 / 读失败 → `fail()`：关闭全部 pending，阻塞中的 Call 返回 `connection closed`。v1 无调用超时。
@@ -187,5 +188,5 @@ stdin 关闭 / 读失败 → `fail()`：关闭全部 pending，阻塞中的 Call
 
 - 无 ctx / 取消 / 调用超时。
 - 不按插件名寻址（无 `EmitTo` / `CallTo`）。
-- 广播 `evt` 的插件间扇出未实现（Host 可观察；跨插件订阅另定）。
-- UI / hostFace 不在本包范围（Host 内嵌 UI 自行消费 evt）。
+- 无 id 的广播 `evt` 插件间扇出未实现（SDK 侧丢弃）。
+- UI / hostFace 不在本包范围。
