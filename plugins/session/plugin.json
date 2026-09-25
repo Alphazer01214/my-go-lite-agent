@@ -1,0 +1,17 @@
+{
+  "name": "session",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "session",
+  "provides": ["session"],
+  "requires": [],
+  "depends_on": [],
+  "autostart": true,
+  "description": "Append-only Session Log (source of truth) with derive projection",
+  "commands": [
+    { "name": "list", "description": "List sessions", "usage": "/session list" },
+    { "name": "derive", "description": "Print Model Context messages", "usage": "/session derive" },
+    { "name": "dump-trace", "description": "Export Session Log facts as JSON", "usage": "/session dump-trace" },
+    { "name": "info", "description": "Show session metadata", "usage": "/session info" }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "llm-openai",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "llm-openai",
+  "provides": ["llm"],
+  "requires": [],
+  "depends_on": [],
+  "autostart": true,
+  "description": "Stateless OpenAI-compatible LLM completion with streaming",
+  "commands": [
+    { "name": "config", "description": "Show or set model config", "usage": "/llm-openai config [get|set k=v]" }
+  ]
+}

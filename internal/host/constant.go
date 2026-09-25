@@ -12,7 +12,7 @@ import (
 //   - Go 侧用 Err*（error 哨兵，可用 errors.Is 比较）
 //   - 需要附带 message 时用 fmt.Errorf
 
-// constant.go 集中定义 Host 运行时用到的全部契约常量。
+// payloads.go 集中定义 Host 运行时用到的全部契约常量。
 // 线格式 Frame / 编解码 / 版本见 protocol 包（单一定义）。
 // 破坏 host 方法名 / hostFaces / 错误码时，先改这里再改实现。
 

@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// Frame 线类型与编解码的唯一定义在 protocol；Host 经别名使用（constant.go）。
+// Frame 线类型与编解码的唯一定义在 protocol；Host 经别名使用（payloads.go）。
 
 type CallResult struct {
 	Frame  *Frame

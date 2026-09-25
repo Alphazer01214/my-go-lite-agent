@@ -1,81 +1,87 @@
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"os"
 
-type ChatModel struct {
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
+)
+
+func errBadArguments(msg string) error {
+	return pluginsdk.ErrCode("bad_arguments", msg)
 }
 
-type chatMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+func errUpstream(msg string) error {
+	return pluginsdk.ErrCode("llm_upstream", msg)
 }
 
-type toolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name       string `json:"name"`
-		Arguments  string `json:"arguments"`
-		Parameters []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"parameters"`
-	} `json:"function"`
+func errHandler(msg string) error {
+	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, msg)
 }
 
-type tool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Parameters  json.RawMessage `json:"parameters"`
-	} `json:"function"`
+func handle(fn func(req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
+	return func(req *pluginsdk.Request) (json.RawMessage, error) {
+		out, err := fn(req)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return json.RawMessage("null"), nil
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return nil, errHandler(err.Error())
+		}
+		return b, nil
+	}
 }
 
-type chatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []chatMessage `json:"messages"`
-	Tools         []tool        `json:"tools,omitempty"`
-	Stream        bool          `json:"stream,omitempty"`
-	StreamOptions struct {
-		IncludeUsage bool `json:"include_usage,omitempty"`
-	} `json:"stream_options,omitempty"`
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message chatMessage `json:"message"`
-	} `json:"choices"`
-	Usage Usage `json:"usage"`
-}
-
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-type streamDelta struct {
-	Choices []struct {
-		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			ToolCalls        []struct {
-				Index    int    `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage Usage `json:"usage"`
+func decode[T any](req *pluginsdk.Request, dst *T) error {
+	if len(req.Payload) == 0 {
+		return errBadArguments("payload is required")
+	}
+	if err := json.Unmarshal(req.Payload, dst); err != nil {
+		return errBadArguments(err.Error())
+	}
+	return nil
 }
 
 func main() {
+	p := newPlugin()
+	s := pluginsdk.NewPlugin("llm-openai")
 
+	s.Register("llm", "complete", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in completeIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		emit := func(payload json.RawMessage) error {
+			return s.EmitWithID(req.ID, "llm", "chunk", payload)
+		}
+		out, err := p.complete(in, emit)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}).WithInfo("complete", "OpenAI-compatible chat completion (stream by default)"))
+
+	s.Register("llm", "config.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return json.Marshal(p.getConfig())
+	}).WithInfo("config.get", "show model config (key masked)"))
+
+	s.Register("llm", "config.set", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in configSetIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		out, err := p.configSet(in)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}).WithInfo("config.set", "update config (deferred while working)"))
+
+	if err := s.Serve(); err != nil {
+		os.Exit(1)
+	}
 }
