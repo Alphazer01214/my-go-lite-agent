@@ -65,3 +65,7 @@ Host 薄内核 + 进程外插件。插件之间、插件与 Host 之间只经 Ho
 - 无按插件名寻址（无 `CallTo` / `EmitTo`）。
 - 无 ctx / 取消 / 调用超时。
 - 广播 `evt` 的跨插件扇出未实现。
+
+## 7. WebUI（Host 模块，设计中）
+
+WebUI 是 Host 内核的展示面：读 `manifest.ui` 注册插件组件、拼进五槽 Shell、桥接浏览器与同一张 `(capability, method)` 路由表。插件前端以 Web Component 注入（Vue 式 props 下行 / Call 上行）。Host 不画领域面板、不加第二套路由。契约见 [docs/webui.md](docs/webui.md)。

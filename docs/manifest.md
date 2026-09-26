@@ -24,32 +24,31 @@
 ### 交互 （Interaction）
 - `commands` 插件命令元数据，执行入口仍是 `capability.method`
 - `timeout_ms` 单次调用超时（v1 协议暂不强制超时）
-- `ui` **预留**；v1 不考虑 UI / HostFace
+- `ui` WebUI 组件贡献面；契约见 [webui.md](webui.md)（Host 注册与拼版用，**不参与** Frame 路由）
 
-## WebUI Config（预留，v1 不使用）
+## WebUI（组件贡献）
 
-v1 协议与运行时不处理 UI。以下字段仅供日后扩展，不参与 v1 路由或挂载。
+设计全文见 [webui.md](webui.md) §5（注册）/ §7（字段）。对应 Go 类型：`internal/plugin/manifest.go` 的 `WebUI` / `WebMount` / `WebPage`。
 
 ### WebUI
-- `entry` UI入口，例如 `main.js`
-- `assets` 数组，包括css html
-- `mounts`
-- `pages`
+- `entry` UI Entry（ES Module）路径，相对**插件包根**，例如 `ui/main.js`；模块内 `customElements.define`
+- `assets` 数组，entry 之外需托管的 css/js 等相对路径（同相对包根）
+- `mounts` 静态挂载列表
+- `pages` 加法贡献页面（可选）
+- `trust` `full`（默认）| `isolated`（预留）
 
 ### Mount
-- `page` 装载页面名
-- `slot` 装载位置, 包括 left, right, top, bottom, center
-- `component` element 标签名
-- `property` json
+- `page` 装载页面名，可省略（默认 `main`）
+- `slot` 装载位置：`top` | `bottom` | `left` | `center` | `right`，或本插件 `pages` 贡献的槽 id
+- `component` 自定义元素标签名，须以 `<插件名>-` 为前缀（如 `session-rail`）
+- `id` 可选；稳定面板 id（同 page+slot 内唯一），默认取 `component`。与运行时 PanelOp `id` 同语义
+- `props` 初始属性（JSON object）；组件侧 `setData(props)`
 
 ### Page
-- `title`
-- `slug`
+- `title` 页面标题
+- `slug` 页面标识（`[a-z0-9-]+`，不得占用内建 `main`）
 - `path` 路由路径
-- `slots` slot 数组
-
-### Slot
-
+- `slots` 本页私有槽 id 数组（`string[]`；无 role/preferred/region）
 
 ## 示例
 `agent/plugin.json`
@@ -73,16 +72,22 @@ v1 协议与运行时不处理 UI。以下字段仅供日后扩展，不参与 v
     }
   ],
   "ui": {
-    "entry": "main.js",
+    "entry": "ui/main.js",
     "trust": "full",
     "mounts": [
       {
         "page": "main",
         "slot": "right",
-        "component": "agent-mode-panel"
+        "component": "agent-mode-panel",
+        "id": "mode",
+        "props": { "scheme": "chat" }
+      },
+      {
+        "page": "main",
+        "slot": "bottom",
+        "component": "agent-status"
       }
     ]
   }
 }
-
 ```
