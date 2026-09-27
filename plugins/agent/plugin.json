@@ -1,0 +1,14 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "agent",
+  "provides": ["loop", "agent"],
+  "requires": ["session", "llm"],
+  "depends_on": ["session", "llm-openai"],
+  "autostart": true,
+  "description": "Turn orchestrator: assembles session/memory/llm/tools; multi-session concurrent",
+  "commands": [
+    { "name": "config", "description": "Show or set default_scheme / max_steps", "usage": "/agent config [get|set k=v]" }
+  ]
+}

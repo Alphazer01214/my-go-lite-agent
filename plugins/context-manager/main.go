@@ -1,7 +1,7 @@
 package contextmanager
 
 import (
-	"json"
+	"encoding/json"
 )
 
 type chatMessage struct {
@@ -34,5 +34,5 @@ type History struct {
 }
 
 func compact(messages []chatMessage) []chatMessage {
-
+	return messages
 }
