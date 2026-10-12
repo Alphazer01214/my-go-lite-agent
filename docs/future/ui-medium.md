@@ -1,4 +1,4 @@
-# Future — UI（Web / CLI）设计思路
+/new# Future — UI（Web / CLI）设计思路
 
 **状态**：非规范、非 v1。不约束当前 [protocol.md](../protocol.md) 实现；v1 明确不做 UI / HostFace。
 

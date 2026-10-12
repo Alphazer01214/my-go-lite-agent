@@ -49,11 +49,15 @@ const (
 
 // Host L0 方法（capability == host 时分派）。领域方法不得出现在此列表。
 const (
+	HostMethodRegister         = "register"
 	HostMethodPlugins          = "plugins"
 	HostMethodEnsurePlugins    = "ensurePlugins"
 	HostMethodSetPluginEnabled = "setPluginEnabled"
 	HostMethodPluginSwitch     = "pluginSwitch"
 )
+
+// FromHost 宿主合成帧的 from（protocol §3.5）。
+const FromHost = "host"
 
 // hostFaces：插件声明后才允许 Medium/宿主按面调用（与 provides 语义不同，不得混用）。
 const (
