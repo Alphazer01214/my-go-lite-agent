@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type Host struct {
 	// register: <provide capability>-<plugin name>
 	// must unique
 	provides map[string]string
+	// routes maps "capability.method" -> owning plugin name (host.register 上报)
+	// 查找优先于 provides（register 上报异步，provides 回落兜启动竞态）
+	routes map[string]string
 	// disabled plugin name -> true
 	disabled map[string]bool
 	// discoveries is the result of scanning the pluginDir for binaries
@@ -41,6 +45,8 @@ type Host struct {
 
 	// hlog is the host log CALLBACK function
 	hlog func(message string)
+	// trace observes every Frame crossing the Host boundary (debug; nil = off)
+	trace TraceFunc
 }
 
 type proc struct {
@@ -50,9 +56,11 @@ type proc struct {
 	cmd *exec.Cmd
 	// stdin is the ONLY way to write Frame into the pipeline
 	// then read from stdout(always occupied)
-	stdin   io.Writer
-	gen     int
-	mu      sync.Mutex
+	stdin io.WriteCloser
+	gen   int
+	mu    sync.Mutex
+	// done is closed after cmd.Wait() returns (process fully reaped)
+	done    chan struct{}
 	healthy bool
 	timeout time.Duration
 }
@@ -71,6 +79,11 @@ type wait struct {
 	capability string
 	method     string
 	payload    json.RawMessage
+
+	// resCh / onEvent serve WaitHost (host-initiated calls).
+	// resCh is buffered 1; death closure and handleResponse write exactly one res into it.
+	resCh   chan *Frame
+	onEvent func(*Frame)
 }
 
 func (h *Host) SetPluginDir(dir string) {
@@ -89,6 +102,27 @@ func (h *Host) SetLogFunc(logFunc func(message string)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.hlog = logFunc
+}
+
+// TraceFunc 观察 Host 边界上的每条 Frame（调试用）。dir 为 "in"（插件→Host）
+// 或 "out"（Host→插件）；plugin 为对端插件名。回调在锁外调用，须快且非阻塞。
+type TraceFunc func(dir string, plugin string, frame *Frame)
+
+// SetTraceFunc 设置 Frame trace 回调；nil 关闭。
+func (h *Host) SetTraceFunc(fn TraceFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.trace = fn
+}
+
+// tracef 在锁外调用 trace 回调（避免回调重入 Host 造成死锁）。
+func (h *Host) tracef(dir string, plugin string, frame *Frame) {
+	h.mu.RLock()
+	fn := h.trace
+	h.mu.RUnlock()
+	if fn != nil {
+		fn(dir, plugin, frame)
+	}
 }
 
 func (h *Host) GetMountedPlugins() []string {
@@ -120,33 +154,109 @@ func (h *Host) alive(name string) error {
 	return nil
 }
 
-func Run(discoveries plugin.Discoveries) (*Host, error) {
+// Run mounts the autostart+depends_on closure of discoveries.
+// 挂载软失败：单个插件注册冲突或启动失败只记日志并跳过，Host 不退出（protocol §6）。
+// logFunc 为 nil 时日志走 stderr（stdout 留给对话）。
+func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	h := &Host{
 		plugins:     make(map[string]*proc),
 		pending:     make(map[string]*wait),
 		provides:    make(map[string]string),
+		routes:      make(map[string]string),
 		discoveries: discoveries,
 		disabled:    make(map[string]bool),
 		mountedUI:   make(map[string]bool),
 		gen:         make(map[string]int),
 		hlog:        defaultLogFunc,
 	}
+	if logFunc != nil {
+		h.hlog = logFunc
+	}
 
-	//plugins := discoveries.Plugins
-	// TODO 试图加载所有插件（无论冲突），然后在完毕后列出冲突警告
-	// TODO mount plugins
-	//for _, p := range plugins {
-	//	if err := h.mountPlugin(p); err != nil {
-	//		return nil, err
-	//	}
-	//}
+	ordered, warns := plugin.AutostartClosure(discoveries)
+	for _, w := range warns {
+		h.hlog("mount warn: " + w)
+	}
+	// provides 先入表再启动：进程一起来就能路由到已声明能力
+	if err := h.register(ordered); err != nil {
+		h.hlog(fmt.Sprintf("mount register: %v", err))
+	}
+	for _, d := range ordered {
+		if err := h.launch(d); err != nil {
+			h.hlog(fmt.Sprintf("mount %s: %v", d.Manifest.Name, err))
+			continue
+		}
+	}
 	return h, nil
+}
+
+// Close shuts the host down: marks closed, closes every plugin stdin (EOF makes
+// the SDK Serve loop exit), synthesizes server_closed for remaining pending,
+// then kills whatever survives DefaultShutdownGrace.
+func (h *Host) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	// 一次性摘走全部 pending，锁外闭环
+	waits := make([]*wait, 0, len(h.pending))
+	for id, wt := range h.pending {
+		waits = append(waits, wt)
+		delete(h.pending, id)
+	}
+	procs := make([]*proc, 0, len(h.plugins))
+	for _, p := range h.plugins {
+		procs = append(procs, p)
+	}
+	h.mu.Unlock()
+
+	for _, wt := range waits {
+		if wt.kind == WaitHost && wt.resCh != nil {
+			select {
+			case wt.resCh <- &Frame{
+				Version:    FrameVersion,
+				ID:         wt.frameID,
+				Type:       FrameResponse,
+				Capability: wt.capability,
+				Method:     wt.method,
+				From:       FromHost,
+				ErrorCode:  CodeHostServerClosed,
+				ErrorMsg:   "host closed",
+			}:
+			default:
+			}
+			continue
+		}
+		h.replyError(wt.caller, wt.frameID, wt.capability, wt.method,
+			CodeHostServerClosed, "host closed")
+	}
+
+	// stdin EOF → 插件 SDK Listen 退出；回程 write 因 closed 被 alive() 拒绝，不再投递
+	for _, p := range procs {
+		_ = p.stdin.Close()
+	}
+
+	// grace 后强杀未退出的进程（Windows 下不 Kill 会残留）
+	deadline := time.NewTimer(DefaultShutdownGrace)
+	defer deadline.Stop()
+	for _, p := range procs {
+		select {
+		case <-p.done:
+		case <-deadline.C:
+			if p.cmd != nil && p.cmd.Process != nil {
+				_ = p.cmd.Process.Kill()
+			}
+		}
+	}
 }
 
 func refresh() {
 
 }
 
+// defaultLogFunc logs to stderr: stdout is reserved for the conversation surface.
 func defaultLogFunc(message string) {
-	fmt.Println(message)
+	fmt.Fprintln(os.Stderr, message)
 }

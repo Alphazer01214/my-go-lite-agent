@@ -184,7 +184,7 @@ sequenceDiagram
     participant B as Plugin B
     Note over A,B: 路由键 = capability.method（无 to）
     A->>H: req id=session-1 cap=llm method=complete
-    H->>H: owner[(llm,complete)]=B; pending[fwd-1]=session-1
+    H->>H: owner[(llm,complete)]=B, pending[fwd-1]=session-1
     H->>B: req id=fwd-1 from=A cap=llm method=complete
     B-->>H: evt id=fwd-1（归因，可选）
     H-->>A: evt id=session-1 → CallWithCallback

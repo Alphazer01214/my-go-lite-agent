@@ -60,6 +60,16 @@ function Should-Build([string]$target) {
     return $false
 }
 
+# Copy an optional repo asset into dist; missing source warns and skips (never aborts).
+function Copy-DistAsset([string]$rel, [string]$dst) {
+    $src = Join-Path $root $rel
+    if (Test-Path $src) {
+        Copy-Item $src $dst -Force
+    } else {
+        Write-Warning "skip missing dist asset: $rel"
+    }
+}
+
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
 $llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
 $agentDistCfg = Join-Path $dist "plugins\agent\config.json"
@@ -371,12 +381,12 @@ try {
         [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaultAction`": `"allow`",`n  `"rules`": []`n}`n", $utf8NoBom)
     }
     # Layout is required at runtime (ADR-0012); ship the base layout with dist.
-    Copy-Item (Join-Path $root "layout.json") $dist -Force
+    Copy-DistAsset "layout.json" $dist
     # Author SDK single source (dual export: repo copy + /sdk/ HTTP).
-    Copy-Item (Join-Path $root "sdk\lite-agent.js") (Join-Path $dist "lite-agent.js") -Force
-    Copy-Item (Join-Path $root "README.md") $dist -Force
-    Copy-Item (Join-Path $root "CONTEXT.md") $dist -Force
-    Copy-Item (Join-Path $root "plugins\README.md") (Join-Path $dist "plugins\README.md") -Force
+    Copy-DistAsset "sdk\lite-agent.js" (Join-Path $dist "lite-agent.js")
+    Copy-DistAsset "README.md" $dist
+    Copy-DistAsset "CONTEXT.md" $dist
+    Copy-DistAsset "plugins\README.md" (Join-Path $dist "plugins\README.md")
 
     $sw.Stop()
     Write-Host ""

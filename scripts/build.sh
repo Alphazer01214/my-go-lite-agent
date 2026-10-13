@@ -69,6 +69,16 @@ should_build() {
   return 1
 }
 
+# Copy an optional repo asset into dist; missing source warns and skips (never aborts).
+copy_dist_asset() {
+  local rel="$1" dst="$2"
+  if [[ -e "$ROOT/$rel" ]]; then
+    cp "$ROOT/$rel" "$dst"
+  else
+    echo "warning: skip missing dist asset: $rel" >&2
+  fi
+}
+
 START_TS=$(date +%s)
 REBUILT=0
 SKIPPED=0
@@ -322,12 +332,12 @@ if [[ ! -f "$DIST/config/permissions.json" ]]; then
 EOF
 fi
 # Layout is required at runtime (ADR-0012); ship the base layout with dist.
-cp "$ROOT/layout.json" "$DIST/"
+copy_dist_asset "layout.json" "$DIST/"
 # Author SDK single source (dual export: repo copy + /sdk/ HTTP).
-cp "$ROOT/sdk/lite-agent.js" "$DIST/lite-agent.js"
-cp "$ROOT/README.md"   "$DIST/"
-cp "$ROOT/CONTEXT.md"  "$DIST/"
-cp "$ROOT/plugins/README.md" "$DIST/plugins/README.md"
+copy_dist_asset "sdk/lite-agent.js" "$DIST/lite-agent.js"
+copy_dist_asset "README.md" "$DIST/"
+copy_dist_asset "CONTEXT.md" "$DIST/"
+copy_dist_asset "plugins/README.md" "$DIST/plugins/README.md"
 
 popd >/dev/null
 
