@@ -13,5 +13,8 @@
     { "name": "derive", "description": "Print Model Context messages", "usage": "/session derive" },
     { "name": "dump-trace", "description": "Export Session Log facts as JSON", "usage": "/session dump-trace" },
     { "name": "info", "description": "Show session metadata", "usage": "/session info" }
-  ]
+  ],
+  "ui": {
+    "entry": "ui/main.js"
+  }
 }

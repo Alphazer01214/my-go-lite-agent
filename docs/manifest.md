@@ -19,7 +19,7 @@
 - `provides` 插件对外提供的能力（Capability 名）；观测/依赖图用，路由真源是 `host.register` 上报的 `(capability, method)`
 - `requires` 插件需要别人提供的能力（弱依赖；_Avoid: consumes_）
 - `depends_on` 硬依赖的具体插件名（装配/依赖图；**不参与** Frame 路由）
-- `autostart` 是否随 host 启动而启动，默认 `false`（v1 挂载为全量启动，此字段暂不参与调度）
+- `autostart` 是否随 host 启动而启动，默认 `false`
 
 ### 交互 （Interaction）
 - `commands` 插件命令元数据，执行入口仍是 `capability.method`
