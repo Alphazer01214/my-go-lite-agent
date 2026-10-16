@@ -68,14 +68,22 @@
     </section>
 
     <section id="plugin-view-graph" class="plugin-view plugin-graph-view" role="tabpanel" hidden>
-      <div class="graph-legend">
-        <span><i class="legend-node legend-mounted"></i>已挂载</span>
-        <span><i class="legend-node legend-available"></i>可用</span>
-        <span><i class="legend-node legend-degraded"></i>降级或缺失</span>
-        <span class="hint">箭头由依赖方指向被依赖插件。</span>
+      <div class="graph-toolbar">
+        <div class="graph-legend" aria-label="关系图例">
+          <span><i class="legend-node legend-mounted"></i>已挂载</span>
+          <span><i class="legend-node legend-available"></i>可用</span>
+          <span><i class="legend-node legend-degraded"></i>降级或缺失</span>
+          <span><i class="legend-line legend-mount"></i>装载</span>
+          <span><i class="legend-line legend-depends"></i>硬依赖</span>
+        </div>
+        <span class="hint">点击插件节点查看关系详情。</span>
       </div>
-      <div id="plugin-graph" class="plugin-graph"></div>
-      <ul id="plugin-edge-list" class="plugin-edge-list" aria-label="插件依赖列表"></ul>
+      <div class="graph-workspace">
+        <div id="plugin-graph" class="plugin-graph" aria-label="Host 与插件关系图"></div>
+        <aside id="plugin-graph-details" class="plugin-graph-details" aria-live="polite"></aside>
+      </div>
+      <div class="graph-edge-heading">关系列表</div>
+      <ul id="plugin-edge-list" class="plugin-edge-list" aria-label="Host 与插件关系列表"></ul>
     </section>
   </aside>
 

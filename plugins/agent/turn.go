@@ -189,8 +189,8 @@ func (p *plugin) callTool(name, arguments, workspace, callID string) (string, er
 	return out.Content, nil
 }
 
-func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) (turnOut, error) {
-	out := turnOut{SessionID: in.SessionID}
+func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) (out turnOut, retErr error) {
+	out = turnOut{SessionID: in.SessionID}
 	seqs := make([]int, 0, 16)
 	turnID := fmt.Sprintf("t-%d", time.Now().UnixNano())
 
@@ -205,12 +205,28 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		return meta
 	}
 
+	turnStarted := false
+	defer func() {
+		if retErr == nil || !turnStarted {
+			return
+		}
+		s, appendErr := p.appendFacts(in.SessionID, []map[string]any{{
+			"type": "turn_end", "role": "host",
+			"meta": appendMeta("", map[string]any{"reason": "error", "error": retErr.Error()}),
+		}})
+		if appendErr == nil {
+			seqs = append(seqs, s...)
+		}
+		out.Seqs = seqs
+	}()
+
 	s, err := p.appendFacts(in.SessionID, []map[string]any{{
 		"type": "turn_start", "role": "host", "meta": appendMeta("", map[string]any{"workspace": in.Workspace}),
 	}})
 	if err != nil {
 		return out, err
 	}
+	turnStarted = true
 	seqs = append(seqs, s...)
 
 	s, err = p.appendFacts(in.SessionID, []map[string]any{{

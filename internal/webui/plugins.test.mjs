@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { dependencyGraphModel, renderPluginList } from "./static/plugins.mjs";
+import {
+	dependencyGraphModel,
+	relationshipGraphModel,
+	renderDependencyDetails,
+	renderPluginList,
+} from "./static/plugins.mjs";
 
 function fakeDocument() {
 	return {
@@ -95,4 +100,40 @@ test("derives a deterministic dependency graph model", () => {
 	assert.equal(model.nodes.find((node) => node.id === "agent").depth, 1);
 	assert.equal(model.nodes.find((node) => node.id === "session").depth, 0);
 	assert.equal(model.nodes.find((node) => node.id === "missing").state, "missing");
+});
+
+test("adds Host lifecycle edges without changing plugin dependency depth", () => {
+	const model = relationshipGraphModel([
+		{ name: "agent", state: "mounted", provides: ["loop"], depends_on: ["session", "llm-openai"] },
+		{ name: "session", state: "mounted", provides: ["session"], depends_on: [], mounts: [{ id: "chat" }] },
+		{ name: "llm-openai", state: "mounted", provides: ["llm"], depends_on: [] },
+	]);
+
+	assert.equal(model.nodes[0].id, "Host");
+	assert.equal(model.nodes[0].kind, "host");
+	assert.equal(model.edges.filter((edge) => edge.type === "mount").length, 3);
+	assert.equal(model.edges.filter((edge) => edge.type === "depends").length, 2);
+
+	const session = model.nodes.find((node) => node.id === "session");
+	assert.deepEqual(session.usedBy, ["agent"]);
+	assert.equal(session.mounts.length, 1);
+});
+
+test("renders selected plugin relationship details", () => {
+	const document = fakeDocument();
+	const root = document.createElement("aside");
+	const model = relationshipGraphModel([
+		{ name: "agent", state: "mounted", provides: ["loop"], depends_on: ["session"], mounts: [] },
+		{ name: "session", state: "mounted", provides: ["session"], depends_on: [], mounts: [{ plugin: "session", id: "chat" }] },
+	]);
+
+	renderDependencyDetails(document, root, model, "agent");
+	const rendered = textOf(root);
+	assert.match(rendered, /agent/);
+	assert.match(rendered, /已挂载/);
+	assert.match(rendered, /Capability/);
+	assert.match(rendered, /loop/);
+	assert.match(rendered, /硬依赖/);
+	assert.match(rendered, /session/);
+	assert.match(rendered, /无 UI Mount/);
 });

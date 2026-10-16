@@ -1,6 +1,7 @@
 import { createMountLoader } from "./loader.mjs";
 import { LiteAgent } from "./lite-agent.js";
 import {
+	renderDependencyDetails,
 	renderDependencyEdgeList,
 	renderDependencyGraph,
 	renderPluginList,
@@ -30,12 +31,14 @@ const elements = {
 	settingsSummary: document.querySelector("#settings-summary"),
 	settingsList: document.querySelector("#settings-list"),
 	pluginGraph: document.querySelector("#plugin-graph"),
+	pluginGraphDetails: document.querySelector("#plugin-graph-details"),
 	pluginEdgeList: document.querySelector("#plugin-edge-list"),
 };
 
 const localDiagnostics = [];
 let mountLoader = null;
 let currentMounts = [];
+let selectedPluginName = "";
 
 function diagnosticKey(diagnostic) {
 	return [diagnostic.plugin ?? "", diagnostic.path ?? "", diagnostic.code ?? ""].join("\u0000");
@@ -161,12 +164,19 @@ function renderPluginCenter(plugins) {
 		onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
 	});
 	renderSettings(plugins);
-	renderDependencyGraph(document, elements.pluginGraph, plugins);
+	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
+	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
+		selectedId: selectedPluginName,
+		onSelect: (name) => {
+			selectedPluginName = name;
+			renderPluginCenter(plugins);
+		},
+	});
+	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
 	renderDependencyEdgeList(document, elements.pluginEdgeList, plugins);
 	elements.pluginCount.textContent = String(plugins.length);
 	elements.pluginSummary.textContent = `${plugins.length} 个插件`;
 }
-
 async function parseManagementResponse(response) {
 	let payload = null;
 	try {
