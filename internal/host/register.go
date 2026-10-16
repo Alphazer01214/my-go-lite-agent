@@ -42,3 +42,20 @@ func (h *Host) registerProvides(manifest plugin.Manifest) error {
 	}
 	return nil
 }
+
+// unregisterPlugin removes stale discovery-owned routes and provides so a
+// stopped or replaced plugin can be started again without capability conflicts.
+func (h *Host) unregisterPlugin(pluginName string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key, owner := range h.routes {
+		if owner == pluginName {
+			delete(h.routes, key)
+		}
+	}
+	for capability, owner := range h.provides {
+		if owner == pluginName {
+			delete(h.provides, capability)
+		}
+	}
+}

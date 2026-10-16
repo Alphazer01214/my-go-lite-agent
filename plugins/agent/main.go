@@ -55,7 +55,7 @@ func main() {
 		if err := decode(req, &in); err != nil {
 			return nil, err
 		}
-		return p.turnWithEmit(req.ID, in)
+		return p.turn(in)
 	})).WithInfo("turn", "run one agent turn (multi-session concurrent)"))
 
 	s.Register("loop", "cancel", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
@@ -77,6 +77,18 @@ func main() {
 		}
 		return p.configSet(in)
 	})).WithInfo("config.set", "update config (deferred while working)"))
+
+	s.Register("agent", "settings.get", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+		return p.settingsGet(), nil
+	})).WithInfo("settings.get", "read Settings Renderer values"))
+
+	s.Register("agent", "settings.save", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+		var in settingsSaveIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.settingsSave(in)
+	})).WithInfo("settings.save", "save Settings Renderer values"))
 
 	if err := s.Serve(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

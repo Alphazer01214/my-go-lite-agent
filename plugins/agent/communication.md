@@ -1,175 +1,212 @@
-# agent 通信流程
+# agent 通信契约
 
-本文是 agent 的通信规划：插件间调用、插件与 Host 交互。名词见 [CONTEXT.md](../../CONTEXT.md)，线契约见 [docs/protocol.md](../../docs/protocol.md)。能力清单与配置见 [README](README.md)。
+本文记录 `agent` 的方法、payload、跨插件调用和 WebUI 交互。JSON 字段是公共契约。Go 私有类型名不是公共契约。
 
-## 通信总览
+## 1. 对外方法
 
-agent 是 turn 的编排者。入站只收 `loop.*`，出站调用 session 与 llm。
+| 方法 | 用途 | 状态 |
+|---|---|---|
+| `loop.turn` | 执行一次 Turn | 当前实现 |
+| `loop.cancel` | 取消 Session 的活动 Turn | 当前实现 |
+| `agent.config.get` | 读取配置 | 当前实现 |
+| `agent.config.set` | 更新配置 | 当前实现 |
+| `agent.settings.get` | Settings Renderer 读取 | 当前实现 |
+| `agent.settings.save` | Settings Renderer 保存 | 当前实现 |
 
-| 方向 | 对端 | 能力 | 说明 |
-|------|------|------|------|
-| 入站 | Host / REPL | `loop.turn`、`loop.cancel` | 对话入口 |
-| 入站 | Host / REPL | `agent.config.get` / `set` | 编排配置 |
-| 出站 | session | `session.create`、`append`、`derive` | 会话写读 |
-| 出站 | llm | `llm.complete` | 补全，流式 |
-| 出站（可选） | memory | `memory.assemble` | 缺失时回落 `session.derive` |
-| 出站（可选） | tools | `tools.list`、`tools.call` | 缺失时纯对话 |
+## 2. loop.turn
 
-最小启动目标里 memory 与 tools 不存在。agent 对二者软依赖：调用失败即降级，不阻断 turn。
-
-## 入站能力
-
-### loop.turn
-
-一轮编排。payload：
+### 输入
 
 ```json
 {
-  "input": "hello",
-  "session_id": "",
-  "workspace": "",
-  "max_steps": 12,
-  "allowed_tools": []
+  "input": "分析这个项目",
+  "session_id": "s-123",
+  "workspace": "E:/project",
+  "max_steps": 32,
+  "allowed_tools": ["read_file"]
 }
 ```
 
-- `input` 必填，空则 `bad_arguments`。
-- `session_id` 空则先 `session.create`，回程带回新 id。
-- `max_steps` 缺省取配置，再缺省 128。
-- 同一 session 的 turn 串行；不同 session 并行。
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `input` | 是 | 用户输入 |
+| `session_id` | 否 | 为空时创建 Session |
+| `workspace` | 否 | 工具工作目录 |
+| `max_steps` | 否 | 覆盖配置值 |
+| `allowed_tools` | 否 | 非空时只保留交集工具 |
 
-返回 `turnOut`：
+### Response
 
 ```json
 {
-  "session_id": "...",
-  "reply": "...",
+  "session_id": "s-123",
+  "reply": "最终正文",
   "steps": 2,
   "cancelled": false,
-  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
   "seqs": [1, 2, 3]
 }
 ```
 
-### loop.cancel
+`seqs` 是本 Turn 写入的 Session seq 列表。取消时保存已累计 assistant 正文，并写入 `turn_end(cancelled)`。
 
-payload `{"session_id": "..."}`。置在途 turn 的取消标记，返回 `{"session_id": "...", "cancelled": true}`。无在途 turn 时返回 `cancelled: false`。
+## 3. loop.cancel
 
-取消不中断在途 `llm.complete`。LLM 结果到达后丢弃，turn 以 `cancelled: true` 收尾。
-
-### agent.config.get / set
-
-查看或修改 `default_scheme` 与 `max_steps`。turn 在途时 `set` 延后生效。
-
-## 出站调用
-
-一轮 turn 的出站顺序固定。下表按发生次序：
-
-| 次序 | 能力 | payload 要点 | 返回 |
-|------|------|--------------|------|
-| 1 | `session.create` | `{"workspace": ...}` | `{"session_id": "..."}` |
-| 2 | `session.append` | `turn_start` + `message(user)` 两条 fact | `{"seqs": [...]}` |
-| 3 | `memory.assemble` | `{"session_id": ...}` | `{"messages": [...]}` |
-| 3′ | `session.derive` | `{"session_id": ...}` | `{"messages": [...]}` |
-| 4 | `session.append` | `step_start` + `request_header` | `{"seqs": [...]}` |
-| 5 | `llm.complete` | `{"messages": [...], "tools": ..., "stream": true}` | `completeOut` |
-| 6 | `session.append` | `message(assistant)`，含 `tool_calls` | `{"seqs": [...]}` |
-| 7 | `tools.call` | `{"name", "arguments", "workspace", "call_id"}` | `{"content": "..."}` |
-| 8 | `session.append` | `message(tool)`、`step_end`、`turn_end` | `{"seqs": [...]}` |
-
-说明：
-
-- 次序 3 先试 `memory.assemble`。返回空或失败则走 3′ `session.derive`。
-- 次序 5～8 循环至 `max_steps` 或模型不再发起 tool call。
-- `llm.complete` 的 `messages` 为 OpenAI chat 形状。`tools` 为 OpenAI function 数组，由 `tools.list` 结果转换而来。
-- 每次 `session.append` 返回的 `seqs` 记入 `turnOut.seqs`。
-
-## 事件
-
-agent 发出一种归因 evt：
-
-| evt | 归因 | payload |
-|-----|------|---------|
-| `loop.chunk` | 入站 `loop.turn` 的 req id | 透传 `llm.chunk` 的 payload |
-
-`loop.chunk` 的 payload 形状（与 llm-openai 一致）：
+输入：
 
 ```json
-{"channel": "content", "delta": "…"}
-{"channel": "reasoning", "delta": "…"}
-{"channel": "tool_call", "index": 0, "id": "…", "type": "function", "function": {"name": "…", "arguments": "…"}}
+{
+  "session_id": "s-123"
+}
 ```
 
-agent 不改写 payload，只换主题名。调用方按 `channel` 过滤展示。
+输出：
 
-## 时序
+```json
+{
+  "session_id": "s-123",
+  "cancelled": true
+}
+```
 
-### 一轮 turn
+每个 Session 同时最多一个活动 Turn。`loop.cancel` 只取消该 Session 的活动 Turn。
+
+## 4. Agent 配置
+
+`agent.config.get` 输出：
+
+```json
+{
+  "default_scheme": "tool_calling",
+  "max_steps": 128
+}
+```
+
+`agent.config.set` 输入字段均可省略：
+
+```json
+{
+  "default_scheme": "tool_calling",
+  "max_steps": 64
+}
+```
+
+当前实现中，空字符串和非正数不覆盖原值。每次 Turn 在开始时捕获配置快照。配置修改不影响运行中的 Turn，并从下一次 Turn 开始生效。
+
+## 5. 下游调用
 
 ```mermaid
-sequenceDiagram
-    participant R as Host / REPL
-    participant A as agent
-    participant S as session
-    participant L as llm-openai
-    participant T as tools（可选）
-    R->>A: req loop.turn
-    A->>S: req session.create
-    S-->>A: res session_id
-    A->>S: req session.append (turn_start, message user)
-    loop 每个 step
-        A->>S: req session.derive
-        S-->>A: res messages[]
-        A->>S: req session.append (step_start, request_header)
-        A->>L: req llm.complete (stream)
-        L-->>A: evt llm.chunk × N
-        A-->>R: evt loop.chunk × N（透传）
-        L->>A: res completeOut
-        A->>S: req session.append (message assistant)
-        alt 无 tool_calls
-            A->>S: req session.append (step_end, turn_end)
-        else 有 tool_calls
-            loop 每个 tool_call
-                A->>T: req tools.call
-                T-->>A: res content
-                A->>S: req session.append (message tool)
-            end
-            A->>S: req session.append (step_end)
-        end
-    end
-    A->>R: res turnOut
+flowchart LR
+    A[agent] -->|session.create| S[session]
+    A -->|session.append| S
+    A -->|session.derive| S
+    A -->|session.stream.update| S
+    A -->|llm.complete| L[llm-openai]
+    A -.->|tools.list/call| T[tools plugins]
 ```
 
-### 取消 turn
+最小组合直接使用 `session.derive`。工具插件缺失时跳过工具阶段。
 
-```mermaid
-sequenceDiagram
-    participant R as Host / REPL
-    participant A as agent
-    R->>A: req loop.cancel
-    A-->>A: 置取消标记
-    A->>R: res cancelled: true
-    Note over A: 在途 llm.complete 不中断，结果丢弃
+## 6. Session Fact 序列
+
+当前实现写出：
+
+```text
+turn_start
+message(user)
+step_start
+request_header
+llm_usage
+message(assistant)
+message(tool)*
+step_end
+turn_end
 ```
 
-## 与 Host 的交互
+`turn_id` 和 `step_id` 写入对应 Fact 的 `meta`。
 
-| 项 | 约定 |
-|----|------|
-| 启动上报 | `Serve()` 时经 `host.register` 上报 handler 键 |
-| 出站 Call id | 形如 `agent-<seq>`；Host 改写 `fwd-<seq>`，回程还原 |
-| 入站 req id | Host 分配；handler 原样回显，`loop.chunk` 也用该 id 归因 |
-| `from` | Host 注入，插件不填 |
-| 对端死亡 | Host 合成 `plugin_down` res 闭环，agent 直接失败该 turn |
-| 无超时 | 调用不设超时；防挂死靠死亡闭环 |
+当前实现补充：
 
-## 错误码
+- `turn_id`、`step_id` 放入 Fact `meta`；
+- `llm_usage` 写入 Session；
+- assistant reasoning 写入最终 message 的 `meta`；
+- 不写 `stream_chunk`；
+- 取消时保存已累计 assistant 正文。
 
-| code | 产生方 | 触发 |
-|------|--------|------|
-| `bad_arguments` | agent | `input` 为空、payload 非法 |
-| `handler_error` | agent | 内部错误、响应解析失败 |
-| `session_not_found` | session | 透传 |
-| `llm_upstream` | llm-openai | 透传 |
-| `plugin_down` | Host | session 或 llm 进程死亡 |
-| `method_not_found` | Host / SDK | 目标能力未注册（可选能力降级的判定依据） |
+## 7. 流式通信
+
+Agent 消费 `llm.chunk`，不再向浏览器透传该私有 payload。
+
+当前链路：
+
+```text
+llm.chunk
+→ Agent Stream Accumulator
+→ StreamSnapshot
+→ session.stream.update
+→ session Runtime
+→ Command(stream)
+→ session-chat
+```
+
+`StreamSnapshot`：
+
+```json
+{
+  "session_id": "s-123",
+  "turn_id": "t-1",
+  "step_id": "st-2",
+  "update_id": 17,
+  "message": {
+    "role": "assistant",
+    "content": "当前累计正文",
+    "reasoning": "",
+    "tool_calls": []
+  },
+  "status": "streaming"
+}
+```
+
+`stream_chunk` 不持久化。Agent 会合并快速 Delta，首个 Delta 立即发布，之后最多每 24 个 Delta 或 100 ms 发布一次。最终 complete 和取消快照始终发布。最终 assistant `message` Fact 是正文真源。
+
+## 8. WebUI 交互
+
+| Component | 操作 | Capability |
+|---|---|---|
+| `session-chat` | 发送用户输入 | `loop.turn` |
+| `session-chat` | 取消当前 Turn | `loop.cancel` |
+| `session-chat` | 显示临时正文 | session 的 `Command(stream)` |
+| `session-chat` | 显示最终正文 | session 的 `State(ChatState)` |
+
+Agent 没有顶层 Component。Agent 不直接调用 `setData` 或 `runCommand`。
+
+## 9. 错误
+
+| 场景 | 行为 |
+|---|---|
+| `input` 为空 | `bad_arguments` |
+| Session 创建或写入失败 | 返回错误 |
+| LLM 调用失败 | 返回 `llm_upstream` 或下游错误 |
+| 工具失败 | 写 tool error，继续 Turn |
+| 达到 `max_steps` | 写 `turn_end(max_steps)` |
+| 取消 | 写 `turn_end(cancelled)` |
+| 插件退出 | Host 合成 `plugin_down` |
+
+## 10. 结构体索引
+
+| Go 类型 | 角色 |
+|---|---|
+| `turnState` | 单 Session 活动 Turn |
+| `turnIn` | `loop.turn` 输入 |
+| `turnOut` | `loop.turn` 输出 |
+| `cancelIn/cancelOut` | 取消输入输出 |
+| `config/configSetIn` | 配置 |
+| `chatMessage` | LLM 上下文消息 |
+| `toolCall/toolSpec` | LLM 和工具描述 |
+| `llmCompleteIn/llmCompleteOut` | LLM 调用子集 |
+| `sessionCreateIn/sessionAppendIn` | Session 调用子集 |
+| `streamSnapshot/streamAccumulator` | 流式累积和 Session 更新 |

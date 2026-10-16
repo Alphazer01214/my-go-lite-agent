@@ -105,7 +105,7 @@ type sessionCreateOut struct {
 }
 
 type sessionAppendIn struct {
-	SessionID string          `json:"session_id"`
+	SessionID string           `json:"session_id"`
 	Facts     []map[string]any `json:"facts"`
 }
 
@@ -118,6 +118,8 @@ type messagesOut struct {
 }
 
 const (
+	RoleAssistant = "assistant"
+
 	schemeChat        = "chat"
 	schemeToolCalling = "tool_calling"
 	schemeCoding      = "coding"

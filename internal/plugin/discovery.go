@@ -1,49 +1,29 @@
 package plugin
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 )
 
-// Discoveries represents the result of a plugin scan.
+// Discoveries represents the non-fatal result of a plugin scan.
 type Discoveries struct {
-	Plugins []Discovery
-	Errors  []ScannedError
-	// Warns   []ScanWarn
+	Plugins     []Discovery
+	Diagnostics []Diagnostic
 }
 
-// Discovery represents a plugin discovery.
+// Discovery represents one usable plugin manifest and its package directory.
 type Discovery struct {
 	Dir      string
 	Manifest Manifest
 }
 
-type ScannedError struct {
-	Dir string
-	Err error
-}
-
-// type ScanWarn struct {
-// 	Dir  string
-// 	Warn string
-// }
-
-func (e ScannedError) String() string {
-	return fmt.Sprintf("%s: %v\n", e.Dir, e.Err)
-}
-
-// ScanRoot root: plugins, entry: plugins/entry, manifest: plugins/entry/plugin.json
+// ScanRoot scans root/plugin directories and reports all problems as diagnostics.
 func ScanRoot(root string) Discoveries {
 	var res Discoveries
-	var plgs []Discovery
-	var errs []ScannedError
-	// var warns []ScanWarn
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		errs = append(errs, ScannedError{
-			Dir: root,
-			Err: fmt.Errorf("failed to read directory %s: %v\n", root, err),
+		res.Diagnostics = append(res.Diagnostics, Diagnostic{
+			Path: root, Code: diagnosticRootReadFailed, Message: err.Error(),
 		})
 		return res
 	}
@@ -55,49 +35,41 @@ func ScanRoot(root string) Discoveries {
 
 		pluginName := entry.Name()
 		dir := filepath.Join(root, pluginName)
-
-		// load manifest
-		maniPath := filepath.Join(dir, "plugin.json")
+		manifestPath := filepath.Join(dir, "plugin.json")
 		readmePath := filepath.Join(dir, "README.md")
-		if _, err := os.Stat(maniPath); err != nil {
-			errs = append(errs, ScannedError{
-				Dir: dir,
-				Err: fmt.Errorf("no manifest file (plugin.json) in %s is found\n", pluginName),
+
+		if _, err := os.Stat(manifestPath); err != nil {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Plugin: pluginName, Path: manifestPath,
+				Code: diagnosticManifestMissing, Message: err.Error(),
 			})
+			continue
 		}
-		manifest, err := LoadManifest(maniPath)
-		if err != nil {
-			errs = append(errs, ScannedError{
-				Dir: dir,
-				Err: fmt.Errorf("failed to load manifest file (plugin.json) in %s: %v\n", pluginName, err),
+
+		manifest, diagnostics := LoadManifest(manifestPath)
+		res.Diagnostics = append(res.Diagnostics, diagnostics...)
+		if manifest.Name == "" || manifest.Entry == "" {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Plugin: pluginName, Path: manifestPath, Code: diagnosticManifestUnusable,
+				Message: "name and entry are required",
 			})
 			continue
 		}
 
 		if pluginName != manifest.Name {
-			errs = append(errs, ScannedError{
-				Dir: dir,
-				Err: fmt.Errorf("plugin name in manifest (%s) does not match directory name (%s)\n", manifest.Name, pluginName),
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Plugin: pluginName, Path: manifestPath, Code: diagnosticManifestName,
+				Message: "manifest name does not match directory name",
 			})
-			continue
 		}
 
 		if _, err := os.Stat(readmePath); err != nil {
-			// warns = append(warns, ScanWarn{
-			// 	Dir:  dir,
-			// 	Warn: fmt.Sprintf("No readme file (README.md) in %s is found.", pluginName),
-			// })
-			_, _ = fmt.Fprintf(os.Stderr, "no README.md in plugin %v\n", pluginName)
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Plugin: pluginName, Path: readmePath, Code: diagnosticPluginReadme, Message: err.Error(),
+			})
 		}
 
-		plgs = append(plgs, Discovery{
-			Dir:      dir,
-			Manifest: manifest,
-		})
+		res.Plugins = append(res.Plugins, Discovery{Dir: dir, Manifest: manifest})
 	}
-
-	res.Plugins = plgs
-	res.Errors = errs
-	// res.Warns = warns
 	return res
 }

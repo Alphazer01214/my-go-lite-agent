@@ -38,27 +38,26 @@ func TestTurnStateCancel(t *testing.T) {
 	}
 }
 
-func TestConfigSetDeferredWhileWorking(t *testing.T) {
+func TestConfigSetAppliesToSubsequentTurns(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
 	_ = os.Chdir(dir)
 	defer func() { _ = os.Chdir(old) }()
 
 	p := newPlugin()
-	p.beginWork()
+	before := p.snapshot()
 	out, err := p.configSet(configSetIn{DefaultScheme: "coding", MaxSteps: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.DefaultScheme != "coding" {
-		t.Fatalf("report pending: %+v", out)
+	if out.DefaultScheme != "coding" || out.MaxSteps != 16 {
+		t.Fatalf("out=%+v", out)
 	}
-	if p.snapshot().DefaultScheme == "coding" {
-		t.Fatal("must not apply while working")
+	if before.DefaultScheme == "coding" {
+		t.Fatal("captured snapshot must not change")
 	}
-	p.endWork()
 	if p.snapshot().DefaultScheme != "coding" || p.snapshot().MaxSteps != 16 {
-		t.Fatalf("flush: %+v", p.snapshot())
+		t.Fatal("new snapshot must use new config")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
 		t.Fatal("config not written")

@@ -41,43 +41,40 @@ func TestConfigSetImmediateWhenIdle(t *testing.T) {
 	}
 }
 
-func TestConfigSetDeferredWhileWorking(t *testing.T) {
+func TestConfigChangeDoesNotAffectCapturedSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
 	_ = os.Chdir(dir)
 	defer func() { _ = os.Chdir(old) }()
 
 	p := newPlugin()
-	p.beginWork()
-	out, err := p.configSet(configSetIn{Model: "busy-model"})
+	captured := p.snapshot()
+	out, err := p.configSet(configSetIn{Model: "busy-model", APIKey: "sk-zzzzzzzzzz"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Model != "busy-model" {
-		t.Fatalf("should report pending target, got %+v", out)
+	if out.Model != "busy-model" || out.APIKey != "sk-***zzz" {
+		t.Fatalf("out=%+v", out)
 	}
-	if p.snapshot().Model == "busy-model" {
-		t.Fatal("must not apply while working")
+	if captured.Model == "busy-model" {
+		t.Fatal("captured snapshot must not change")
 	}
-	p.endWork()
 	if p.snapshot().Model != "busy-model" {
-		t.Fatalf("must flush on idle, got %+v", p.snapshot())
+		t.Fatal("subsequent snapshot must use new config")
 	}
 }
 
-func TestConfigSetMergeWhileWorking(t *testing.T) {
+func TestConfigChangesApplyInOrder(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
 	_ = os.Chdir(dir)
 	defer func() { _ = os.Chdir(old) }()
 
 	p := newPlugin()
-	p.beginWork()
 	_, _ = p.configSet(configSetIn{Model: "a"})
 	_, _ = p.configSet(configSetIn{Model: "b", APIKey: "sk-zzzzzzzzzz"})
-	p.endWork()
 	c := p.snapshot()
 	if c.Model != "b" || c.APIKey != "sk-zzzzzzzzzz" {
-		t.Fatalf("merged: %+v", c)
+		t.Fatalf("config=%+v", c)
 	}
 }

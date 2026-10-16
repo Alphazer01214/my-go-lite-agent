@@ -46,7 +46,7 @@ func newTestHost(names ...string) *Host {
 		h.gen[n] = 1
 		done := make(chan struct{})
 		close(done) // 假 proc 无真实进程，视为已退出
-		h.plugins[n] = &proc{stdin: &bufferWC{}, gen: 1, healthy: true, done: done}
+		h.plugins[n] = &proc{instanceID: n, pluginName: n, stdin: &bufferWC{}, gen: 1, healthy: true, done: done}
 	}
 	return h
 }

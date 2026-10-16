@@ -14,7 +14,7 @@ import (
 
 // payloads.go 集中定义 Host 运行时用到的全部契约常量。
 // 线格式 Frame / 编解码 / 版本见 protocol 包（单一定义）。
-// 破坏 host 方法名 / hostFaces / 错误码时，先改这里再改实现。
+// 破坏 host 方法名或错误码时，先改这里再改实现。
 
 // ---------------------------------------------------------------------------
 // Frame 线协议 — 唯一定义在 protocol；此处别名方便 Host 内部使用
@@ -54,53 +54,45 @@ const (
 	HostMethodEnsurePlugins    = "ensurePlugins"
 	HostMethodSetPluginEnabled = "setPluginEnabled"
 	HostMethodPluginSwitch     = "pluginSwitch"
+	HostMethodUIState          = "ui.state"
+	HostMethodUICommand        = "ui.command"
+	HostMethodContextCreate    = "context.create"
+	HostMethodContextBind      = "context.bind"
+	HostMethodContextClose     = "context.close"
+	HostMethodInstanceCreate   = "instance.create"
+	HostMethodInstanceClose    = "instance.close"
+	HostMethodInstanceRestart  = "instance.restart"
 )
 
 // FromHost 宿主合成帧的 from（protocol §3.5）。
 const FromHost = "host"
 
-// hostFaces：插件声明后才允许 Medium/宿主按面调用（与 provides 语义不同，不得混用）。
-const (
-	HostFaceConfig   = "config"
-	HostFaceCommands = "commands"
-	HostFaceUI       = "ui"
-)
-
-// HostFaces 是合法 hostFaces 全集，供 manifest 校验与 CallByFace 门禁使用。
-var HostFaces = []string{HostFaceConfig, HostFaceCommands, HostFaceUI}
-
-// hostFace 方法名（Frame.Capability = face，Method 取下列值）。
-const (
-	// commands
-	FaceMethodCall = "call"
-	// ui
-	FaceMethodAction = "action"
-	// config（Settings / /refresh）
-	FaceMethodReload = "reload"
-	FaceMethodSchema = "schema"
-	FaceMethodGet    = "get"
-	FaceMethodSet    = "set"
-)
-
 // Frame.Err.Code 线格式错误码（稳定契约；字符串值在 protocol 包）。
 const (
-	CodeHostClosed             = protocol.CodeHostClosed
-	CodeRouteFailed            = protocol.CodeRouteFailed
-	CodeMethodNotFound         = protocol.CodeMethodNotFound
-	CodePluginNotMounted       = protocol.CodePluginNotMounted
-	CodePluginDown             = protocol.CodePluginDown
-	CodePluginDisabled         = protocol.CodePluginDisabled
-	CodeTimeout                = protocol.CodeTimeout
-	CodeHandlerError           = protocol.CodeHandlerError
-	CodeHostServerClosed       = protocol.CodeHostServerClosed
-	CodeBadPayload             = protocol.CodeBadPayload
-	CodeBadArguments           = protocol.CodeBadArguments
-	CodeFrameTooLarge          = protocol.CodeFrameTooLarge
-	CodeEnsurePluginsFailed    = protocol.CodeEnsurePluginsFailed
-	CodeSetPluginEnabledFailed = protocol.CodeSetPluginEnabledFailed
-	CodeCapabilityConflict     = protocol.CodeCapabilityConflict
-	CodeHostFaceNotDeclared    = protocol.CodeHostFaceNotDeclared
-	CodePanelRejected          = protocol.CodePanelRejected
+	CodeHostClosed                 = protocol.CodeHostClosed
+	CodeRouteFailed                = protocol.CodeRouteFailed
+	CodeMethodNotFound             = protocol.CodeMethodNotFound
+	CodePluginNotMounted           = protocol.CodePluginNotMounted
+	CodePluginDown                 = protocol.CodePluginDown
+	CodePluginDisabled             = protocol.CodePluginDisabled
+	CodeTimeout                    = protocol.CodeTimeout
+	CodeHandlerError               = protocol.CodeHandlerError
+	CodeHostServerClosed           = protocol.CodeHostServerClosed
+	CodeBadPayload                 = protocol.CodeBadPayload
+	CodeBadArguments               = protocol.CodeBadArguments
+	CodeFrameTooLarge              = protocol.CodeFrameTooLarge
+	CodeEnsurePluginsFailed        = protocol.CodeEnsurePluginsFailed
+	CodeSetPluginEnabledFailed     = protocol.CodeSetPluginEnabledFailed
+	CodeCapabilityConflict         = protocol.CodeCapabilityConflict
+	CodePanelRejected              = protocol.CodePanelRejected
+	CodeInstanceNotFound           = protocol.CodeInstanceNotFound
+	CodeInstanceExists             = protocol.CodeInstanceExists
+	CodeInstanceClosed             = protocol.CodeInstanceClosed
+	CodeContextNotFound            = protocol.CodeContextNotFound
+	CodeContextClosed              = protocol.CodeContextClosed
+	CodeContextOwnerMismatch       = protocol.CodeContextOwnerMismatch
+	CodeContextParticipantMismatch = protocol.CodeContextParticipantMismatch
+	CodeContextBindingInvalid      = protocol.CodeContextBindingInvalid
 )
 
 // 哨兵错误（error）。比较请用 errors.Is(err, ErrXxx)。
@@ -125,8 +117,6 @@ var (
 	ErrSetPluginEnabledFailed = errors.New(CodeSetPluginEnabledFailed)
 	// 注册表
 	ErrCapabilityConflict = errors.New(CodeCapabilityConflict)
-	// hostFaces 门禁
-	ErrHostFaceNotDeclared = errors.New(CodeHostFaceNotDeclared)
 	// Panel 结构校验
 	ErrPanelRejected = errors.New(CodePanelRejected)
 )
@@ -158,8 +148,6 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	// DefaultCallTimeout manifest 未声明 timeout_ms 时的默认调用超时。
-	DefaultCallTimeout = 30 * time.Second
 	// DefaultShutdownGrace Close 时 stdin EOF 后等待子进程退出的宽限期，超时 killTree。
 	DefaultShutdownGrace = 2 * time.Second
 	// SwitchFileName 插件启用/禁用名单文件名（位于 pluginsDir 下）。

@@ -15,6 +15,11 @@
     { "name": "info", "description": "Show session metadata", "usage": "/session info" }
   ],
   "ui": {
-    "entry": "ui/main.js"
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "session-history", "mount_id": "history", "slot": "left" },
+      { "tag": "session-chat", "mount_id": "chat", "slot": "center" },
+      { "tag": "session-trace", "mount_id": "trace", "slot": "right" }
+    ]
   }
 }

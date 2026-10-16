@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+
+	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
 // Frame 线类型与编解码的唯一定义在 protocol；Host 经别名使用（payloads.go）。
@@ -13,6 +14,22 @@ import (
 type CallResult struct {
 	Frame  *Frame
 	Events []*Frame
+}
+
+func (h *Host) routeFrame(from string, gen int, frame *Frame) {
+	if !h.instanceGenerationMatches(from, gen) {
+		h.hlog(fmt.Sprintf("frame dropped instance=%s generation=%d type=%s method=%s.%s",
+			from, gen, frame.Type, frame.Capability, frame.Method))
+		return
+	}
+	h.route(from, frame)
+}
+
+func (h *Host) instanceGenerationMatches(instanceID string, gen int) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	p := h.plugins[instanceID]
+	return p != nil && p.gen == gen
 }
 
 func (h *Host) route(from string, frame *Frame) {
@@ -31,6 +48,13 @@ func (h *Host) route(from string, frame *Frame) {
 // handleRequest only accept req with frame.ID = "plugin-xxx"
 // Target is resolved from the (capability, method) route table; self-call is a legal loopback.
 func (h *Host) handleRequest(from string, frame *Frame) error {
+	if frame.ContextID != "" {
+		if _, err := h.useExecutionContext(frame.ContextID, from); err != nil {
+			code := errorCodeFor(err, CodeRouteFailed)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
+			return err
+		}
+	}
 	if h.isClosed() {
 		err := fmt.Errorf("host is closed: %w", ErrHostClosed)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeHostClosed, err.Error())
@@ -44,14 +68,18 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
 		return err
 	}
-	owner := h.routeOwner(frame.Capability, frame.Method)
-	if owner == "" {
+	ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
+	if ownerPlugin == "" {
 		err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
 		return err
 	}
-	if err := h.forward(from, owner, frame); err != nil {
-		code := CodeRouteFailed
+	owner, err := h.resolveInstance(frame.ContextID, frame.Capability, frame.Method, ownerPlugin)
+	if err == nil {
+		err = h.forward(from, owner, ownerPlugin, frame)
+	}
+	if err != nil {
+		code := errorCodeFor(err, CodeRouteFailed)
 		// map sentinel errors to stable wire codes
 		switch {
 		case errors.Is(err, ErrPluginNotMounted):
@@ -75,6 +103,22 @@ func (h *Host) dispatchHost(from string, frame *Frame) error {
 		return h.hostRegister(from, frame)
 	case HostMethodPlugins:
 		return h.hostPlugins(from, frame)
+	case HostMethodUIState:
+		return h.hostUIPublish(from, frame, HostMethodUIState)
+	case HostMethodUICommand:
+		return h.hostUIPublish(from, frame, HostMethodUICommand)
+	case HostMethodContextCreate:
+		return h.hostContextCreate(from, frame)
+	case HostMethodContextBind:
+		return h.hostContextBind(from, frame)
+	case HostMethodContextClose:
+		return h.hostContextClose(from, frame)
+	case HostMethodInstanceCreate:
+		return h.hostInstanceCreate(from, frame)
+	case HostMethodInstanceClose:
+		return h.hostInstanceClose(from, frame)
+	case HostMethodInstanceRestart:
+		return h.hostInstanceRestart(from, frame)
 	default:
 		err := fmt.Errorf("no handler for host.%s: %w", frame.Method, ErrMethodNotFound)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
@@ -85,6 +129,7 @@ func (h *Host) dispatchHost(from string, frame *Frame) error {
 // hostRegister 是路由表的唯一写入口（protocol §5.1）。
 // 同插件重复上报同键 last-wins；跨插件冲突键进 rejected 且不改属主。
 func (h *Host) hostRegister(from string, frame *Frame) error {
+	pluginName := h.pluginNameForInstance(from)
 	var in struct {
 		Handlers []struct {
 			Capability string `json:"capability"`
@@ -110,11 +155,11 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 			continue
 		}
 		key := hd.Capability + "." + hd.Method
-		if owner, ok := h.routes[key]; ok && owner != from {
+		if owner, ok := h.routes[key]; ok && owner != pluginName {
 			rejected = append(rejected, routeKey{hd.Capability, hd.Method})
 			continue
 		}
-		h.routes[key] = from
+		h.routes[key] = pluginName
 		accepted = append(accepted, routeKey{hd.Capability, hd.Method})
 	}
 	h.mu.Unlock()
@@ -129,17 +174,9 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 	return nil
 }
 
-// hostPlugins 应答当前已挂载插件名列表（观测/依赖图用）。
+// hostPlugins 应答当前插件状态快照（管理面/观测/依赖图用）。
 func (h *Host) hostPlugins(from string, frame *Frame) error {
-	h.mu.RLock()
-	names := make([]string, 0, len(h.plugins))
-	for name := range h.plugins {
-		names = append(names, name)
-	}
-	h.mu.RUnlock()
-	sort.Strings(names)
-
-	payload, err := json.Marshal(map[string]any{"plugins": names})
+	payload, err := json.Marshal(map[string]any{"plugins": h.PluginSnapshot()})
 	if err != nil {
 		err = fmt.Errorf("marshal plugins result: %w", err)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeHandlerError, err.Error())
@@ -155,6 +192,10 @@ func (h *Host) hostPlugins(from string, frame *Frame) error {
 func (h *Host) routeOwner(capability string, method string) string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	return h.routeOwnerLocked(capability, method)
+}
+
+func (h *Host) routeOwnerLocked(capability string, method string) string {
 	if owner, ok := h.routes[capability+"."+method]; ok {
 		return owner
 	}
@@ -175,7 +216,11 @@ func (h *Host) handleResponse(frame *Frame) error {
 	// id 改回 caller 视角；from 标被调方（溯源，不参与路由）
 	res := *frame
 	res.ID = wt.frameID
-	res.From = wt.target
+	res.From = wt.targetPlugin
+	if res.From == "" {
+		res.From = h.pluginNameForInstance(wt.target)
+	}
+	res.ContextID = wt.contextID
 
 	// WaitHost：投 resCh（buffered 1，double 防），不写回插件
 	if wt.kind == WaitHost && wt.resCh != nil {
@@ -204,6 +249,7 @@ func (h *Host) handleEvent(from string, frame *Frame) error {
 	}
 	kind := wt.kind
 	caller := wt.caller
+	contextID := wt.contextID
 	originalID := wt.frameID
 	onEvent := wt.onEvent
 	if kind == WaitHost && onEvent == nil {
@@ -214,7 +260,8 @@ func (h *Host) handleEvent(from string, frame *Frame) error {
 	// id 改回 caller 视角；from 标 evt 来源插件
 	ev := *frame
 	ev.ID = originalID
-	ev.From = from
+	ev.From = h.pluginNameForInstance(from)
+	ev.ContextID = contextID
 
 	if kind == WaitHost {
 		if onEvent != nil {
@@ -257,10 +304,14 @@ func (h *Host) replyOK(caller string, originalID string, capability string,
 // forward sends a req frame from one plugin to another, and waits for the response.
 // owner is the resolved plugin process name (Host-internal; not a Frame field).
 // Self-call (owner == from) is a legal loopback.
-func (h *Host) forward(from string, owner string, frame *Frame) error {
+func (h *Host) forward(from string, owner string, ownerPlugin string, frame *Frame) error {
 	if err := h.alive(owner); err != nil {
 		return err
 	}
+	if err := h.joinExecutionContext(frame.ContextID, owner); err != nil {
+		return err
+	}
+	fromPlugin := h.pluginNameForInstance(from)
 
 	h.mu.Lock()
 	// Here handles the frame original plugin(from) sent
@@ -268,13 +319,16 @@ func (h *Host) forward(from string, owner string, frame *Frame) error {
 	// the fwd key (fwd-xxxxxx) marks the frame is waiting for a response
 	h.seq++
 	wt := &wait{
-		kind:       WaitPlugin,
-		caller:     from,
-		target:     owner,
-		frameID:    frame.ID,
-		capability: frame.Capability,
-		method:     frame.Method,
-		payload:    append(json.RawMessage(nil), frame.Payload...),
+		kind:         WaitPlugin,
+		caller:       from,
+		callerPlugin: fromPlugin,
+		target:       owner,
+		targetPlugin: ownerPlugin,
+		contextID:    frame.ContextID,
+		frameID:      frame.ID,
+		capability:   frame.Capability,
+		method:       frame.Method,
+		payload:      append(json.RawMessage(nil), frame.Payload...),
 	}
 	// pending[fwd-xxx] = wait{plugin-xxx}
 	forwardID := fmt.Sprintf("fwd-%d", h.seq)
@@ -293,7 +347,7 @@ func (h *Host) forward(from string, owner string, frame *Frame) error {
 	// from 注入真实来源插件名（protocol §3.5），插件无法伪造
 	forwardFrame := *frame
 	forwardFrame.ID = forwardID
-	forwardFrame.From = from
+	forwardFrame.From = fromPlugin
 
 	if err := h.write(owner, &forwardFrame); err != nil {
 		h.mu.Lock()
@@ -318,16 +372,18 @@ func (h *Host) isClosed() bool {
 }
 
 func (h *Host) write(to string, frame *Frame) error {
-
 	if err := h.alive(to); err != nil {
 		return err
 	}
-	h.mu.Lock()
+	h.mu.RLock()
 	plg := h.plugins[to]
+	h.mu.RUnlock()
+	if plg == nil {
+		return fmt.Errorf("plugin instance %s not mounted: %w", to, ErrPluginNotMounted)
+	}
 	plg.mu.Lock()
 	err := WriteFrame(plg.stdin, frame)
 	plg.mu.Unlock()
-	h.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -336,7 +392,7 @@ func (h *Host) write(to string, frame *Frame) error {
 	return nil
 }
 
-func (h *Host) read(name string, gen int, stdout io.Reader) {
+func (h *Host) read(instanceID string, pluginName string, gen int, stdout io.Reader) {
 	for {
 		frame, err := ReadFrame(stdout)
 		if err != nil {
@@ -344,10 +400,53 @@ func (h *Host) read(name string, gen int, stdout io.Reader) {
 			if !h.isClosed() {
 				h.hlog(fmt.Sprintf("read frame error: %v", err))
 			}
-			h.markUnhealthy(name, gen)
+			h.markUnhealthy(instanceID, gen)
 			return
 		}
-		h.tracef("in", name, frame)
-		h.route(name, frame)
+		h.tracef("in", pluginName, frame)
+		h.routeFrame(instanceID, gen, frame)
+	}
+}
+
+func (h *Host) hostUIPublish(from string, frame *Frame, method string) error {
+	h.mu.RLock()
+	publisher := h.uiPublisher
+	h.mu.RUnlock()
+	if publisher == nil {
+		err := fmt.Errorf("webui publisher is not mounted: %w", protocol.ErrUINotMounted)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, protocol.CodeUINotMounted, err.Error())
+		return err
+	}
+
+	var payload json.RawMessage
+	var err error
+	switch method {
+	case HostMethodUIState:
+		payload, err = publisher.PublishState(from, frame.Payload)
+	case HostMethodUICommand:
+		payload, err = publisher.PublishCommand(from, frame.Payload)
+	default:
+		err = fmt.Errorf("unknown ui publish method %q: %w", method, ErrMethodNotFound)
+	}
+	if err != nil {
+		code := uiErrorCode(err)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
+		return err
+	}
+	h.replyOK(from, frame.ID, frame.Capability, frame.Method, payload)
+	return nil
+}
+func uiErrorCode(err error) string {
+	switch {
+	case errors.Is(err, protocol.ErrUINotMounted):
+		return protocol.CodeUINotMounted
+	case errors.Is(err, protocol.ErrUIOwnerMismatch):
+		return protocol.CodeUIOwnerMismatch
+	case errors.Is(err, ErrBadPayload):
+		return CodeBadPayload
+	case errors.Is(err, ErrBadArguments):
+		return CodeBadArguments
+	default:
+		return CodeHandlerError
 	}
 }

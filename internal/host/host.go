@@ -17,7 +17,7 @@ import (
 type Host struct {
 	mu sync.RWMutex
 	// plugins process map
-	// plugin name -> proc
+	// instance id -> proc
 	plugins map[string]*proc
 	// pending wait map
 	// plugin id -> wait
@@ -32,6 +32,12 @@ type Host struct {
 	routes map[string]string
 	// disabled plugin name -> true
 	disabled map[string]bool
+	// stopped records explicit manual stop intent for the current Host run.
+	stopped map[string]bool
+	// startupPlanned records the initial autostart closure, including failed launches.
+	startupPlanned map[string]bool
+	// lifecycleMu serializes rescan/start/stop transitions.
+	lifecycleMu sync.Mutex
 	// discoveries is the result of scanning the pluginDir for binaries
 	// including their manifests,
 	discoveries plugin.Discoveries
@@ -41,17 +47,26 @@ type Host struct {
 	closed bool
 	gen    map[string]int
 
+	// contexts is Host's generic scheduling scope registry.
+	contexts   map[string]*ExecutionContext
+	contextSeq int
+
 	mountedUI map[string]bool
 
 	// hlog is the host log CALLBACK function
 	hlog func(message string)
 	// trace observes every Frame crossing the Host boundary (debug; nil = off)
-	trace TraceFunc
+	uiPublisher UIPublisher
+	trace       TraceFunc
 }
 
 type proc struct {
 	// discovery dir and manifest
 	discovery plugin.Discovery
+	// instanceID identifies this process activation; pluginName remains Frame identity.
+	instanceID     string
+	pluginName     string
+	configRevision string
 	// cmd is the real process
 	cmd *exec.Cmd
 	// stdin is the ONLY way to write Frame into the pipeline
@@ -60,16 +75,20 @@ type proc struct {
 	gen   int
 	mu    sync.Mutex
 	// done is closed after cmd.Wait() returns (process fully reaped)
-	done    chan struct{}
-	healthy bool
-	timeout time.Duration
+	done     chan struct{}
+	healthy  bool
+	stopping bool
+	timeout  time.Duration
 }
 
 type wait struct {
-	// caller is the plugin name that called the wait
-	caller string
-	// target is the resolved owner plugin process name (Host-internal routing result)
-	target string
+	// caller is the source instance id for plugin-originated calls.
+	caller       string
+	callerPlugin string
+	// target is the resolved owner instance id.
+	target       string
+	targetPlugin string
+	contextID    string
 	// frameID is the caller's frame id
 	frameID string
 	// kind
@@ -108,6 +127,13 @@ func (h *Host) SetLogFunc(logFunc func(message string)) {
 // 或 "out"（Host→插件）；plugin 为对端插件名。回调在锁外调用，须快且非阻塞。
 type TraceFunc func(dir string, plugin string, frame *Frame)
 
+// SetUIPublisher sets the WebUI state/command publisher.
+func (h *Host) SetUIPublisher(publisher UIPublisher) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.uiPublisher = publisher
+}
+
 // SetTraceFunc 设置 Frame trace 回调；nil 关闭。
 func (h *Host) SetTraceFunc(fn TraceFunc) {
 	h.mu.Lock()
@@ -129,13 +155,24 @@ func (h *Host) GetMountedPlugins() []string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	var mounted []string
-	for name := range h.plugins {
+	seen := make(map[string]struct{}, len(h.plugins))
+	for instanceID, p := range h.plugins {
+		name := instanceID
+		if p != nil && p.pluginName != "" {
+			name = p.pluginName
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
 		mounted = append(mounted, name)
 	}
 	return mounted
 }
 
 func (h *Host) IsPluginDisabled(name string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return h.disabled[name]
 }
 
@@ -159,21 +196,27 @@ func (h *Host) alive(name string) error {
 // logFunc 为 nil 时日志走 stderr（stdout 留给对话）。
 func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	h := &Host{
-		plugins:     make(map[string]*proc),
-		pending:     make(map[string]*wait),
-		provides:    make(map[string]string),
-		routes:      make(map[string]string),
-		discoveries: discoveries,
-		disabled:    make(map[string]bool),
-		mountedUI:   make(map[string]bool),
-		gen:         make(map[string]int),
-		hlog:        defaultLogFunc,
+		plugins:        make(map[string]*proc),
+		pending:        make(map[string]*wait),
+		provides:       make(map[string]string),
+		routes:         make(map[string]string),
+		discoveries:    discoveries,
+		disabled:       make(map[string]bool),
+		stopped:        make(map[string]bool),
+		startupPlanned: make(map[string]bool),
+		mountedUI:      make(map[string]bool),
+		gen:            make(map[string]int),
+		contexts:       make(map[string]*ExecutionContext),
+		hlog:           defaultLogFunc,
 	}
 	if logFunc != nil {
 		h.hlog = logFunc
 	}
 
 	ordered, warns := plugin.AutostartClosure(discoveries)
+	for _, d := range ordered {
+		h.startupPlanned[d.Manifest.Name] = true
+	}
 	for _, w := range warns {
 		h.hlog("mount warn: " + w)
 	}
@@ -182,7 +225,7 @@ func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 		h.hlog(fmt.Sprintf("mount register: %v", err))
 	}
 	for _, d := range ordered {
-		if err := h.launch(d); err != nil {
+		if err := h.launchInstance(d.Manifest.Name, d, ""); err != nil {
 			h.hlog(fmt.Sprintf("mount %s: %v", d.Manifest.Name, err))
 			continue
 		}

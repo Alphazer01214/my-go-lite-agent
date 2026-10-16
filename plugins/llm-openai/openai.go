@@ -89,8 +89,6 @@ func (p *plugin) complete(in completeIn, emit emitFunc) (completeOut, error) {
 		Temperature: in.Temperature,
 		MaxTokens:   in.MaxTokens,
 	}
-	p.beginWork()
-	defer p.endWork()
 	if stream {
 		req.StreamOptions = &struct {
 			IncludeUsage bool `json:"include_usage"`

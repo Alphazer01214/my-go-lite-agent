@@ -1,24 +1,41 @@
 package protocol
 
+import "errors"
+
 // Stable wire error_code values (protocol.md §7).
 // Written to Frame.ErrorCode; SDK uses Code(err) / ErrCode(code, msg) on top.
 const (
-	CodeHostClosed             = "host_closed"
-	CodeRouteFailed            = "route_failed"
-	CodeMethodNotFound         = "method_not_found"
-	CodePluginNotMounted       = "plugin_not_mounted"
-	CodePluginDown             = "plugin_down"
-	CodePluginDisabled         = "plugin_disabled"
-	CodeTimeout                = "timeout"
-	CodeHandlerError           = "handler_error"
-	CodeHostServerClosed       = "server_closed"
-	CodeServerClosed           = "server_closed"
-	CodeBadPayload             = "bad_payload"
-	CodeBadArguments           = "bad_arguments"
-	CodeFrameTooLarge          = "frame_too_large"
-	CodeEnsurePluginsFailed    = "ensure_plugins_failed"
-	CodeSetPluginEnabledFailed = "set_plugin_enabled_failed"
-	CodeCapabilityConflict     = "capability_conflict"
-	CodeHostFaceNotDeclared    = "host_face_not_declared"
-	CodePanelRejected          = "panel_rejected"
+	CodeHostClosed                 = "host_closed"
+	CodeRouteFailed                = "route_failed"
+	CodeMethodNotFound             = "method_not_found"
+	CodePluginNotMounted           = "plugin_not_mounted"
+	CodePluginDown                 = "plugin_down"
+	CodePluginDisabled             = "plugin_disabled"
+	CodeTimeout                    = "timeout"
+	CodeHandlerError               = "handler_error"
+	CodeHostServerClosed           = "server_closed"
+	CodeServerClosed               = "server_closed"
+	CodeBadPayload                 = "bad_payload"
+	CodeBadArguments               = "bad_arguments"
+	CodeFrameTooLarge              = "frame_too_large"
+	CodeEnsurePluginsFailed        = "ensure_plugins_failed"
+	CodeSetPluginEnabledFailed     = "set_plugin_enabled_failed"
+	CodeCapabilityConflict         = "capability_conflict"
+	CodePanelRejected              = "panel_rejected"
+	CodeUINotMounted               = "ui_not_mounted"
+	CodeUIOwnerMismatch            = "ui_owner_mismatch"
+	CodeInstanceNotFound           = "instance_not_found"
+	CodeInstanceExists             = "instance_exists"
+	CodeInstanceClosed             = "instance_closed"
+	CodeContextNotFound            = "context_not_found"
+	CodeContextClosed              = "context_closed"
+	CodeContextOwnerMismatch       = "context_owner_mismatch"
+	CodeContextParticipantMismatch = "context_participant_mismatch"
+	CodeContextBindingInvalid      = "context_binding_invalid"
+)
+
+// UI publish errors are returned by the Host WebUI publisher seam.
+var (
+	ErrUINotMounted    = errors.New(CodeUINotMounted)
+	ErrUIOwnerMismatch = errors.New(CodeUIOwnerMismatch)
 )

@@ -30,7 +30,7 @@ type tool struct {
 }
 
 type History struct {
-	messages []chatMessage `json:"messages"`
+	Messages []chatMessage `json:"messages"`
 }
 
 func compact(messages []chatMessage) []chatMessage {

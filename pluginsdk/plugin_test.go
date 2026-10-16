@@ -318,3 +318,71 @@ type wrapErr struct{ inner error }
 
 func (e *wrapErr) Error() string { return e.inner.Error() }
 func (e *wrapErr) Unwrap() error { return e.inner }
+
+func TestDispatchExposesContextID(t *testing.T) {
+	p, _, outR := newPipePlugin(t)
+	p.Register("demo", "echo", NewHandler(func(req *Request) (json.RawMessage, error) {
+		if req.ContextID != "ctx-in" {
+			t.Fatalf("request context = %q", req.ContextID)
+		}
+		return req.Payload, nil
+	}))
+
+	go p.dispatch(&protocol.Frame{
+		ID: "ctx-call", ContextID: "ctx-in", Type: protocol.FrameRequest,
+		Capability: "demo", Method: "echo", Payload: json.RawMessage(`{}`),
+	})
+	res, err := protocol.ReadFrame(outR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ErrorCode != "" {
+		t.Fatalf("response = %+v", res)
+	}
+}
+
+func TestCallInContextPreservesContextID(t *testing.T) {
+	p, inW, outR := newPipePlugin(t)
+	go func() { _ = p.Listen() }()
+	type callResult struct {
+		payload json.RawMessage
+		err     error
+	}
+	result := make(chan callResult, 1)
+	go func() {
+		payload, err := p.CallWithCallbackInContext("ctx-out", "demo", "run", json.RawMessage(`{}`), func(event *Event) {
+			if event.ContextID != "ctx-out" {
+				t.Errorf("event context = %q", event.ContextID)
+			}
+		})
+		result <- callResult{payload: payload, err: err}
+	}()
+
+	req, err := protocol.ReadFrame(outR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ContextID != "ctx-out" {
+		t.Fatalf("request context = %q", req.ContextID)
+	}
+	if err := protocol.WriteFrame(inW, &protocol.Frame{
+		ID: req.ID, ContextID: "ctx-out", Type: protocol.FrameEvent,
+		Capability: "demo", Method: "chunk", Payload: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFrame(inW, &protocol.Frame{
+		ID: req.ID, ContextID: "ctx-out", Type: protocol.FrameResponse,
+		Capability: "demo", Method: "run", Payload: json.RawMessage(`{"ok":true}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := <-result
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if string(got.payload) != `{"ok":true}` {
+		t.Fatalf("payload = %s", got.payload)
+	}
+}

@@ -5,24 +5,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 type store struct {
-	mu      sync.Mutex
-	id      string
-	meta    Meta
-	f       *os.File
-	nextSeq int
+	mu        sync.Mutex
+	id        string
+	meta      Meta
+	f         *os.File
+	nextSeq   int
+	factCount int
+	lastTS    int64
 }
 
 type plugin struct {
-	dir  string
-	cfg  config
-	mu   sync.RWMutex
-	reg  map[string]*store
+	dir        string
+	cfg        config
+	mu         sync.RWMutex
+	reg        map[string]*store
+	streams    map[string]streamSnapshot
+	ui         uiPublisher
+	uiRevision uint64
+	selected   string
 }
 
 const defaultDir = "./sessions"
@@ -41,7 +48,7 @@ func newPlugin(dir string) *plugin {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		panic(err)
 	}
-	return &plugin{dir: dir, reg: make(map[string]*store), cfg: loadConfig()}
+	return &plugin{dir: dir, reg: make(map[string]*store), streams: make(map[string]streamSnapshot), cfg: loadConfig()}
 }
 
 func loadConfig() config {
@@ -60,6 +67,24 @@ func loadConfig() config {
 		cfg.FullToolResults = *raw.FullToolResults
 	}
 	return cfg
+}
+
+func (p *plugin) close() {
+	p.mu.Lock()
+	stores := make([]*store, 0, len(p.reg))
+	for _, st := range p.reg {
+		stores = append(stores, st)
+	}
+	p.reg = make(map[string]*store)
+	p.mu.Unlock()
+	for _, st := range stores {
+		st.mu.Lock()
+		if st.f != nil {
+			_ = st.f.Close()
+			st.f = nil
+		}
+		st.mu.Unlock()
+	}
 }
 
 func (p *plugin) sessionPath(id string) string {
@@ -108,6 +133,8 @@ func (p *plugin) recover(id string) (*store, error) {
 	}
 	lines := strings.Split(string(data), "\n")
 	maxSeq := 0
+	count := 0
+	var lastTS int64
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -118,8 +145,12 @@ func (p *plugin) recover(id string) (*store, error) {
 			fmt.Fprintf(os.Stderr, "session: skip corrupt line %s:%d: %v\n", id, i+1, err)
 			continue
 		}
+		count++
 		if fact.Seq > maxSeq {
 			maxSeq = fact.Seq
+		}
+		if fact.Timestamp > lastTS {
+			lastTS = fact.Timestamp
 		}
 		if fact.Type == TypeSessionStart && len(fact.Meta) > 0 {
 			var meta Meta
@@ -129,6 +160,8 @@ func (p *plugin) recover(id string) (*store, error) {
 		}
 	}
 	st.nextSeq = maxSeq + 1
+	st.factCount = count
+	st.lastTS = lastTS
 	if st.meta.SessionID == "" {
 		st.meta.SessionID = id
 	}
@@ -174,8 +207,8 @@ func (p *plugin) create(in createIn) (createOut, error) {
 		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if st, ok := p.reg[id]; ok {
+		p.mu.Unlock()
 		return createOut{SessionID: st.id, CreatedTimestamp: st.meta.CreatedTimestamp}, nil
 	}
 
@@ -190,6 +223,7 @@ func (p *plugin) create(in createIn) (createOut, error) {
 	}
 	f, err := os.OpenFile(p.sessionPath(id), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
+		p.mu.Unlock()
 		return createOut{}, errHandler(err.Error())
 	}
 	st := &store{id: id, meta: meta, f: f, nextSeq: 1}
@@ -199,9 +233,13 @@ func (p *plugin) create(in createIn) (createOut, error) {
 		Meta: mustJSON(meta),
 	}}); err != nil {
 		_ = f.Close()
+		p.mu.Unlock()
 		return createOut{}, err
 	}
 	p.reg[id] = st
+	p.mu.Unlock()
+
+	p.publishAfterCreate(id)
 	return createOut{SessionID: id, CreatedTimestamp: meta.CreatedTimestamp}, nil
 }
 
@@ -223,6 +261,16 @@ func (p *plugin) append(in appendIn) (appendOut, error) {
 	if err != nil {
 		return appendOut{}, err
 	}
+	for _, fact := range in.Facts {
+		if fact.Type != TypeMessage && fact.Type != TypeTurnEnd {
+			continue
+		}
+		meta := p.sessionFactContext(fact.Meta)
+		if fact.Type == TypeTurnEnd || (fact.Role == RoleAssistant && meta.TurnID != "") {
+			p.clearStream(st.id, meta.TurnID, meta.StepID)
+		}
+	}
+	p.publishAfterAppend(st.id)
 	return appendOut{SessionID: st.id, Seqs: seqs, NextSeq: next}, nil
 }
 
@@ -263,7 +311,15 @@ func (s *store) appendLocked(ins []factIn) ([]int, int, error) {
 	if _, err := s.f.WriteString(b.String()); err != nil {
 		return nil, s.nextSeq, errHandler(err.Error())
 	}
+	s.factCount += len(ins)
+	s.lastTS = ts
 	return seqs, s.nextSeq, nil
+}
+
+func (s *store) counts() (int, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.factCount, s.lastTS
 }
 
 func (p *plugin) query(in queryIn) (queryOut, error) {
@@ -344,38 +400,33 @@ func (p *plugin) list() (listOut, error) {
 	}
 	p.mu.RUnlock()
 
-	out := listOut{Sessions: []sessionSummary{}}
+	out := listOut{Sessions: make([]sessionSummary, 0, len(ids))}
 	for _, id := range ids {
 		st, err := p.get(id)
 		if err != nil {
 			continue
 		}
-		_, total, err := p.readFacts(id)
-		if err != nil {
-			continue
-		}
-		var lastTS int64
-		if data, err := os.ReadFile(p.sessionPath(id)); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				var f Fact
-				if json.Unmarshal([]byte(line), &f) == nil && f.Timestamp > 0 {
-					lastTS = f.Timestamp
-				}
-			}
-		}
+		count, lastTS := st.counts()
 		out.Sessions = append(out.Sessions, sessionSummary{
 			SessionID:        st.id,
 			Name:             st.meta.Name,
 			Workspace:        st.meta.Workspace,
-			FactCount:        total,
+			FactCount:        count,
 			CreatedTimestamp: st.meta.CreatedTimestamp,
 			LastTimestamp:    lastTS,
 		})
 	}
+	// Newest first. Map iteration is randomized, so the order must be explicit.
+	sort.Slice(out.Sessions, func(i, j int) bool {
+		a, b := out.Sessions[i], out.Sessions[j]
+		if a.LastTimestamp != b.LastTimestamp {
+			return a.LastTimestamp > b.LastTimestamp
+		}
+		if a.CreatedTimestamp != b.CreatedTimestamp {
+			return a.CreatedTimestamp > b.CreatedTimestamp
+		}
+		return a.SessionID > b.SessionID
+	})
 	return out, nil
 }
 

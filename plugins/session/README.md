@@ -1,29 +1,57 @@
 # session
 
-Append-only Session Log（真源）+ derive 投影。一切写入听外部；session 不自压缩。
+`session` 是 Session Fact Log 的唯一业务真源。它保存 append-only 历史，并提供查询和模型上下文投影。Session Runtime 还负责驱动 Session WebUI。
 
-## 提供的能力
+## 1. 能力
 
-| capability.method | 说明 |
-|-------------------|------|
-| `session.create` | 显式创建（幂等）；仅 agent 触发 |
-| `session.append` | 唯一写入口；未知 id → `session_not_found` |
-| `session.query` | 读 facts（`after_seq` / `limit` / `types`） |
-| `session.derive` | Model Context 投影（chat `messages[]`） |
-| `session.list` | 会话列表 |
-| `session.info` | 元数据与计数 |
+| Capability | 说明 |
+|---|---|
+| `session` | Session 生命周期、Fact 和投影 |
 
-## 不变量
+Session 不调用 LLM，也不执行工具。
 
-- 只追加；无 update / delete
-- `seq` / `ts` 由 session 分配
-- 损坏尾行 skip + 告警（软失败）
+## 2. 持久化
 
-## 配置
+一个 Session 对应一个 JSONL 文件：
 
-`config.json`：`fullToolResults`（默认 8；`0` = 全部 tool 结果 stub）。  
-环境变量 `SESSION_DATA_DIR`：数据目录（缺省 `./sessions`）。
+```text
+plugins/session/sessions/<session_id>.jsonl
+```
 
-## 命令
+每行一个 Fact。`seq` 在 Session 内单调递增。损坏行读取时跳过并写警告。
 
-`/session list` · `derive` · `dump-trace` · `info`
+## 3. Fact 真源
+
+最终 assistant `message` Fact 是正文真源。LLM delta 不写入 Session。刷新后从 Fact 重建 UI。
+
+## 4. 配置
+
+当前配置：
+
+```json
+{
+  "fullToolResults": 8
+}
+```
+
+该值控制 `session.derive` 保留完整结果的最近工具消息数量。更早的工具结果替换为摘要。
+
+## 5. WebUI
+
+Session 拥有：
+
+| Component | Slot | 职责 |
+|---|---|---|
+| `session-history` | left | 会话列表和元数据 |
+| `session-chat` | center | 消息、Turn 和 Stream Draft |
+| `session-trace` | right | Fact Trace |
+
+`session.state` 负责重建三个 UI State。`session.stream.update` 更新临时 Stream Draft。最终 assistant `message` Fact 到达后，Session 清除 Draft。
+
+Session Runtime 是这三个 Component 的直接驱动者。llm-openai 不直接渲染输出。
+
+当前交互包括会话搜索、按会话保留输入草稿、底部消息输入框、流式状态、停止生成、消息和代码复制、思考过程折叠、回到最新和稳定 revision。
+
+## 6. 文档
+
+详细契约见 [communication.md](communication.md)。该文档也记录前端通信。

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiteAgent</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/platform/shell.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar" data-slot="top">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <strong>LiteAgent</strong>
+        <span id="host-status" class="host-status" data-state="connecting" role="status" aria-live="polite">连接中…</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="plugins-toggle" class="toolbar-button" type="button" aria-controls="plugins" aria-expanded="false" title="插件中心：管理插件、设置和依赖关系（Esc 关闭）">
+          插件中心
+          <span id="plugin-count" class="count">0</span>
+        </button>
+        <button id="diagnostic-toggle" class="toolbar-button" type="button" disabled aria-controls="diagnostics" aria-expanded="false" title="诊断：暂无诊断信息">
+          诊断
+          <span id="diagnostic-count" class="count">0</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="slot slot-left" data-slot="left" aria-label="左侧区域"></aside>
+      <main class="slot slot-center" data-slot="center" aria-label="中间区域"></main>
+      <aside class="slot slot-right" data-slot="right" aria-label="右侧区域"></aside>
+    </div>
+
+    <section class="slot slot-bottom" data-slot="bottom" aria-label="底部区域"></section>
+  </div>
+
+  <aside id="plugins" class="plugin-panel" hidden tabindex="-1" aria-label="插件中心">
+    <div class="plugin-header">
+      <strong>插件中心</strong>
+      <div class="panel-actions">
+        <span id="plugin-summary">0 个插件</span>
+        <button id="plugins-close" class="icon-button" type="button" aria-label="关闭插件中心" title="关闭插件中心">×</button>
+      </div>
+    </div>
+
+    <nav class="plugin-tabs" role="tablist" aria-label="插件中心视图">
+      <button class="plugin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="plugin-view-manage" data-plugin-view="manage">插件</button>
+      <button class="plugin-tab" type="button" role="tab" aria-selected="false" aria-controls="plugin-view-settings" data-plugin-view="settings">设置</button>
+      <button class="plugin-tab" type="button" role="tab" aria-selected="false" aria-controls="plugin-view-graph" data-plugin-view="graph">依赖关系</button>
+    </nav>
+
+    <section id="plugin-view-manage" class="plugin-view" role="tabpanel">
+      <div class="plugin-toolbar">
+        <span class="hint">启动时自动扫描；运行时可手动重新搜索。</span>
+        <button id="plugin-rescan" class="secondary-button" type="button">重新扫描</button>
+      </div>
+      <div id="plugin-action-status" class="plugin-action-status" aria-live="polite"></div>
+      <ul id="plugin-list" class="plugin-list"></ul>
+    </section>
+
+    <section id="plugin-view-settings" class="plugin-view" role="tabpanel" hidden>
+      <div class="settings-summary">
+        <span id="settings-summary">0 个可配置插件</span>
+      </div>
+      <div id="settings-list" class="settings-list"></div>
+    </section>
+
+    <section id="plugin-view-graph" class="plugin-view plugin-graph-view" role="tabpanel" hidden>
+      <div class="graph-legend">
+        <span><i class="legend-node legend-mounted"></i>已挂载</span>
+        <span><i class="legend-node legend-available"></i>可用</span>
+        <span><i class="legend-node legend-degraded"></i>降级或缺失</span>
+        <span class="hint">箭头由依赖方指向被依赖插件。</span>
+      </div>
+      <div id="plugin-graph" class="plugin-graph"></div>
+      <ul id="plugin-edge-list" class="plugin-edge-list" aria-label="插件依赖列表"></ul>
+    </section>
+  </aside>
+
+  <aside id="diagnostics" class="diagnostic-panel" hidden tabindex="-1" aria-label="诊断">
+    <div class="diagnostic-header">
+      <strong>诊断</strong>
+      <div class="panel-actions">
+        <span>非模态</span>
+        <button id="diagnostic-close" class="icon-button" type="button" aria-label="关闭诊断面板" title="关闭诊断面板">×</button>
+      </div>
+    </div>
+    <ul id="diagnostic-list"></ul>
+  </aside>
+
+  <script type="module" src="/platform/app.js"></script>
+</body>
+</html>
