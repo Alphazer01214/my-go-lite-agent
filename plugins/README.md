@@ -51,4 +51,13 @@ agent + llm-openai + session
 
 ## 5. 构建清单
 
-`scripts/shipped-plugins.conf` 当前列出的插件范围大于当前源码范围。实现或清理构建目标时，应同步修改脚本和本目录，不把空目录当成可运行插件。
+`scripts/shipped-plugins.conf` 是发布目标的唯一清单，`scripts/build.sh` 和 `scripts/build.ps1` 共用。当前收录：
+
+```text
+core: agent session llm-openai
+tools:（空）
+```
+
+`core` 是 autostart 根插件，`tools` 由 Agent Scheme 的 `dependsPlugins` 拉入。清单只收录 `plugins/<name>/` 下已有 `plugin.json` 的插件。没有 `plugin.json` 的目录不是可挂载插件，构建脚本会跳过并告警，不会进入 dist。
+
+实现新插件或清理构建目标时，应同步修改清单和本目录。构建流程见 [docs/build.md](../docs/build.md)。

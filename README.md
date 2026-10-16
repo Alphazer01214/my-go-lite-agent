@@ -24,6 +24,12 @@ go test ./...
 go build ./cmd/liteagent-server
 ```
 
+构建可分发的 dist 布局（增量构建，支持 `--clean`、`--verify`、`--only`）：
+
+```bash
+bash scripts/build.sh
+```
+
 Host 启动时按以下顺序查找插件目录：
 
 1. 可执行文件旁的 `plugins/`；
@@ -52,6 +58,7 @@ Host 启动时按以下顺序查找插件目录：
 | [docs/manifest.md](docs/manifest.md) | Manifest、UI 和 Settings 静态契约 |
 | [docs/webui.md](docs/webui.md) | Host WebUI 和 Browser Bridge |
 | [docs/plugin-dev.md](docs/plugin-dev.md) | 插件包结构和开发流程 |
+| [docs/build.md](docs/build.md) | 构建流程、增量缓存和 dist 产物布局 |
 
 ## 核心原则
 

@@ -3,10 +3,12 @@
 #   powershell -File scripts\build.ps1            # incremental (skip unchanged binaries)
 #   powershell -File scripts\build.ps1 -Clean     # wipe dist and rebuild everything
 #   powershell -File scripts\build.ps1 -Only sandbox,agent
+#   powershell -File scripts\build.ps1 -Verify   # go vet + go test (+node) before building
 #   powershell -File scripts\build.ps1 -List
 #
-# Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum
-# and embedded static assets for the server). Unchanged targets reuse the
+# Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum,
+# the plugin manifest, and — for the server — the go:embed'ed WebUI assets under
+# internal\webui\static). Unchanged targets reuse the
 # existing dist binary; assets (plugin.json/ui/README/examples) always refresh.
 #
 # The plugin directory is the single source of truth: every plugins/<name>/ owns
@@ -17,6 +19,7 @@
 param(
     [switch]$Clean,
     [switch]$List,
+    [switch]$Verify,
     [string[]]$Only = @()
 )
 $ErrorActionPreference = "Stop"
@@ -24,7 +27,14 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root "dist"
 $cacheDir = Join-Path $dist ".build-cache"
+$webStatic = Join-Path $root "internal\webui\static"
 $go = "go"
+
+# Release stamp: git describe when available, else "dev". Injected into the
+# server binary via -X so a dist build is always identifiable.
+$version = "dev"
+try { $described = & git -C $root describe --tags --always --dirty 2>$null } catch { $described = $null }
+if ($described) { $version = ("$described").Trim() }
 
 # ── shipped plugins ─────────────────────────────────────────────────────────
 # Single source of truth: scripts/shipped-plugins.conf (shared with build.sh).
@@ -34,9 +44,13 @@ foreach ($line in Get-Content (Join-Path $PSScriptRoot "shipped-plugins.conf")) 
         $groups[$matches[1]] = @($matches[2] -split '\s+')
     }
 }
-$corePlugins = @($groups["core"])
-$toolsPlugins = @($groups["tools"])
-$shippedPlugins = @($corePlugins + $toolsPlugins)
+$corePlugins = @($groups["core"] | Where-Object { $_ })
+$toolsPlugins = @($groups["tools"] | Where-Object { $_ })
+$shippedPlugins = @($corePlugins + $toolsPlugins | Where-Object { $_ })
+
+# Listed in the conf but not a mountable plugin yet (no plugin.json). Warn once
+# instead of once per target; a missing plugin never aborts the build.
+$missingPlugins = @($shippedPlugins | Where-Object { -not (Test-Path (Join-Path $root "plugins\$_\plugin.json")) })
 
 $onlySet = @{}
 foreach ($n in $Only) {
@@ -68,6 +82,29 @@ function Copy-DistAsset([string]$rel, [string]$dst) {
     } else {
         Write-Warning "skip missing dist asset: $rel"
     }
+}
+
+# ── pre-flight verification (opt-in) ────────────────────────────────────────
+# Fail before touching dist\. go test also warms the module build cache, which
+# makes the subsequent `go build` calls cheaper.
+if ($Verify) {
+    Write-Host "verify: go vet ./..."
+    & $go vet ./...
+    if ($LASTEXITCODE -ne 0) { throw "go vet failed" }
+    Write-Host "verify: go test ./..."
+    & $go test ./...
+    if ($LASTEXITCODE -ne 0) { throw "go test failed" }
+    $mjs = Get-ChildItem -Path (Join-Path $root "internal\webui") -Filter *.test.mjs -File -ErrorAction SilentlyContinue
+    if ((-not $mjs) -or (-not (Get-Command node -ErrorAction SilentlyContinue))) {
+        Write-Warning "verify: node not found or no browser tests - skipped"
+    } else {
+        Write-Host "verify: node --test internal/webui/*.test.mjs"
+        & node --test @($mjs.FullName)
+        if ($LASTEXITCODE -ne 0) { throw "node tests failed" }
+    }
+}
+if ($missingPlugins.Count -gt 0) {
+    Write-Warning ("shipped-plugins.conf lists plugin(s) without plugins/<name>/plugin.json: " + ($missingPlugins -join ", "))
 }
 
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
@@ -110,7 +147,6 @@ if ($Clean -and (Test-Path $dist)) {
 }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $dist "plugins") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $dist "examples") -Force | Out-Null
 New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
 
 $script:rebuildCount = 0
@@ -144,8 +180,9 @@ function Get-ExtraInputPaths([string]$target, [string]$pkg) {
     $paths.Add((Join-Path $root "go.mod"))
     $paths.Add((Join-Path $root "go.sum"))
     if ($target -eq "liteagent-server") {
-        $static = Join-Path $root "web\static"
-        if (Test-Path $static) { $paths.Add($static) }
+        # The server go:embeds internal/webui/static; without these files in the
+        # hash a shell/asset-only edit would leave a stale dist binary behind.
+        if (Test-Path $webStatic) { $paths.Add($webStatic) }
     }
     if ($pkg -like "./plugins/*") {
         $name = Split-Path $pkg -Leaf
@@ -236,7 +273,9 @@ function Build-Pkg([string]$target, [string]$pkg, [string]$out) {
         return
     }
     Write-Host "build $pkg -> $out"
-    & $go build -trimpath -ldflags "-s -w" -o $out $pkg
+    $ldflags = "-s -w"
+    if ($target -eq "liteagent-server") { $ldflags = "-s -w -X main.version=$version" }
+    & $go build -trimpath -ldflags $ldflags -o $out $pkg
     if ($LASTEXITCODE -ne 0) { throw "go build $pkg failed" }
     Write-Stamp $target $hash
     $script:rebuildCount++
@@ -293,6 +332,9 @@ if ($List) {
         $tag = if ($hasEntry) { "binary" } else { "assets-only" }
         Write-Host "  plugin:$name ($tag)"
     }
+    if ($missingPlugins.Count -gt 0) {
+        Write-Warning ("no plugin.json: " + ($missingPlugins -join ", "))
+    }
     return
 }
 
@@ -315,6 +357,8 @@ try {
         if (-not $keep[$_.Name]) {
             Write-Host "prune dist/plugins/$($_.Name)"
             Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue
+            $stale = Get-StampPath "plugin:$($_.Name)"
+            if (Test-Path $stale) { Remove-Item $stale -Force -ErrorAction SilentlyContinue }
         }
     }
 
@@ -358,10 +402,12 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
         Copy-Item $repoCfg $llmDistCfg -Force
         Write-Host "llm-openai config: seeded from repo plugins\llm-openai\config.json (kept as-is)"
-    } else {
+    } elseif (Test-Path (Join-Path $root "plugins\llm-openai\config.example.json")) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
         Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") $llmDistCfg -Force
         Write-Warning "no llm-openai config yet — set your key via /llm-openai config set apiKey=... or edit dist\plugins\llm-openai\config.json; later rebuilds will keep it"
+    } else {
+        Write-Warning "no config template for llm-openai (dist keeps no config.json)"
     }
     # Seed agent config.json once (scheme defaults); later rebuilds keep user edits.
     if (-not (Test-Path $agentDistCfg)) {
@@ -380,17 +426,13 @@ try {
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaultAction`": `"allow`",`n  `"rules`": []`n}`n", $utf8NoBom)
     }
-    # Layout is required at runtime (ADR-0012); ship the base layout with dist.
-    Copy-DistAsset "layout.json" $dist
-    # Author SDK single source (dual export: repo copy + /sdk/ HTTP).
-    Copy-DistAsset "sdk\lite-agent.js" (Join-Path $dist "lite-agent.js")
     Copy-DistAsset "README.md" $dist
     Copy-DistAsset "CONTEXT.md" $dist
     Copy-DistAsset "plugins\README.md" (Join-Path $dist "plugins\README.md")
 
     $sw.Stop()
     Write-Host ""
-    Write-Host ("Release layout ready: {0}  (rebuilt {1}, skipped {2}, {3:n1}s)" -f $dist, $script:rebuildCount, $script:skipCount, $sw.Elapsed.TotalSeconds)
+    Write-Host ("Release layout ready: {0}  (rebuilt {1}, skipped {2}, {3:n1}s, version {4})" -f $dist, $script:rebuildCount, $script:skipCount, $sw.Elapsed.TotalSeconds, $version)
     Get-ChildItem -Recurse $dist | Where-Object { -not $_.PSIsContainer -and $_.FullName -notlike ($cacheDir + "*") } | ForEach-Object {
         $_.FullName.Substring($dist.Length + 1)
     }

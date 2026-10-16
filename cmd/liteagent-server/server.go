@@ -23,6 +23,7 @@ const defaultHTTPAddress = "127.0.0.1:2333"
 // run 启动 Host 和 WebUI 并保持运行。纯 WebUI 方案：无命令行交互，仅日志展示到 stderr。
 // 退出码：0 正常；1 启动或 HTTP 服务失败。
 func run() int {
+	fmt.Fprintf(os.Stderr, "liteagent-server %s\n", version)
 	pluginDir := pluginsDir()
 	discoveries := plugin.ScanRoot(pluginDir)
 	registry, diagnostics := webui.NewRegistry(discoveries)

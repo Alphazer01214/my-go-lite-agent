@@ -3,12 +3,14 @@
 # Usage:
 #   bash scripts/build.sh                 # incremental (skip unchanged binaries)
 #   bash scripts/build.sh --clean         # wipe dist and rebuild everything
+#   bash scripts/build.sh --verify        # go vet + go test (+node) before building
 #   bash scripts/build.sh --only sandbox,agent
 #   bash scripts/build.sh --list
 #
-# Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum
-# and embedded static assets for the server). Unchanged targets reuse the
-# existing dist binary; assets (plugin.json/ui/README/examples) always refresh.
+# Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum,
+# the plugin manifest, and — for the server — the go:embed'ed WebUI assets under
+# internal/webui/static). Unchanged targets reuse the existing dist binary;
+# assets (plugin.json/ui/README/examples) always refresh.
 #
 # The plugin directory is the single source of truth: every plugins/<name>/ owns
 # its plugin.json (name/version/provides/consumes/autostart/dependsOn/commands/ui),
@@ -20,14 +22,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 CACHE_DIR="$DIST/.build-cache"
+WEB_STATIC="$ROOT/internal/webui/static"
 CLEAN=0
 LIST=0
+VERIFY=0
 ONLY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean|-c) CLEAN=1; shift ;;
     --list) LIST=1; shift ;;
+    --verify|-V) VERIFY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
     --only=*) ONLY="${1#*=}"; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -56,6 +61,14 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$ROOT/scripts/shipped-plugins.conf"
 SHIPPED_PLUGINS=(${CORE_PLUGINS[@]+"${CORE_PLUGINS[@]}"} ${TOOLS_PLUGINS[@]+"${TOOLS_PLUGINS[@]}"})
 
+# Listed in the conf but not a mountable plugin yet (no plugin.json). Warn once
+# instead of once per target; a missing plugin never aborts the build.
+MISSING_PLUGINS=""
+for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
+  [[ -f "$ROOT/plugins/$name/plugin.json" ]] || MISSING_PLUGINS="$MISSING_PLUGINS $name"
+done
+MISSING_PLUGINS="${MISSING_PLUGINS# }"
+
 should_build() {
   local target="$1"
   [[ -z "$ONLY" ]] && return 0
@@ -82,6 +95,26 @@ copy_dist_asset() {
 START_TS=$(date +%s)
 REBUILT=0
 SKIPPED=0
+
+# ── pre-flight verification (opt-in) ────────────────────────────────────────
+# Fail before touching dist/. go test also warms the module build cache, which
+# makes the subsequent `go build` calls cheaper.
+if [[ $VERIFY -eq 1 ]]; then
+  echo "verify: go vet ./..."
+  (cd "$ROOT" && go vet ./...)
+  echo "verify: go test ./..."
+  (cd "$ROOT" && go test ./...)
+  if command -v node >/dev/null 2>&1; then
+    echo "verify: node --test internal/webui/*.test.mjs"
+    (cd "$ROOT" && node --test internal/webui/*.test.mjs)
+  else
+    echo "verify: node not found — skipped browser tests" >&2
+  fi
+fi
+
+if [[ -n "$MISSING_PLUGINS" ]]; then
+  echo "warning: shipped-plugins.conf lists plugin(s) without plugins/<name>/plugin.json: $MISSING_PLUGINS" >&2
+fi
 
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
 STASH="$(mktemp -d)"
@@ -110,8 +143,10 @@ extra_input_paths() {
   local target="$1" pkg="$2"
   echo "$ROOT/go.mod"
   echo "$ROOT/go.sum"
-  if [[ "$target" == "liteagent-server" && -d "$ROOT/web/static" ]]; then
-    echo "$ROOT/web/static"
+  # The server go:embeds internal/webui/static; without these files in the hash
+  # a shell/asset-only edit would leave a stale dist binary behind.
+  if [[ "$target" == "liteagent-server" && -d "$WEB_STATIC" ]]; then
+    find "$WEB_STATIC" -type f 2>/dev/null
   fi
   if [[ "$pkg" == ./plugins/* ]]; then
     local name="${pkg#./plugins/}"
@@ -178,6 +213,11 @@ write_stamp() {
   printf '%s' "$hash" >"$(stamp_path "$target")"
 }
 
+# Release stamp: git describe when available, else "dev". Injected into the
+# server binary via -X so a dist build is always identifiable.
+VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || true)"
+[[ -n "$VERSION" ]] || VERSION="dev"
+
 build_pkg() {
   local target="$1" pkg="$2" out="$3"
   if ! should_build "$target"; then
@@ -192,7 +232,9 @@ build_pkg() {
     return 0
   fi
   echo "build $pkg -> $out"
-  go build -trimpath -ldflags "-s -w" -o "$out" "$pkg"
+  local ldflags="-s -w"
+  [[ "$target" == "liteagent-server" ]] && ldflags="-s -w -X main.version=$VERSION"
+  go build -trimpath -ldflags "$ldflags" -o "$out" "$pkg"
   write_stamp "$target" "$hash"
   REBUILT=$((REBUILT + 1))
 }
@@ -216,7 +258,6 @@ install_plugin_dir() {
     return 0
   fi
   if [[ ! -f "$src/plugin.json" ]]; then
-    echo "skip $name: no plugins/$name/plugin.json"
     return 0
   fi
   mkdir -p "$dir"
@@ -246,6 +287,7 @@ if [[ $LIST -eq 1 ]]; then
     fi
     echo "  plugin:$name ($tag)"
   done
+  [[ -n "$MISSING_PLUGINS" ]] && echo "  (no plugin.json: $MISSING_PLUGINS)" >&2
   rm -rf "$STASH"
   exit 0
 fi
@@ -272,6 +314,7 @@ if [[ -d "$DIST/plugins" ]]; then
     if [[ $keep -eq 0 ]]; then
       echo "prune dist/plugins/$base"
       rm -rf "$dir"
+      rm -f "$(stamp_path "plugin:$base")"
     fi
   done
 fi
@@ -299,27 +342,27 @@ if [[ -f "$STASH/permissions.json" && ! -f "$SANDBOX_PERM" ]]; then
 fi
 rm -rf "$STASH"
 
-# llm-openai config priority: existing dist config, then a repo-local
-# config.json (gitignored), else seed the empty example template.
-# The build never injects or rewrites an API key.
-REPO_CFG="$ROOT/plugins/llm-openai/config.json"
-if [[ -f "$LLM_DIST_CFG" ]]; then
-  : # already present
-elif [[ -f "$REPO_CFG" ]]; then
-  mkdir -p "$(dirname "$LLM_DIST_CFG")"
-  cp "$REPO_CFG" "$LLM_DIST_CFG"
-  echo "llm-openai config: seeded from repo plugins/llm-openai/config.json (kept as-is)"
-else
-  mkdir -p "$(dirname "$LLM_DIST_CFG")"
-  cp "$ROOT/plugins/llm-openai/config.example.json" "$LLM_DIST_CFG"
-  echo "WARNING: no llm-openai config yet — set your key via /llm-openai config set apiKey=... or edit dist/plugins/llm-openai/config.json; later rebuilds will keep it"
-fi
-# Seed agent config.json once (scheme defaults); later rebuilds keep user edits.
-if [[ ! -f "$AGENT_DIST_CFG" && -f "$ROOT/plugins/agent/config.example.json" ]]; then
-  mkdir -p "$(dirname "$AGENT_DIST_CFG")"
-  cp "$ROOT/plugins/agent/config.example.json" "$AGENT_DIST_CFG"
-  echo "agent config: seeded default schemes (chat/tool_calling/coding)"
-fi
+# Config priority: existing dist config, then a repo-local config.json
+# (gitignored), else the plugin's config.example.json. The build never injects
+# or rewrites an API key.
+seed_dist_config() {
+  local name="$1" dst="$2"
+  [[ -f "$dst" ]] && return 0
+  local src="$ROOT/plugins/$name"
+  if [[ -f "$src/config.json" ]]; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$src/config.json" "$dst"
+    echo "$name config: seeded from repo plugins/$name/config.json (kept as-is)"
+  elif [[ -f "$src/config.example.json" ]]; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$src/config.example.json" "$dst"
+    echo "$name config: seeded from plugins/$name/config.example.json"
+  else
+    echo "warning: no config template for $name (dist keeps no config.json)" >&2
+  fi
+}
+seed_dist_config "llm-openai" "$LLM_DIST_CFG"
+seed_dist_config "agent" "$AGENT_DIST_CFG"
 
 # ── examples & docs ─────────────────────────────────────────────────────────
 mkdir -p "$DIST/config"
@@ -331,10 +374,6 @@ if [[ ! -f "$DIST/config/permissions.json" ]]; then
 }
 EOF
 fi
-# Layout is required at runtime (ADR-0012); ship the base layout with dist.
-copy_dist_asset "layout.json" "$DIST/"
-# Author SDK single source (dual export: repo copy + /sdk/ HTTP).
-copy_dist_asset "sdk/lite-agent.js" "$DIST/lite-agent.js"
 copy_dist_asset "README.md" "$DIST/"
 copy_dist_asset "CONTEXT.md" "$DIST/"
 copy_dist_asset "plugins/README.md" "$DIST/plugins/README.md"
@@ -343,5 +382,5 @@ popd >/dev/null
 
 END_TS=$(date +%s)
 echo ""
-echo "Release layout ready: $DIST  (rebuilt $REBUILT, skipped $SKIPPED, $((END_TS - START_TS))s)"
+echo "Release layout ready: $DIST  (rebuilt $REBUILT, skipped $SKIPPED, $((END_TS - START_TS))s, version $VERSION)"
 find "$DIST" -type f ! -path "$CACHE_DIR/*" | sed "s|^$DIST/||" | sort
