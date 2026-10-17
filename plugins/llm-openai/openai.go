@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tomori/my-go-lite-agent/contracts"
 )
 
 const (
@@ -69,6 +72,10 @@ type upstreamDelta struct {
 type emitFunc func(payload json.RawMessage) error
 
 func (p *plugin) complete(in completeIn, emit emitFunc) (completeOut, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.registerCall(in.CallID, cancel)
+	defer p.finishCall(in.CallID)
 	if len(in.Messages) == 0 {
 		return completeOut{}, errBadArguments("messages is required")
 	}
@@ -93,17 +100,17 @@ func (p *plugin) complete(in completeIn, emit emitFunc) (completeOut, error) {
 		req.StreamOptions = &struct {
 			IncludeUsage bool `json:"include_usage"`
 		}{IncludeUsage: true}
-		return p.completeStream(cfg, req, emit)
+		return p.completeStream(ctx, cfg, req, emit)
 	}
-	return p.completeJSON(cfg, req)
+	return p.completeJSON(ctx, cfg, req)
 }
 
-func (p *plugin) completeJSON(cfg config, req upstreamRequest) (completeOut, error) {
+func (p *plugin) completeJSON(ctx context.Context, cfg config, req upstreamRequest) (completeOut, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return completeOut{}, errHandler(err.Error())
 	}
-	httpReq, err := http.NewRequest(http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return completeOut{}, errUpstream(err.Error())
 	}
@@ -139,12 +146,12 @@ func (p *plugin) completeJSON(cfg config, req upstreamRequest) (completeOut, err
 	return out, nil
 }
 
-func (p *plugin) completeStream(cfg config, req upstreamRequest, emit emitFunc) (completeOut, error) {
+func (p *plugin) completeStream(ctx context.Context, cfg config, req upstreamRequest, emit emitFunc) (completeOut, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return completeOut{}, errHandler(err.Error())
 	}
-	httpReq, err := http.NewRequest(http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return completeOut{}, errUpstream(err.Error())
 	}
@@ -225,10 +232,7 @@ func (p *plugin) completeStream(cfg config, req upstreamRequest, emit emitFunc) 
 					Index:   tc.Index,
 					ID:      tc.ID,
 					Type:    tc.Type,
-					Function: struct {
-						Name      string `json:"name,omitempty"`
-						Arguments string `json:"arguments,omitempty"`
-					}{
+					Function: contracts.FunctionCall{
 						Name:      tc.Function.Name,
 						Arguments: tc.Function.Arguments,
 					},

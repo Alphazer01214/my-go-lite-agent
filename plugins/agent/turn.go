@@ -8,10 +8,14 @@ import (
 )
 
 type turnState struct {
-	sessionID string
-	mu        sync.Mutex
-	cancelled bool
-	done      chan struct{}
+	sessionID    string
+	turnID       string
+	stepID       string
+	activeCallID string
+	streamSeq    int64
+	mu           sync.Mutex
+	cancelled    bool
+	done         chan struct{}
 }
 
 func newTurnState(id string) *turnState {
@@ -33,6 +37,53 @@ func (t *turnState) markCancelled() bool {
 	t.cancelled = true
 	close(t.done)
 	return true
+}
+
+func (t *turnState) setTurnID(id string) {
+	t.mu.Lock()
+	t.turnID = id
+	t.mu.Unlock()
+}
+
+func (t *turnState) setStepID(id string) {
+	t.mu.Lock()
+	t.stepID = id
+	t.mu.Unlock()
+}
+
+func (t *turnState) beginCall(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cancelled {
+		return false
+	}
+	t.activeCallID = id
+	return true
+}
+
+func (t *turnState) endCall(id string) {
+	t.mu.Lock()
+	if t.activeCallID == id {
+		t.activeCallID = ""
+	}
+	t.mu.Unlock()
+}
+
+func (t *turnState) cancelContext() (callID, turnID, stepID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.activeCallID, t.turnID, t.stepID
+}
+
+func (t *turnState) withNextUpdate(snapshot streamSnapshot) streamSnapshot {
+	snapshot.UpdateID = t.nextUpdateID()
+	return snapshot
+}
+func (t *turnState) nextUpdateID() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.streamSeq++
+	return int(t.streamSeq)
 }
 
 type emitFunc func(payload json.RawMessage) error
@@ -95,6 +146,20 @@ func (p *plugin) cancel(in cancelIn) (cancelOut, error) {
 		return cancelOut{SessionID: in.SessionID, Cancelled: false}, nil
 	}
 	active.markCancelled()
+	callID, turnID, stepID := active.cancelContext()
+	if callID != "" {
+		_, _ = p.sdk.Call("llm", "cancel", mustJSON(llmCancelIn{CallID: callID}))
+	}
+	if turnID != "" && stepID != "" {
+		_ = p.updateStream(streamSnapshot{
+			SessionID: in.SessionID,
+			TurnID:    turnID,
+			StepID:    stepID,
+			UpdateID:  active.nextUpdateID(),
+			Message:   streamMessage{Role: RoleAssistant},
+			Status:    "cancel_requested",
+		})
+	}
 	return cancelOut{SessionID: in.SessionID, Cancelled: true}, nil
 }
 
@@ -132,7 +197,7 @@ func (p *plugin) assembleMessages(sessionID string) ([]chatMessage, error) {
 	return out.Messages, nil
 }
 
-func (p *plugin) collectTools(scheme string, allowed []string) ([]toolSpec, []byte, error) {
+func (p *plugin) collectTools(scheme string, allowed []string) ([]toolSpec, []toolDefinition, error) {
 	if len(allowed) == 0 && scheme == schemeChat {
 		return nil, nil, nil
 	}
@@ -150,22 +215,22 @@ func (p *plugin) collectTools(scheme string, allowed []string) ([]toolSpec, []by
 	if len(filtered) == 0 {
 		return nil, nil, nil
 	}
-	oa := make([]map[string]any, 0, len(filtered))
+	tools := make([]toolDefinition, 0, len(filtered))
 	for _, t := range filtered {
-		params := any(t.Parameters)
+		params := t.Parameters
 		if len(t.Parameters) == 0 {
-			params = map[string]any{"type": "object", "properties": map[string]any{}}
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
-		oa = append(oa, map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"parameters":  params,
+		tools = append(tools, toolDefinition{
+			Type: "function",
+			Function: toolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  params,
 			},
 		})
 	}
-	return filtered, mustJSON(oa), nil
+	return filtered, tools, nil
 }
 
 func (p *plugin) callTool(name, arguments, workspace, callID string) (string, error) {
@@ -193,9 +258,10 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	out = turnOut{SessionID: in.SessionID}
 	seqs := make([]int, 0, 16)
 	turnID := fmt.Sprintf("t-%d", time.Now().UnixNano())
+	st.setTurnID(turnID)
 
 	appendMeta := func(stepID string, extra map[string]any) map[string]any {
-		meta := map[string]any{"turn_id": turnID}
+		meta := map[string]any{"turn_id": turnID, "plugin": "agent"}
 		if stepID != "" {
 			meta["step_id"] = stepID
 		}
@@ -237,7 +303,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 	seqs = append(seqs, s...)
 
-	_, toolsJSON, err := p.collectTools(scheme, in.AllowedTools)
+	_, tools, err := p.collectTools(scheme, in.AllowedTools)
 	if err != nil {
 		return out, err
 	}
@@ -249,6 +315,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}
 		out.Steps = step
 		stepID := fmt.Sprintf("%s-s%d", turnID, step)
+		st.setStepID(stepID)
 
 		msgs, err := p.assembleMessages(in.SessionID)
 		if err != nil {
@@ -264,7 +331,12 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}
 		seqs = append(seqs, s...)
 
-		llmIn := llmCompleteIn{Messages: msgs, Tools: toolsJSON}
+		callID := fmt.Sprintf("%s-s%d", turnID, step)
+		if !st.beginCall(callID) {
+			out.Cancelled = true
+			break
+		}
+		llmIn := llmCompleteIn{CallID: callID, Messages: msgs, Tools: tools}
 		stream := true
 		llmIn.Stream = &stream
 
@@ -275,7 +347,6 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		events := make(chan json.RawMessage, 128)
 		streamDone := make(chan struct{})
 		stopStream := make(chan struct{})
-		sequencer := newStreamSequencer()
 		flushPolicy := newStreamFlushPolicy()
 		acc := newStreamAccumulator()
 		go func() {
@@ -287,7 +358,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 						return
 					}
 					if flushPolicy.observe(time.Now()) {
-						_ = p.updateStream(sequencer.withNext(acc.snapshot(in.SessionID, turnID, stepID, "streaming")))
+						_ = p.updateStream(st.withNextUpdate(acc.snapshot(in.SessionID, turnID, stepID, "streaming")))
 					}
 				case <-stopStream:
 					return
@@ -334,7 +405,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			partial := acc.message()
 			out.Reply = partial.Content
 			if partial.Content != "" || partial.Reasoning != "" || len(partial.ToolCalls) > 0 {
-				_ = p.updateStream(sequencer.withNext(streamSnapshot{
+				_ = p.updateStream(st.withNextUpdate(streamSnapshot{
 					SessionID: in.SessionID,
 					TurnID:    turnID,
 					StepID:    stepID,
@@ -365,14 +436,14 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			Reasoning: llmOut.Reasoning,
 			ToolCalls: llmOut.ToolCalls,
 		}
-		_ = p.updateStream(sequencer.withNext(streamSnapshot{
+		_ = p.updateStream(st.withNextUpdate(streamSnapshot{
 			SessionID: in.SessionID,
 			TurnID:    turnID,
 			StepID:    stepID,
 			Message:   final,
 			Status:    "complete",
 		}))
-		out.Usage.add(llmOut.Usage)
+		addUsage(&out.Usage, llmOut.Usage)
 
 		s, err = p.appendFacts(in.SessionID, []map[string]any{
 			{"type": "llm_usage", "role": "host", "meta": appendMeta(stepID, map[string]any{"usage": llmOut.Usage})},
@@ -438,7 +509,15 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}
 	}
 
-	if !out.Cancelled {
+	if out.Cancelled {
+		s, err = p.appendFacts(in.SessionID, []map[string]any{{
+			"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "cancelled"}),
+		}})
+		if err != nil {
+			return out, err
+		}
+		seqs = append(seqs, s...)
+	} else {
 		reason := "completed"
 		if out.Steps >= maxSteps {
 			reason = "max_steps"

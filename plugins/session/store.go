@@ -21,8 +21,13 @@ type store struct {
 	lastTS    int64
 }
 
+type sdkCaller interface {
+	Call(capability, method string, payload json.RawMessage) (json.RawMessage, error)
+}
+
 type plugin struct {
 	dir        string
+	sdk        sdkCaller
 	cfg        config
 	mu         sync.RWMutex
 	reg        map[string]*store
@@ -135,6 +140,7 @@ func (p *plugin) recover(id string) (*store, error) {
 	maxSeq := 0
 	count := 0
 	var lastTS int64
+	openTurns := make(map[string]map[string]any)
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -152,11 +158,49 @@ func (p *plugin) recover(id string) (*store, error) {
 		if fact.Timestamp > lastTS {
 			lastTS = fact.Timestamp
 		}
+		if fact.Type == TypeTurnStart {
+			meta := map[string]any{}
+			_ = json.Unmarshal(fact.Meta, &meta)
+			turnID, _ := meta["turn_id"].(string)
+			if turnID == "" {
+				turnID = fmt.Sprintf("recovered-%d", fact.Seq)
+				meta["turn_id"] = turnID
+			}
+			openTurns[turnID] = meta
+		} else if fact.Type == TypeTurnEnd {
+			meta := map[string]any{}
+			_ = json.Unmarshal(fact.Meta, &meta)
+			if turnID, _ := meta["turn_id"].(string); turnID != "" {
+				delete(openTurns, turnID)
+			}
+		}
 		if fact.Type == TypeSessionStart && len(fact.Meta) > 0 {
 			var meta Meta
 			if err := json.Unmarshal(fact.Meta, &meta); err == nil {
 				st.meta = meta
 			}
+		}
+	}
+	if len(openTurns) > 0 {
+		turnIDs := make([]string, 0, len(openTurns))
+		for turnID := range openTurns {
+			turnIDs = append(turnIDs, turnID)
+		}
+		sort.Strings(turnIDs)
+		recovered := make([]factIn, 0, len(turnIDs))
+		for _, turnID := range turnIDs {
+			meta := openTurns[turnID]
+			meta["reason"] = "error"
+			meta["error"] = "agent exited before turn_end"
+			recovered = append(recovered, factIn{
+				Type: TypeTurnEnd,
+				Role: RoleHost,
+				Meta: mustJSON(meta),
+			})
+		}
+		if _, _, err := st.appendBatch(recovered); err != nil {
+			_ = f.Close()
+			return nil, err
 		}
 	}
 	st.nextSeq = maxSeq + 1

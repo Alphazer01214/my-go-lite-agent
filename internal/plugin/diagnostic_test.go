@@ -174,3 +174,19 @@ func TestLoadManifestReportsNestedUnknownFields(t *testing.T) {
 		}
 	}
 }
+
+func TestScanRootRequiresVersionAndProtocol(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, filepath.Join(root, "demo"), `{
+		"name": "demo",
+		"entry": "demo"
+	}`)
+
+	got := ScanRoot(root)
+	if len(got.Plugins) != 0 {
+		t.Fatalf("plugins = %#v", got.Plugins)
+	}
+	if !hasDiagnostic(got.Diagnostics, "manifest_unusable") {
+		t.Fatalf("diagnostics = %#v", got.Diagnostics)
+	}
+}

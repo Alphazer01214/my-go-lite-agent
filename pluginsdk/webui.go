@@ -8,9 +8,6 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
-type Layout struct {
-}
-
 type WebUI struct {
 	p *Plugin
 }

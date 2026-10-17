@@ -8,23 +8,6 @@ import (
 	"time"
 )
 
-type streamMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Reasoning  string     `json:"reasoning,omitempty"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
-type streamSnapshot struct {
-	SessionID string        `json:"session_id"`
-	TurnID    string        `json:"turn_id"`
-	StepID    string        `json:"step_id"`
-	UpdateID  int           `json:"update_id"`
-	Message   streamMessage `json:"message"`
-	Status    string        `json:"status"`
-}
-
 type streamChunk struct {
 	Channel  string `json:"channel"`
 	Delta    string `json:"delta"`

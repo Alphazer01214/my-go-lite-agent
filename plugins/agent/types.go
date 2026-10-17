@@ -1,43 +1,42 @@
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-type turnIn struct {
-	Input        string   `json:"input"`
-	SessionID    string   `json:"session_id,omitempty"`
-	Workspace    string   `json:"workspace,omitempty"`
-	MaxSteps     int      `json:"max_steps,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
+	"github.com/tomori/my-go-lite-agent/contracts"
+)
+
+// Compatibility aliases keep existing plugin-local names while the shared JSON
+// shape remains owned by contracts/core-plugin-contracts.schema.json.
+type (
+	turnIn         = contracts.TurnInput
+	turnOut        = contracts.TurnOutput
+	cancelIn       = contracts.CancelInput
+	cancelOut      = contracts.CancelOutput
+	usage          = contracts.Usage
+	chatMessage    = contracts.ChatMessage
+	toolCall       = contracts.ToolCall
+	toolDefinition = contracts.ToolDefinition
+	toolFunction   = contracts.ToolFunction
+	llmCompleteIn  = contracts.LLMCompleteInput
+	llmCompleteOut = contracts.LLMCompleteOutput
+	llmCancelIn    = contracts.LLMCancelInput
+	llmCancelOut   = contracts.LLMCancelOutput
+	streamMessage  = contracts.StreamMessage
+	streamSnapshot = contracts.StreamSnapshot
+)
+
+func addUsage(dst *usage, src usage) {
+	dst.PromptTokens += src.PromptTokens
+	dst.CompletionTokens += src.CompletionTokens
+	dst.TotalTokens += src.TotalTokens
 }
 
-type usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-func (u *usage) add(o usage) {
-	u.PromptTokens += o.PromptTokens
-	u.CompletionTokens += o.CompletionTokens
-	u.TotalTokens += o.TotalTokens
-}
-
-type turnOut struct {
-	SessionID string `json:"session_id"`
-	Reply     string `json:"reply"`
-	Steps     int    `json:"steps"`
-	Cancelled bool   `json:"cancelled"`
-	Usage     usage  `json:"usage"`
-	Seqs      []int  `json:"seqs"`
-}
-
-type cancelIn struct {
-	SessionID string `json:"session_id"`
-}
-
-type cancelOut struct {
-	SessionID string `json:"session_id"`
-	Cancelled bool   `json:"cancelled"`
+type toolSpec struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+	Severity    string          `json:"severity,omitempty"`
 }
 
 type config struct {
@@ -53,44 +52,6 @@ type configGetOut struct {
 type configSetIn struct {
 	DefaultScheme string `json:"default_scheme,omitempty"`
 	MaxSteps      int    `json:"max_steps,omitempty"`
-}
-
-// chatMessage for llm.complete (local copy).
-type chatMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-}
-
-type toolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-type toolSpec struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-	Severity    string          `json:"severity,omitempty"`
-}
-
-type llmCompleteIn struct {
-	Messages []chatMessage   `json:"messages"`
-	Tools    json.RawMessage `json:"tools,omitempty"`
-	Stream   *bool           `json:"stream,omitempty"`
-}
-
-type llmCompleteOut struct {
-	Content      string     `json:"content"`
-	Reasoning    string     `json:"reasoning,omitempty"`
-	ToolCalls    []toolCall `json:"tool_calls,omitempty"`
-	FinishReason string     `json:"finish_reason"`
-	Usage        usage      `json:"usage"`
 }
 
 // session payloads (subset)

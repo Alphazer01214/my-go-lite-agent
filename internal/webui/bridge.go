@@ -2,7 +2,6 @@ package webui
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
@@ -126,28 +125,5 @@ func callErrorResponse(request browserCall, err error) *protocol.Frame {
 }
 
 func callErrorCode(err error) string {
-	switch {
-	case errors.Is(err, host.ErrMethodNotFound):
-		return protocol.CodeMethodNotFound
-	case errors.Is(err, host.ErrHostClosed):
-		return protocol.CodeHostClosed
-	case errors.Is(err, host.ErrHostServerClosed):
-		return protocol.CodeHostServerClosed
-	case errors.Is(err, host.ErrPluginNotMounted):
-		return protocol.CodePluginNotMounted
-	case errors.Is(err, host.ErrPluginDown):
-		return protocol.CodePluginDown
-	case errors.Is(err, host.ErrPluginDisabled):
-		return protocol.CodePluginDisabled
-	case errors.Is(err, host.ErrBadArguments):
-		return protocol.CodeBadArguments
-	case errors.Is(err, host.ErrBadPayload):
-		return protocol.CodeBadPayload
-	case errors.Is(err, host.ErrTimeout):
-		return protocol.CodeTimeout
-	case errors.Is(err, host.ErrRouteFailed):
-		return protocol.CodeRouteFailed
-	default:
-		return protocol.CodeHandlerError
-	}
+	return host.ErrorCode(err, protocol.CodeHandlerError)
 }

@@ -1,0 +1,100 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadAllRecoversInterruptedTurn(t *testing.T) {
+	dir := t.TempDir()
+	facts := []Fact{
+		{Seq: 1, Type: TypeSessionStart, Role: RoleHost, Meta: mustJSON(Meta{SessionID: "s1"})},
+		{Seq: 2, Type: TypeTurnStart, Role: RoleHost, Meta: mustJSON(map[string]any{"turn_id": "t1"})},
+		{Seq: 3, Type: TypeMessage, Role: RoleUser, Content: "hello", Meta: mustJSON(map[string]any{"turn_id": "t1"})},
+	}
+	data := make([]byte, 0)
+	for _, fact := range facts {
+		line, err := json.Marshal(fact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "s1.jsonl"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newPlugin(dir)
+	t.Cleanup(p.close)
+	p.loadAll()
+
+	got, _, err := p.readFacts("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, fact := range got {
+		if fact.Type != TypeTurnEnd {
+			continue
+		}
+		var meta map[string]any
+		_ = json.Unmarshal(fact.Meta, &meta)
+		if meta["turn_id"] == "t1" && meta["reason"] == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("facts = %#v", got)
+	}
+}
+
+type fakeHostStateSDK struct {
+	state string
+}
+
+func (f fakeHostStateSDK) Call(capability, method string, payload json.RawMessage) (json.RawMessage, error) {
+	if capability != "host" || method != "plugins" {
+		return nil, errHandler("unexpected call")
+	}
+	return mustJSON(map[string]any{"plugins": []map[string]string{{"name": "agent", "state": f.state}}}), nil
+}
+
+func TestChatStateRecoversWhenTurnOwnerIsDown(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	p.sdk = fakeHostStateSDK{state: "degraded"}
+	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.append(appendIn{SessionID: "s1", Facts: []factIn{{
+		Type: TypeTurnStart,
+		Role: RoleHost,
+		Meta: mustJSON(map[string]any{"turn_id": "t1", "plugin": "agent"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := p.chatState("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Turn.Status != "error" {
+		t.Fatalf("chat state = %+v", state)
+	}
+	facts, _, err := p.readFacts("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := facts[len(facts)-1]
+	if last.Type != TypeTurnEnd {
+		t.Fatalf("last fact = %#v", last)
+	}
+	var meta map[string]any
+	_ = json.Unmarshal(last.Meta, &meta)
+	if meta["reason"] != "error" {
+		t.Fatalf("recovery meta = %#v", meta)
+	}
+}

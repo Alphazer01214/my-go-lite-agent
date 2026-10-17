@@ -7,13 +7,15 @@ import (
 )
 
 type fakeAgentSDK struct {
-	mu      sync.Mutex
-	appends [][]map[string]any
-	streams []streamSnapshot
-	nextSeq int
-	block   bool
-	started chan struct{}
-	release chan struct{}
+	mu             sync.Mutex
+	cancelledCalls []string
+	callID         string
+	appends        [][]map[string]any
+	streams        []streamSnapshot
+	nextSeq        int
+	block          bool
+	started        chan struct{}
+	release        chan struct{}
 }
 
 func (f *fakeAgentSDK) Call(capability, method string, payload json.RawMessage) (json.RawMessage, error) {
@@ -34,6 +36,11 @@ func (f *fakeAgentSDK) Call(capability, method string, payload json.RawMessage) 
 			seqs = append(seqs, f.nextSeq)
 		}
 		return mustJSON(map[string]any{"seqs": seqs, "next_seq": f.nextSeq + 1}), nil
+	case "llm.cancel":
+		var in llmCancelIn
+		_ = json.Unmarshal(payload, &in)
+		f.cancelledCalls = append(f.cancelledCalls, in.CallID)
+		return mustJSON(llmCancelOut{CallID: in.CallID, Cancelled: true}), nil
 	case "session.stream.update":
 		var snapshot streamSnapshot
 		_ = json.Unmarshal(payload, &snapshot)
@@ -48,6 +55,9 @@ func (f *fakeAgentSDK) CallWithCallback(capability, method string, payload json.
 	if capability != "llm" || method != "complete" {
 		return nil, errHandler("unexpected callback call")
 	}
+	var in llmCompleteIn
+	_ = json.Unmarshal(payload, &in)
+	f.callID = in.CallID
 	callback(&event{Payload: json.RawMessage(`{"channel":"content","delta":"Hi"}`)})
 	callback(&event{Payload: json.RawMessage(`{"channel":"reasoning","delta":"plan"}`)})
 	if f.block {
@@ -175,7 +185,39 @@ func TestCancelSavesAccumulatedAssistantDraft(t *testing.T) {
 			}
 		}
 	}
+	if len(sdk.cancelledCalls) != 1 || sdk.cancelledCalls[0] == "" {
+		t.Fatalf("cancelled LLM calls = %#v", sdk.cancelledCalls)
+	}
 	if !sawDraft || !sawCancelledEnd {
 		t.Fatalf("appends = %#v", sdk.appends)
 	}
+}
+
+func TestPreCancelledTurnWritesTerminal(t *testing.T) {
+	sdk := &fakeAgentSDK{}
+	p := newPlugin()
+	p.sdk = sdk
+	st := newTurnState("s1")
+	st.markCancelled()
+
+	out, err := p.runTurn(st, turnIn{Input: "hello", SessionID: "s1"}, schemeToolCalling, 2)
+	if err != nil || !out.Cancelled {
+		t.Fatalf("out = %+v, err = %v", out, err)
+	}
+	sdk.mu.Lock()
+	defer sdk.mu.Unlock()
+	for _, facts := range sdk.appends {
+		for _, fact := range facts {
+			if fact["type"] != "turn_end" {
+				continue
+			}
+			meta, _ := json.Marshal(fact["meta"])
+			var decoded map[string]any
+			_ = json.Unmarshal(meta, &decoded)
+			if decoded["reason"] == "cancelled" {
+				return
+			}
+		}
+	}
+	t.Fatalf("appends = %#v", sdk.appends)
 }

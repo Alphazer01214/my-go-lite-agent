@@ -2,7 +2,6 @@ package host
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
 )
@@ -84,9 +83,6 @@ func (h *Host) StartPlugin(name string) error {
 		h.removeProcess(name, current)
 	}
 	h.unregisterPlugin(name)
-	if err := h.registerProvides(discovery.Manifest); err != nil {
-		return err
-	}
 
 	h.mu.Lock()
 	if h.stopped == nil {
@@ -133,19 +129,7 @@ func (h *Host) StopPlugin(name string) error {
 
 	// Close pending work before removing the process identity.
 	h.markUnhealthy(name, current.gen)
-	_ = current.stdin.Close()
-
-	select {
-	case <-current.done:
-	case <-time.After(DefaultShutdownGrace):
-		if current.cmd != nil && current.cmd.Process != nil {
-			_ = current.cmd.Process.Kill()
-		}
-		select {
-		case <-current.done:
-		case <-time.After(DefaultShutdownGrace):
-		}
-	}
+	stopProc(current)
 
 	h.mu.Lock()
 	if h.plugins[name] == current {
@@ -167,18 +151,8 @@ func (h *Host) removeProcess(name string, current *proc) {
 		return
 	}
 	h.markUnhealthy(name, current.gen)
-	_ = current.stdin.Close()
-	select {
-	case <-current.done:
-	case <-time.After(DefaultShutdownGrace):
-		if current.cmd != nil && current.cmd.Process != nil {
-			_ = current.cmd.Process.Kill()
-		}
-		select {
-		case <-current.done:
-		case <-time.After(DefaultShutdownGrace):
-		}
-	}
+	stopProc(current)
+
 	h.mu.Lock()
 	if h.plugins[name] == current {
 		delete(h.plugins, name)

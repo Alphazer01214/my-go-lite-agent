@@ -48,6 +48,13 @@ func ScanRoot(root string) Discoveries {
 
 		manifest, diagnostics := LoadManifest(manifestPath)
 		res.Diagnostics = append(res.Diagnostics, diagnostics...)
+		if manifest.Version == "" || manifest.Protocol <= 0 {
+			res.Diagnostics = append(res.Diagnostics, Diagnostic{
+				Plugin: pluginName, Path: manifestPath, Code: diagnosticManifestUnusable,
+				Message: "version and protocol are required",
+			})
+			continue
+		}
 		if manifest.Name == "" || manifest.Entry == "" {
 			res.Diagnostics = append(res.Diagnostics, Diagnostic{
 				Plugin: pluginName, Path: manifestPath, Code: diagnosticManifestUnusable,

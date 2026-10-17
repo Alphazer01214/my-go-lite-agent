@@ -23,6 +23,7 @@ return p.Serve()
 ```go
 type Request struct {
     ID         string
+    ContextID  string
     Capability string
     Method     string
     Payload    json.RawMessage
@@ -89,6 +90,7 @@ Event 结构：
 ```go
 type Event struct {
     ID         string
+    ContextID  string
     Capability string
     Method     string
     Payload    json.RawMessage

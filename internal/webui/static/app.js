@@ -158,22 +158,26 @@ function renderSettings(plugins) {
 	elements.settingsSummary.textContent = `${configurable.length} 个可配置插件`;
 }
 
+function renderPluginGraphView(plugins) {
+	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
+	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
+		selectedId: selectedPluginName,
+		onSelect: (name) => {
+			selectedPluginName = name;
+			renderPluginGraphView(plugins);
+		},
+	});
+	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
+}
+
 function renderPluginCenter(plugins) {
 	renderPluginList(document, elements.pluginList, plugins, {
 		onStart: (plugin, button) => runPluginAction(plugin, "start", button),
 		onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
 	});
 	renderSettings(plugins);
-	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
-	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
-		selectedId: selectedPluginName,
-		onSelect: (name) => {
-			selectedPluginName = name;
-			renderPluginCenter(plugins);
-		},
-	});
-	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
 	renderDependencyEdgeList(document, elements.pluginEdgeList, plugins);
+	renderPluginGraphView(plugins);
 	elements.pluginCount.textContent = String(plugins.length);
 	elements.pluginSummary.textContent = `${plugins.length} 个插件`;
 }

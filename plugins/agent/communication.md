@@ -1,5 +1,7 @@
 # agent 通信契约
 
+跨插件 JSON 的规范来源是 [Core Plugin Contracts](../../contracts/README.md)。本文 payload 示例须与 Schema 一致。
+
 本文记录 `agent` 的方法、payload、跨插件调用和 WebUI 交互。JSON 字段是公共契约。Go 私有类型名不是公共契约。
 
 ## 1. 对外方法
@@ -107,7 +109,8 @@ flowchart LR
     A -->|session.append| S
     A -->|session.derive| S
     A -->|session.stream.update| S
-    A -->|llm.complete| L[llm-openai]
+    A -->|llm.complete| L
+  A -->|llm.cancel| L[llm-openai]
     A -.->|tools.list/call| T[tools plugins]
 ```
 
@@ -129,7 +132,7 @@ step_end
 turn_end
 ```
 
-`turn_id` 和 `step_id` 写入对应 Fact 的 `meta`。
+`turn_id`、`step_id` 和 `plugin` 写入对应 Fact 的 `meta`。
 
 当前实现补充：
 
@@ -195,8 +198,8 @@ Agent 没有顶层 Component。Agent 不直接调用 `setData` 或 `runCommand`�
 | LLM 调用失败 | 返回 `llm_upstream` 或下游错误 |
 | 工具失败 | 写 tool error，继续 Turn |
 | 达到 `max_steps` | 写 `turn_end(max_steps)` |
-| 取消 | 写 `turn_end(cancelled)` |
-| 插件退出 | Host 合成 `plugin_down` |
+| 取消 | 中止 LLM Call，并写 `turn_end(cancelled)` |
+| 插件退出 | Host 合成 `plugin_down`；Session 可补写 `turn_end(error)` |
 
 ## 10. 结构体索引
 

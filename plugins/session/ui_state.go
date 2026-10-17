@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+
+	"github.com/tomori/my-go-lite-agent/contracts"
 )
 
 type uiPublisher interface {
@@ -9,37 +11,18 @@ type uiPublisher interface {
 	SendCommand(mountID string, command string, payload json.RawMessage) error
 }
 
-type streamUpdateIn struct {
-	SessionID string        `json:"session_id"`
-	TurnID    string        `json:"turn_id"`
-	StepID    string        `json:"step_id"`
-	UpdateID  int           `json:"update_id"`
-	Message   streamMessage `json:"message"`
-	Status    string        `json:"status"`
-}
+// Compatibility aliases keep plugin-local names while the shared JSON shape is
+// defined by contracts/core-plugin-contracts.schema.json.
+type (
+	streamUpdateIn = contracts.StreamSnapshot
+	streamMessage  = contracts.StreamMessage
+	streamSnapshot = contracts.StreamSnapshot
+)
 
 type streamUpdateOut struct {
 	Accepted bool   `json:"accepted"`
 	Reason   string `json:"reason,omitempty"`
 }
-
-type streamMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	Reasoning  string          `json:"reasoning,omitempty"`
-	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-}
-
-type streamSnapshot struct {
-	SessionID string        `json:"session_id"`
-	TurnID    string        `json:"turn_id"`
-	StepID    string        `json:"step_id"`
-	UpdateID  int           `json:"update_id"`
-	Message   streamMessage `json:"message"`
-	Status    string        `json:"status"`
-}
-
 type chatMessageUI struct {
 	Seq        int             `json:"seq"`
 	TurnID     string          `json:"turn_id,omitempty"`
@@ -103,6 +86,8 @@ type factContextMeta struct {
 	Reason    string `json:"reason"`
 	Reasoning string `json:"reasoning"`
 	Step      int    `json:"step"`
+	Plugin    string `json:"plugin,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func (p *plugin) setUIPublisher(ui uiPublisher) {
@@ -151,6 +136,9 @@ func (p *plugin) updateStream(in streamUpdateIn) (streamUpdateOut, error) {
 	if ui != nil && selected == in.SessionID {
 		payload, _ := json.Marshal(snapshot)
 		_ = ui.SendCommand("chat", "stream", payload)
+	}
+	if in.Status == "cancel_requested" {
+		p.publishChat(in.SessionID)
 	}
 	return streamUpdateOut{Accepted: true}, nil
 }
@@ -224,16 +212,12 @@ func (p *plugin) state(in stateIn) (stateOut, error) {
 	if err != nil {
 		return stateOut{}, err
 	}
-	st, err := p.get(id)
-	if err != nil {
-		return stateOut{}, err
-	}
 	facts, _, err := p.readFacts(id)
 	if err != nil {
 		return stateOut{}, err
 	}
 	out.Chat = &chat
-	out.Trace = &traceStateUI{SessionID: id, Revision: st.nextSeq, Facts: facts}
+	out.Trace = &traceStateUI{SessionID: id, Revision: p.nextUIRevision(), Facts: facts}
 	return out, nil
 }
 
@@ -322,6 +306,10 @@ func (p *plugin) publishState(mountID string, state any) {
 }
 
 func (p *plugin) chatState(sessionID string) (chatStateUI, error) {
+	return p.chatStateInternal(sessionID, true)
+}
+
+func (p *plugin) chatStateInternal(sessionID string, allowRecovery bool) (chatStateUI, error) {
 	if _, err := p.get(sessionID); err != nil {
 		return chatStateUI{}, err
 	}
@@ -329,6 +317,7 @@ func (p *plugin) chatState(sessionID string) (chatStateUI, error) {
 	if err != nil {
 		return chatStateUI{}, err
 	}
+	turnOwner := ""
 	state := chatStateUI{
 		SessionID: sessionID,
 		Messages:  make([]chatMessageUI, 0, len(facts)),
@@ -348,6 +337,7 @@ func (p *plugin) chatState(sessionID string) (chatStateUI, error) {
 			})
 		case TypeTurnStart:
 			state.Turn = chatTurnUI{TurnID: meta.TurnID, Status: "running"}
+			turnOwner = meta.Plugin
 		case TypeStepStart:
 			state.Turn.TurnID = meta.TurnID
 			state.Turn.Step = meta.Step
@@ -360,10 +350,70 @@ func (p *plugin) chatState(sessionID string) (chatStateUI, error) {
 	if state.Messages == nil {
 		state.Messages = []chatMessageUI{}
 	}
+	ownerState := p.pluginState(turnOwner)
+	if allowRecovery && state.Turn.Status == "running" && turnOwner != "" && ownerState != "" && ownerState != "unknown" && ownerState != "mounted" {
+		if p.recoverOpenTurn(sessionID, state.Turn.TurnID, turnOwner) {
+			return p.chatStateInternal(sessionID, false)
+		}
+	}
+	p.mu.RLock()
+	stream, streamOK := p.streams[sessionID]
+	p.mu.RUnlock()
+	if streamOK && stream.Status == "cancel_requested" && stream.TurnID == state.Turn.TurnID {
+		state.Turn.CancelRequested = true
+	}
 	state.Revision = p.nextUIRevision()
 	return state, nil
 }
 
+func (p *plugin) pluginState(name string) string {
+	if p.sdk == nil || name == "" {
+		return ""
+	}
+	raw, err := p.sdk.Call("host", "plugins", json.RawMessage(`{}`))
+	if err != nil {
+		return ""
+	}
+	var out struct {
+		Plugins []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"plugins"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return ""
+	}
+	for _, plugin := range out.Plugins {
+		if plugin.Name == name {
+			return plugin.State
+		}
+	}
+	return "missing"
+}
+
+func (p *plugin) recoverOpenTurn(sessionID, turnID, owner string) bool {
+	if turnID == "" {
+		return false
+	}
+	st, err := p.get(sessionID)
+	if err != nil {
+		return false
+	}
+	meta := map[string]any{
+		"turn_id": turnID,
+		"reason":  "error",
+		"error":   owner + " plugin unavailable",
+	}
+	if _, _, err := st.appendBatch([]factIn{{
+		Type: TypeTurnEnd,
+		Role: RoleHost,
+		Meta: mustJSON(meta),
+	}}); err != nil {
+		return false
+	}
+	p.clearStream(sessionID, turnID, "")
+	return true
+}
 func (p *plugin) nextUIRevision() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()

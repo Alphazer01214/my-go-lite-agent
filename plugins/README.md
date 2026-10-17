@@ -9,10 +9,14 @@
 | `agent` | 当前实现 | Turn、Step、工具循环、取消 |
 | `llm-openai` | 当前实现 | OpenAI-compatible Completion |
 | `session` | 当前实现 | Session Fact Log 和投影 |
-| `context-manager` | 原型 | 未形成可挂载插件 |
-| `filetools` | 空目录 | 未实现 |
 
-## 2. 文档要求
+## 2. 跨插件契约
+
+`agent`、`session` 和 `llm-openai` 共用的 JSON 形状统一放在 [contracts](../contracts/README.md)。
+
+Schema 是规范来源。插件内保留兼容类型名，但不得独立演化字段语义。
+
+## 3. 文档要求
 
 每个插件包含：
 
@@ -25,7 +29,7 @@
 - WebUI 目标契约；
 - 尚未实现的方法。
 
-## 3. WebUI 归属
+## 4. WebUI 归属
 
 当前只有 `session` 提供顶层业务 Component：
 
@@ -37,7 +41,7 @@
 
 `agent` 只提供 Settings。`llm-openai` 只提供 Settings。两者不直接渲染聊天正文。
 
-## 4. 最小组合
+## 5. 最小组合
 
 当前最小运行组合是：
 
@@ -47,9 +51,9 @@ agent + llm-openai + session
 
 启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI。
 
-最小组合不加载工具插件和 context-manager。工具能力为空时，Agent 跳过工具阶段。
+最小组合不加载额外插件。工具能力为空时，Agent 跳过工具阶段。
 
-## 5. 构建清单
+## 6. 构建清单
 
 `scripts/shipped-plugins.conf` 是发布目标的唯一清单，`scripts/build.sh` 和 `scripts/build.ps1` 共用。当前收录：
 
@@ -60,4 +64,4 @@ tools:（空）
 
 `core` 是 autostart 根插件，`tools` 由 Agent Scheme 的 `dependsPlugins` 拉入。清单只收录 `plugins/<name>/` 下已有 `plugin.json` 的插件。没有 `plugin.json` 的目录不是可挂载插件，构建脚本会跳过并告警，不会进入 dist。
 
-实现新插件或清理构建目标时，应同步修改清单和本目录。构建流程见 [docs/build.md](../docs/build.md)。
+后续新增插件时，再同步修改清单和本目录。构建流程见 [docs/build.md](../docs/build.md)。

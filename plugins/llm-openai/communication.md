@@ -1,5 +1,7 @@
 # llm-openai 通信契约
 
+跨插件 JSON 的规范来源是 [Core Plugin Contracts](../../contracts/README.md)。本文 payload 示例须与 Schema 一致。
+
 本文记录 `llm-openai` 的方法、payload、Event 和前端通信。
 
 ## 1. 对外方法
@@ -7,6 +9,7 @@
 | 方法 | 用途 | 状态 |
 |---|---|---|
 | `llm.complete` | OpenAI-compatible Completion | 当前实现 |
+| `llm.cancel` | 取消指定 Call | 当前实现 |
 | `llm.config.get` | 读取模型配置 | 当前实现 |
 | `llm.config.set` | 更新模型配置 | 当前实现 |
 
@@ -42,7 +45,8 @@
   "model": "deepseek-chat",
   "temperature": 0.2,
   "max_tokens": 4096,
-  "stream": true
+  "stream": true,
+  "call_id": "t-1-s1"
 }
 ```
 
@@ -82,7 +86,23 @@
 
 流式模式下，Response 仍返回累计后的完整结果。Event 只用于实时增量。
 
-## 3. llm.chunk Event
+## 3. llm.cancel
+
+输入：
+
+```json
+{ "call_id": "t-1-s1" }
+```
+
+输出：
+
+```json
+{ "call_id": "t-1-s1", "cancelled": true }
+```
+
+`call_id` 由 Agent 传入 `llm.complete`。取消会中止对应上游 HTTP 请求。未注册的 `call_id` 仍返回 `cancelled: true`，用于覆盖调用启动竞态。
+
+## 4. llm.chunk Event
 
 Event 使用 Request 的 id。`capability.method` 是 `llm.chunk`。
 
@@ -121,7 +141,7 @@ Event 使用 Request 的 id。`capability.method` 是 `llm.chunk`。
 
 `llm.chunk` 是 llm-openai 私有传输格式。WebUI 不直接消费它。Agent 会把它累计成统一 Stream Snapshot。
 
-## 4. 上游请求
+## 5. 上游请求
 
 非流式模式请求：
 
@@ -139,7 +159,7 @@ Accept: text/event-stream
 
 响应按 `data:` 行解析。`[DONE]` 结束流。单个非流式请求超时是 5 分钟。流式请求没有总超时。
 
-## 5. 配置方法
+## 6. 配置方法
 
 ### llm.config.get
 
@@ -177,7 +197,7 @@ Accept: text/event-stream
 
 当前实现中，空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。Settings 空 secret 表示不修改。清除 secret 需要显式动作。
 
-## 6. 调用关系
+## 7. 调用关系
 
 ```mermaid
 sequenceDiagram
@@ -194,7 +214,7 @@ sequenceDiagram
 
 `llm-openai` 不调用 `session`。
 
-## 7. 错误
+## 8. 错误
 
 | 场景 | 错误码 |
 |---|---|
@@ -206,7 +226,7 @@ sequenceDiagram
 
 Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 
-## 8. 前端通信
+## 9. 前端通信
 
 | UI 面 | 方向 | 方法 |
 |---|---|---|
@@ -219,7 +239,7 @@ Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 
 llm-openai 没有 `setData` 或 `runCommand` 调用。
 
-## 9. 结构体索引
+## 10. 结构体索引
 
 | Go 类型 | 角色 |
 |---|---|

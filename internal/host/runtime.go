@@ -89,7 +89,7 @@ func (h *Host) hostContextCreate(from string, frame *Frame) error {
 	}
 	context, err := h.CreateExecutionContext(from, in.ParentID, in.Bindings)
 	if err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -114,7 +114,7 @@ func (h *Host) hostContextBind(from string, frame *Frame) error {
 		return err
 	}
 	if err := h.BindExecutionContext(from, in.ContextID, in.Capability, in.InstanceID); err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -132,7 +132,7 @@ func (h *Host) hostContextClose(from string, frame *Frame) error {
 		return err
 	}
 	if err := h.CloseExecutionContext(from, in.ContextID); err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -153,7 +153,7 @@ func (h *Host) hostInstanceCreate(from string, frame *Frame) error {
 	}
 	instance, err := h.CreatePluginInstance(in.PluginName, in.InstanceID, in.ConfigRevision)
 	if err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -176,7 +176,7 @@ func (h *Host) hostInstanceClose(from string, frame *Frame) error {
 		return err
 	}
 	if err := h.ClosePluginInstance(in.InstanceID); err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -195,7 +195,7 @@ func (h *Host) hostInstanceRestart(from string, frame *Frame) error {
 	}
 	instance, err := h.RestartPluginInstance(in.InstanceID)
 	if err != nil {
-		code := errorCodeFor(err, CodeHandlerError)
+		code := ErrorCode(err, CodeHandlerError)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -348,7 +348,7 @@ func (h *Host) CreateExecutionContext(owner, parentID string, bindings map[strin
 		if target == nil {
 			return ExecutionContext{}, fmt.Errorf("binding instance %s: %w", instanceID, ErrInstanceNotFound)
 		}
-		if ownerPlugin := h.routeOwnerLocked(capability, ""); ownerPlugin != "" && ownerPlugin != target.pluginName {
+		if h.hasCapabilityRoute(capability) && !h.ownsCapability(target.pluginName, capability) {
 			return ExecutionContext{}, fmt.Errorf("instance %s does not own %s: %w", instanceID, capability, ErrContextBinding)
 		}
 		context.Bindings[capability] = instanceID
@@ -540,8 +540,23 @@ func (h *Host) resolveInstance(contextID, capability, method, defaultPlugin stri
 	return defaultPlugin, nil
 }
 
-func errorCodeFor(err error, fallback string) string {
+// ErrorCode maps Host sentinel errors to stable wire error codes.
+func ErrorCode(err error, fallback string) string {
 	switch {
+	case errors.Is(err, ErrMethodNotFound):
+		return CodeMethodNotFound
+	case errors.Is(err, ErrHostClosed):
+		return CodeHostClosed
+	case errors.Is(err, ErrServerClosed):
+		return CodeServerClosed
+	case errors.Is(err, ErrBadArguments):
+		return CodeBadArguments
+	case errors.Is(err, ErrBadPayload):
+		return CodeBadPayload
+	case errors.Is(err, ErrTimeout):
+		return CodeTimeout
+	case errors.Is(err, ErrRouteFailed):
+		return CodeRouteFailed
 	case errors.Is(err, ErrPluginNotMounted):
 		return CodePluginNotMounted
 	case errors.Is(err, ErrPluginDown):
@@ -662,6 +677,9 @@ func stopProc(p *proc) {
 		if p.cmd != nil && p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
 		}
-		<-p.done
+		select {
+		case <-p.done:
+		case <-time.After(DefaultShutdownGrace):
+		}
 	}
 }

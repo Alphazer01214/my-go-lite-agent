@@ -1,5 +1,7 @@
 # session 通信契约
 
+跨插件 JSON 的规范来源是 [Core Plugin Contracts](../../contracts/README.md)。本文 payload 示例须与 Schema 一致。
+
 本文记录 `session` 的方法、Fact、payload、投影和 WebUI 通信。
 
 ## 1. 对外方法
@@ -262,13 +264,15 @@ session.stream.update
 }
 ```
 
+`status` 当前支持 `streaming`、`cancel_requested`、`complete`、`cancelled` 和 `error`。
 Session Runtime：
 
 1. 按 `session_id` 暂存当前快照；
 2. 同一 `(turn_id, step_id)` 内丢弃较旧的 `update_id`；
 3. 仅当该会话是选中会话时，发送 `Command("stream", snapshot)`；
 4. 不写 JSONL；
-5. 最终 assistant `message` Fact 到达后清除临时状态。
+5. `cancel_requested` 会立即推送 ChatState；最终 `turn_end` 后清除临时状态。
+`turn_start.meta.plugin` 标记 Turn 属主。属主插件不可用时，State bootstrap 或页面重建会补写 `turn_end(error)`。
 
 ## 10. session.state 与 session.select
 
@@ -298,7 +302,7 @@ Session Runtime：
 }
 ```
 
-该方法只读取 JSONL 并重建状态。它不修改 Session，但会初始化选中会话。
+该方法读取 JSONL 并重建状态，同时初始化缺失的选中会话。它是 UI State bootstrap，不是纯只读查询。
 
 ### session.select
 
@@ -453,7 +457,7 @@ Component 的主题变量由插件自己拥有，统一使用 `--session-*` 前�
 |---|---|
 | 缺少 `session_id` | `bad_arguments` |
 | Fact 类型为空 | `bad_arguments` |
-| Session 不存在 | `not_found` |
+| Session 不存在 | `session_not_found` |
 | JSONL 写失败 | `handler_error` |
 | JSON 解码失败 | `bad_arguments` |
 

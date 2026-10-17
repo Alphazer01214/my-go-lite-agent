@@ -407,8 +407,3 @@ func (p *Plugin) writeFrame(frame *protocol.Frame) error {
 	defer p.mu.Unlock()
 	return protocol.WriteFrame(p.stdout, frame)
 }
-
-// Print pluginsdk 提供的供插件在命令行输出内容的方法
-func Print(msg string) {
-
-}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -11,12 +12,14 @@ const configFile = "config.json"
 
 // plugin holds the current config. complete captures a snapshot at call start.
 type plugin struct {
-	mu  sync.Mutex
-	cfg config
+	mu        sync.Mutex
+	cfg       config
+	active    map[string]context.CancelFunc
+	cancelled map[string]bool
 }
 
 func newPlugin() *plugin {
-	p := &plugin{}
+	p := &plugin{active: make(map[string]context.CancelFunc), cancelled: make(map[string]bool)}
 	p.cfg = loadConfig()
 	return p
 }
@@ -53,6 +56,43 @@ func loadConfig() config {
 	return cfg
 }
 
+func (p *plugin) registerCall(callID string, cancel context.CancelFunc) {
+	if callID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancelled[callID] {
+		cancel()
+		return
+	}
+	p.active[callID] = cancel
+}
+
+func (p *plugin) cancelCall(callID string) bool {
+	if callID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cancel, ok := p.active[callID]; ok {
+		cancel()
+		delete(p.active, callID)
+		return true
+	}
+	p.cancelled[callID] = true
+	return true
+}
+
+func (p *plugin) finishCall(callID string) {
+	if callID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.active, callID)
+	delete(p.cancelled, callID)
+}
 func (p *plugin) snapshot() config {
 	p.mu.Lock()
 	defer p.mu.Unlock()

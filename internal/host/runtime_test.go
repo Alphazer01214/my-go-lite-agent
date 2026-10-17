@@ -21,7 +21,6 @@ func TestExecutionContextInheritsCapabilityBinding(t *testing.T) {
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "llm-new", "llm")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
 	h.routes["llm.complete"] = "llm"
 
 	root, err := h.CreateExecutionContext("agent", "", map[string]string{
@@ -51,7 +50,6 @@ func TestCallWithEventsInContextUsesBoundInstance(t *testing.T) {
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "llm-new", "llm")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
 	h.routes["llm.complete"] = "llm"
 
 	context, err := h.CreateExecutionContext("agent", "", map[string]string{
@@ -98,7 +96,6 @@ func TestCloseExecutionContextFailsPendingCall(t *testing.T) {
 	h := newTestHost("llm", "agent")
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
 	h.routes["llm.complete"] = "llm"
 
 	context, err := h.CreateExecutionContext("agent", "", nil)
@@ -165,7 +162,6 @@ func TestHostContextMethodsManageContext(t *testing.T) {
 	h := newTestHost("llm", "agent")
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
 
 	create := &Frame{
 		ID: "agent-1", Type: FrameRequest, Capability: HostCapability,
@@ -226,8 +222,6 @@ func TestForwardAddsTargetToExecutionContext(t *testing.T) {
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "session", "session")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
-	h.provides["session"] = "session"
 	h.routes["llm.complete"] = "llm"
 	h.routes["session.save"] = "session"
 
@@ -267,7 +261,6 @@ func TestCloseExecutionContextClosesDescendants(t *testing.T) {
 	h := newTestHost("llm", "agent")
 	configureFakePlugin(h, "llm", "llm")
 	configureFakePlugin(h, "agent", "agent")
-	h.provides["llm"] = "llm"
 	h.routes["llm.complete"] = "llm"
 
 	root, err := h.CreateExecutionContext("agent", "", nil)
@@ -302,5 +295,18 @@ func TestCloseExecutionContextClosesDescendants(t *testing.T) {
 	}
 	if _, err := h.ExecutionContextSnapshot(child.ID); !errors.Is(err, ErrContextNotFound) {
 		t.Fatalf("child snapshot error = %v, want not found", err)
+	}
+}
+
+func TestContextBindingRejectsUnownedCapability(t *testing.T) {
+	h := newTestHost("llm", "other", "agent")
+	configureFakePlugin(h, "llm", "llm")
+	configureFakePlugin(h, "other", "other")
+	configureFakePlugin(h, "agent", "agent")
+	h.routes["llm.complete"] = "llm"
+
+	_, err := h.CreateExecutionContext("agent", "", map[string]string{"llm": "other"})
+	if !errors.Is(err, ErrContextBinding) {
+		t.Fatalf("error = %v, want context binding mismatch", err)
 	}
 }

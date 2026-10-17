@@ -173,7 +173,7 @@ Host 为跨插件 Request 分配内部 `fwd-N` id。Response 返回调用方时�
 
 `bindings` 把 Capability 绑定到 Plugin Instance。子上下文继承父上下文的绑定。配置代属于 Plugin Instance。实例绑定形成配置隔离，Context 不再保存全局配置代。
 
-`internal/host/constant.go` 中仍有插件生命周期方法名常量，但当前 `dispatchHost` 尚未实现这些方法。文档不把预留常量写成可用能力。
+Host 方法常量只保留当前 `dispatchHost` 实际分派的方法。未实现能力不进入公共契约。
 
 ## 6. Pending 闭环
 

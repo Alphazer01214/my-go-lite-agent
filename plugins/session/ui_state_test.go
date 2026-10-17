@@ -192,3 +192,53 @@ func TestStateRevisionAdvancesAndCarriesReasoning(t *testing.T) {
 		t.Fatalf("message = %#v", first.Chat.Messages)
 	}
 }
+
+func TestCancelRequestedPublishesChatState(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	ui := newFakeUIPublisher()
+	p.setUIPublisher(ui)
+	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.append(appendIn{SessionID: "s1", Facts: []factIn{{
+		Type: TypeTurnStart, Role: RoleHost, Meta: mustJSON(map[string]any{"turn_id": "t1"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.updateStream(streamUpdateIn{
+		SessionID: "s1", TurnID: "t1", StepID: "st1", UpdateID: 1,
+		Message: streamMessage{Role: RoleAssistant},
+		Status:  "cancel_requested",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := p.chatState("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Turn.CancelRequested {
+		t.Fatalf("chat state = %+v", state)
+	}
+}
+
+func TestStateTraceRevisionUsesUIRevision(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := p.state(stateIn{SessionID: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.state(stateIn{SessionID: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Trace.Revision <= first.Trace.Revision {
+		t.Fatalf("trace revisions = %d then %d", first.Trace.Revision, second.Trace.Revision)
+	}
+}

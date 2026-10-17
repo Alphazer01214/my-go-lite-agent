@@ -49,6 +49,7 @@ func main() {
 	p.loadAll()
 
 	s := pluginsdk.NewPlugin("session")
+	p.sdk = s
 	p.setUIPublisher(s.WebUI())
 
 	s.Register("session", "create", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {

@@ -23,12 +23,7 @@ type Host struct {
 	// plugin id -> wait
 	// id is the forward id (fwd-xxxxxx) or host call id (host-xxxxxx)
 	pending map[string]*wait
-	// provides the capability of the host to the plugins
-	// register: <provide capability>-<plugin name>
-	// must unique
-	provides map[string]string
-	// routes maps "capability.method" -> owning plugin name (host.register 上报)
-	// 查找优先于 provides（register 上报异步，provides 回落兜启动竞态）
+	// routes maps "capability.method" -> owning plugin name (host.register 上报).
 	routes map[string]string
 	// disabled plugin name -> true
 	disabled map[string]bool
@@ -198,7 +193,6 @@ func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	h := &Host{
 		plugins:        make(map[string]*proc),
 		pending:        make(map[string]*wait),
-		provides:       make(map[string]string),
 		routes:         make(map[string]string),
 		discoveries:    discoveries,
 		disabled:       make(map[string]bool),
@@ -220,10 +214,7 @@ func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	for _, w := range warns {
 		h.hlog("mount warn: " + w)
 	}
-	// provides 先入表再启动：进程一起来就能路由到已声明能力
-	if err := h.register(ordered); err != nil {
-		h.hlog(fmt.Sprintf("mount register: %v", err))
-	}
+
 	for _, d := range ordered {
 		if err := h.launchInstance(d.Manifest.Name, d, ""); err != nil {
 			h.hlog(fmt.Sprintf("mount %s: %v", d.Manifest.Name, err))
@@ -265,7 +256,7 @@ func (h *Host) Close() {
 				Capability: wt.capability,
 				Method:     wt.method,
 				From:       FromHost,
-				ErrorCode:  CodeHostServerClosed,
+				ErrorCode:  CodeServerClosed,
 				ErrorMsg:   "host closed",
 			}:
 			default:
@@ -273,7 +264,7 @@ func (h *Host) Close() {
 			continue
 		}
 		h.replyError(wt.caller, wt.frameID, wt.capability, wt.method,
-			CodeHostServerClosed, "host closed")
+			CodeServerClosed, "host closed")
 	}
 
 	// stdin EOF → 插件 SDK Listen 退出；回程 write 因 closed 被 alive() 拒绝，不再投递
@@ -293,10 +284,6 @@ func (h *Host) Close() {
 			}
 		}
 	}
-}
-
-func refresh() {
-
 }
 
 // defaultLogFunc logs to stderr: stdout is reserved for the conversation surface.

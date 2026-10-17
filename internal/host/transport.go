@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
@@ -50,7 +51,7 @@ func (h *Host) route(from string, frame *Frame) {
 func (h *Host) handleRequest(from string, frame *Frame) error {
 	if frame.ContextID != "" {
 		if _, err := h.useExecutionContext(frame.ContextID, from); err != nil {
-			code := errorCodeFor(err, CodeRouteFailed)
+			code := ErrorCode(err, CodeRouteFailed)
 			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 			return err
 		}
@@ -79,16 +80,7 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		err = h.forward(from, owner, ownerPlugin, frame)
 	}
 	if err != nil {
-		code := errorCodeFor(err, CodeRouteFailed)
-		// map sentinel errors to stable wire codes
-		switch {
-		case errors.Is(err, ErrPluginNotMounted):
-			code = CodePluginNotMounted
-		case errors.Is(err, ErrPluginDown):
-			code = CodePluginDown
-		case errors.Is(err, ErrPluginDisabled):
-			code = CodePluginDisabled
-		}
+		code := ErrorCode(err, CodeRouteFailed)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
@@ -187,7 +179,7 @@ func (h *Host) hostPlugins(from string, frame *Frame) error {
 }
 
 // routeOwner resolves the owning plugin process name for (capability, method).
-// routes（host.register 上报）优先，provides 回落——register 上报是异步的，回落兜住启动竞态。
+// routes 唯一来源是 host.register 上报的 (capability, method)。
 // Internal only — never exposed as a Frame addressing field.
 func (h *Host) routeOwner(capability string, method string) string {
 	h.mu.RLock()
@@ -195,11 +187,33 @@ func (h *Host) routeOwner(capability string, method string) string {
 	return h.routeOwnerLocked(capability, method)
 }
 
+func (h *Host) ownsCapability(pluginName, capability string) bool {
+	for key, owner := range h.routes {
+		if owner != pluginName {
+			continue
+		}
+		routeCapability, _, ok := strings.Cut(key, ".")
+		if ok && routeCapability == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Host) hasCapabilityRoute(capability string) bool {
+	for key := range h.routes {
+		routeCapability, _, ok := strings.Cut(key, ".")
+		if ok && routeCapability == capability {
+			return true
+		}
+	}
+	return false
+}
 func (h *Host) routeOwnerLocked(capability string, method string) string {
 	if owner, ok := h.routes[capability+"."+method]; ok {
 		return owner
 	}
-	return h.provides[capability]
+	return ""
 }
 
 // handleResponse only accept res with frame.ID = "fwd-xxx"

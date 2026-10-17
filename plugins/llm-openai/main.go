@@ -65,6 +65,13 @@ func main() {
 		return json.Marshal(out)
 	}).WithInfo("complete", "OpenAI-compatible chat completion (stream by default)"))
 
+	s.Register("llm", "cancel", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in llmCancelIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return json.Marshal(llmCancelOut{CallID: in.CallID, Cancelled: p.cancelCall(in.CallID)})
+	}).WithInfo("cancel", "cancel one in-flight completion"))
 	s.Register("llm", "config.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.getConfig())
 	}).WithInfo("config.get", "show model config (key masked)"))

@@ -121,38 +121,9 @@ func (h *Host) markUnhealthy(instanceID string, gen int) {
 	}
 	p.healthy = false
 	h.hlog(fmt.Sprintf("instance unhealthy instance=%s plugin=%s generation=%d", instanceID, p.pluginName, gen))
-	// 死者为被调方的 pending 需合成 plugin_down；仅为调用方的 pending 直接丢弃
-	//（调用方进程已亡，其 SDK pending 随进程消亡）。
-	var dead []*wait
-	for id, wt := range h.pending {
-		if wt.target != instanceID && wt.caller != instanceID {
-			continue
-		}
-		delete(h.pending, id)
-		if wt.target == instanceID {
-			dead = append(dead, wt)
-		}
-	}
 	h.mu.Unlock()
 
-	for _, wt := range dead {
-		if wt.kind == WaitHost && wt.resCh != nil {
-			select {
-			case wt.resCh <- &Frame{
-				Version:    FrameVersion,
-				ID:         wt.frameID,
-				Type:       FrameResponse,
-				Capability: wt.capability,
-				Method:     wt.method,
-				From:       FromHost,
-				ErrorCode:  CodePluginDown,
-				ErrorMsg:   fmt.Sprintf("plugin instance %s is down", instanceID),
-			}:
-			default:
-			}
-			continue
-		}
-		h.replyError(wt.caller, wt.frameID, wt.capability, wt.method,
-			CodePluginDown, fmt.Sprintf("plugin instance %s is down", instanceID))
-	}
+	// 死者为被调方的 pending 合成 plugin_down；仅为调用方的 pending 直接丢弃。
+	message := fmt.Sprintf("plugin instance %s is down", instanceID)
+	h.failInstancePending(instanceID, CodePluginDown, message)
 }
