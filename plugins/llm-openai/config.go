@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -9,16 +10,16 @@ import (
 
 const configFile = "config.json"
 
-// plugin holds config + working-state for deferred config.set.
+// plugin holds the current config. complete captures a snapshot at call start.
 type plugin struct {
-	mu       sync.Mutex
-	cfg      config
-	working  int
-	pending  *configSetIn // merged sets while working
+	mu        sync.Mutex
+	cfg       config
+	active    map[string]context.CancelFunc
+	cancelled map[string]bool
 }
 
 func newPlugin() *plugin {
-	p := &plugin{}
+	p := &plugin{active: make(map[string]context.CancelFunc), cancelled: make(map[string]bool)}
 	p.cfg = loadConfig()
 	return p
 }
@@ -55,6 +56,43 @@ func loadConfig() config {
 	return cfg
 }
 
+func (p *plugin) registerCall(callID string, cancel context.CancelFunc) {
+	if callID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancelled[callID] {
+		cancel()
+		return
+	}
+	p.active[callID] = cancel
+}
+
+func (p *plugin) cancelCall(callID string) bool {
+	if callID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cancel, ok := p.active[callID]; ok {
+		cancel()
+		delete(p.active, callID)
+		return true
+	}
+	p.cancelled[callID] = true
+	return true
+}
+
+func (p *plugin) finishCall(callID string) {
+	if callID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.active, callID)
+	delete(p.cancelled, callID)
+}
 func (p *plugin) snapshot() config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -62,12 +100,9 @@ func (p *plugin) snapshot() config {
 }
 
 func (p *plugin) getConfig() configGetOut {
-	c := p.snapshot()
-	return configGetOut{
-		BaseURL: c.BaseURL,
-		APIKey:  maskKey(c.APIKey),
-		Model:   c.Model,
-	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.getConfigLocked()
 }
 
 func maskKey(k string) string {
@@ -80,69 +115,20 @@ func maskKey(k string) string {
 	return k[:3] + "***" + k[len(k)-3:]
 }
 
-// beginWork marks a complete in-flight (working state).
-func (p *plugin) beginWork() {
-	p.mu.Lock()
-	p.working++
-	p.mu.Unlock()
-}
-
-// endWork drops working count and flushes deferred config.set if idle.
-func (p *plugin) endWork() {
-	p.mu.Lock()
-	if p.working > 0 {
-		p.working--
-	}
-	if p.working == 0 && p.pending != nil {
-		pending := p.pending
-		p.pending = nil
-		p.applyLocked(*pending)
-	}
-	p.mu.Unlock()
-}
-
-// configSet applies immediately when idle; defers while working.
+// configSet applies immediately. Running calls keep their captured snapshot.
 func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 	p.mu.Lock()
-	if p.working > 0 {
-		if p.pending == nil {
-			p.pending = &configSetIn{}
-		}
-		if in.BaseURL != "" {
-			p.pending.BaseURL = in.BaseURL
-		}
-		if in.APIKey != "" {
-			p.pending.APIKey = in.APIKey
-		}
-		if in.Model != "" {
-			p.pending.Model = in.Model
-		}
-		// report live (pre-apply) values for base/model; key stays masked old/new after flush
-		out := configGetOut{
-			BaseURL: p.cfg.BaseURL,
-			APIKey:  maskKey(p.cfg.APIKey),
-			Model:   p.cfg.Model,
-		}
-		if p.pending.BaseURL != "" {
-			out.BaseURL = p.pending.BaseURL
-		}
-		if p.pending.Model != "" {
-			out.Model = p.pending.Model
-		}
-		if p.pending.APIKey != "" {
-			out.APIKey = maskKey(p.pending.APIKey)
-		}
-		p.mu.Unlock()
-		return out, nil
-	}
+	defer p.mu.Unlock()
 	p.applyLocked(in)
-	out := configGetOut{
+	return p.getConfigLocked(), nil
+}
+
+func (p *plugin) getConfigLocked() configGetOut {
+	return configGetOut{
 		BaseURL: p.cfg.BaseURL,
 		APIKey:  maskKey(p.cfg.APIKey),
 		Model:   p.cfg.Model,
 	}
-	p.mu.Unlock()
-	return out, nil
 }
 
 func (p *plugin) applyLocked(in configSetIn) {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/tomori/my-go-lite-agent/internal/plugin"
 )
 
 // bufferWC is a capturing, thread-safe stdin for a fake proc.
@@ -36,7 +38,6 @@ func newTestHost(names ...string) *Host {
 	h := &Host{
 		plugins:  make(map[string]*proc),
 		pending:  make(map[string]*wait),
-		provides: make(map[string]string),
 		routes:   make(map[string]string),
 		disabled: make(map[string]bool),
 		gen:      make(map[string]int),
@@ -46,7 +47,7 @@ func newTestHost(names ...string) *Host {
 		h.gen[n] = 1
 		done := make(chan struct{})
 		close(done) // 假 proc 无真实进程，视为已退出
-		h.plugins[n] = &proc{stdin: &bufferWC{}, gen: 1, healthy: true, done: done}
+		h.plugins[n] = &proc{instanceID: n, pluginName: n, stdin: &bufferWC{}, gen: 1, healthy: true, done: done}
 	}
 	return h
 }
@@ -315,5 +316,21 @@ func TestBroadcastEventDropped(t *testing.T) {
 	}
 	if len(logged) == 0 || !strings.Contains(logged[0], "broadcast") {
 		t.Fatalf("logs = %v, want broadcast drop log", logged)
+	}
+}
+
+func TestRouteOwnerDoesNotUseProvidesFallback(t *testing.T) {
+	h := newTestHost("b")
+	h.discoveries = plugin.Discoveries{Plugins: []plugin.Discovery{{
+		Manifest: plugin.Manifest{Name: "b", Provides: []string{"llm"}},
+	}}}
+
+	if got := h.routeOwner("llm", "complete"); got != "" {
+		t.Fatalf("routeOwner before registration = %q, want empty", got)
+	}
+
+	h.routes["llm.complete"] = "b"
+	if got := h.routeOwner("llm", "complete"); got != "b" {
+		t.Fatalf("routeOwner after registration = %q, want b", got)
 	}
 }

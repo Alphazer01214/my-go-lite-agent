@@ -39,6 +39,7 @@ type Frame struct {
 	ID         string          `json:"id"`
 	Type       string          `json:"type"`
 	From       string          `json:"from,omitempty"`
+	ContextID  string          `json:"context_id,omitempty"`
 	Capability string          `json:"capability,omitempty"`
 	Method     string          `json:"method,omitempty"`
 	Payload    json.RawMessage `json:"payload,omitempty"`

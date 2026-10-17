@@ -1,25 +1,59 @@
 # llm-openai
 
-无状态 OpenAI 兼容补全。不读写 session，不 Call 其它插件。
+`llm-openai` 是无状态的 OpenAI-compatible LLM 适配器。它接收 messages 和 tools，返回最终结果，并在流式模式下发送 delta。
 
-## 提供的能力
+## 1. 能力
 
-| capability.method | 说明 |
-|-------------------|------|
-| `llm.complete` | 补全；默认流式 |
-| `llm.config.get` | 查看配置（密钥掩码） |
-| `llm.config.set` | 修改配置（working 时挂起） |
+| Capability | 说明 |
+|---|---|
+| `llm` | Completion 和配置 |
 
-## 流式
+`llm-openai` 不读取 Session，不编排 Turn，不渲染 WebUI 正文。
 
-归因 evt `llm.chunk`：
+## 2. 配置
 
-- `{"channel":"content","delta":"…"}`
-- `{"channel":"reasoning","delta":"…"}`
-- `{"channel":"tool_call","index":0,"id":"…","function":{…}}`（OpenAI delta.tool_calls 形状）
+```json
+{
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "",
+  "model": "deepseek-chat"
+}
+```
 
-## 配置
+启动优先级：
 
-`config.json`：`base_url` / `api_key` / `model`。  
-启动时 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` 优先。  
-`config.set` 在 complete 在途时排队，空闲后生效并写盘。
+```text
+环境变量
+→ config.json
+→ 内置默认值
+```
+
+支持的环境变量：
+
+| 环境变量 | 字段 |
+|---|---|
+| `OPENAI_BASE_URL` | `base_url` |
+| `OPENAI_API_KEY` | `api_key` |
+| `OPENAI_MODEL` | `model` |
+
+真实 API Key 不进入 Git。`config.json` 使用 `0600` 权限保存。`config.get` 返回部分脱敏 key。`llm.settings.get` 只返回是否已配置。
+
+## 3. 前端交互
+
+第一阶段没有 llm-openai 顶层 Component。
+
+Host Settings 页面按统一 Schema 渲染：
+
+| 字段 | 控件 |
+|---|---|
+| `base_url` | string |
+| `api_key` | secret |
+| `model` | string |
+
+读取调用 `llm.settings.get`，保存调用 `llm.settings.save`。插件负责持久化。每次 `llm.complete` 使用调用开始时的配置快照。修改不影响运行中的 Call，并从下一次 Call 开始生效。
+
+空 Secret 表示不修改 API Key。清除 Secret 需要插件后续提供显式操作。
+
+## 4. 文档
+
+详细契约见 [communication.md](communication.md)。该文档也记录上游协议。

@@ -16,8 +16,6 @@ func defaultConfig() config {
 type plugin struct {
 	mu       sync.Mutex
 	cfg      config
-	working  int
-	pending  *configSetIn
 	sessions map[string]*sessionSlot
 	sdk      sdkCaller
 }
@@ -73,49 +71,16 @@ func (p *plugin) getConfig() configGetOut {
 	return configGetOut{DefaultScheme: c.DefaultScheme, MaxSteps: c.MaxSteps}
 }
 
-func (p *plugin) beginWork() {
-	p.mu.Lock()
-	p.working++
-	p.mu.Unlock()
-}
-
-func (p *plugin) endWork() {
-	p.mu.Lock()
-	if p.working > 0 {
-		p.working--
-	}
-	if p.working == 0 && p.pending != nil {
-		pending := *p.pending
-		p.pending = nil
-		p.applyLocked(pending)
-	}
-	p.mu.Unlock()
-}
-
+// configSet applies immediately. Running turns keep their captured snapshot.
 func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.working > 0 {
-		if p.pending == nil {
-			p.pending = &configSetIn{}
-		}
-		if in.DefaultScheme != "" {
-			p.pending.DefaultScheme = in.DefaultScheme
-		}
-		if in.MaxSteps > 0 {
-			p.pending.MaxSteps = in.MaxSteps
-		}
-		out := configGetOut{DefaultScheme: p.cfg.DefaultScheme, MaxSteps: p.cfg.MaxSteps}
-		if p.pending.DefaultScheme != "" {
-			out.DefaultScheme = p.pending.DefaultScheme
-		}
-		if p.pending.MaxSteps > 0 {
-			out.MaxSteps = p.pending.MaxSteps
-		}
-		return out, nil
-	}
 	p.applyLocked(in)
-	return configGetOut{DefaultScheme: p.cfg.DefaultScheme, MaxSteps: p.cfg.MaxSteps}, nil
+	return p.getConfigLocked(), nil
+}
+
+func (p *plugin) getConfigLocked() configGetOut {
+	return configGetOut{DefaultScheme: p.cfg.DefaultScheme, MaxSteps: p.cfg.MaxSteps}
 }
 
 func (p *plugin) applyLocked(in configSetIn) {

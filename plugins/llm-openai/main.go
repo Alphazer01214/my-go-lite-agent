@@ -65,6 +65,13 @@ func main() {
 		return json.Marshal(out)
 	}).WithInfo("complete", "OpenAI-compatible chat completion (stream by default)"))
 
+	s.Register("llm", "cancel", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in llmCancelIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return json.Marshal(llmCancelOut{CallID: in.CallID, Cancelled: p.cancelCall(in.CallID)})
+	}).WithInfo("cancel", "cancel one in-flight completion"))
 	s.Register("llm", "config.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.getConfig())
 	}).WithInfo("config.get", "show model config (key masked)"))
@@ -80,6 +87,22 @@ func main() {
 		}
 		return json.Marshal(out)
 	}).WithInfo("config.set", "update config (deferred while working)"))
+
+	s.Register("llm", "settings.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		return json.Marshal(p.settingsGet())
+	}).WithInfo("settings.get", "read Settings Renderer values"))
+
+	s.Register("llm", "settings.save", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+		var in settingsSaveIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		out, err := p.settingsSave(in)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}).WithInfo("settings.save", "save Settings Renderer values"))
 
 	if err := s.Serve(); err != nil {
 		os.Exit(1)

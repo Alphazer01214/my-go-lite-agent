@@ -49,6 +49,8 @@ func main() {
 	p.loadAll()
 
 	s := pluginsdk.NewPlugin("session")
+	p.sdk = s
+	p.setUIPublisher(s.WebUI())
 
 	s.Register("session", "create", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
 		var in createIn
@@ -93,6 +95,30 @@ func main() {
 		}
 		return p.info(in)
 	})).WithInfo("info", "session metadata and counts"))
+
+	s.Register("session", "state", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+		var in stateIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.state(in)
+	})).WithInfo("state", "read rebuildable UI state"))
+
+	s.Register("session", "select", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+		var in selectIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.selectSession(in)
+	})).WithInfo("select", "select the session shown by the UI mounts"))
+
+	s.Register("session", "stream.update", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+		var in streamUpdateIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.updateStream(in)
+	})).WithInfo("stream.update", "update transient assistant stream state"))
 
 	if err := s.Serve(); err != nil {
 		os.Exit(1)

@@ -1,136 +1,254 @@
-# llm-openai 通信流程
+# llm-openai 通信契约
 
-本文是 llm-openai 的通信规划：插件间调用、插件与 Host 交互。名词见 [CONTEXT.md](../../CONTEXT.md)，线契约见 [docs/protocol.md](../../docs/protocol.md)。能力清单与配置见 [README](README.md)。
+跨插件 JSON 的规范来源是 [Core Plugin Contracts](../../contracts/README.md)。本文 payload 示例须与 Schema 一致。
 
-## 通信总览
+本文记录 `llm-openai` 的方法、payload、Event 和前端通信。
 
-llm-openai 无状态。不读写 session，不 Call 其它插件。唯一出站是归因 evt `llm.chunk`。
+## 1. 对外方法
 
-| 方向 | 对端 | 能力 | 说明 |
-|------|------|------|------|
-| 入站 | agent | `llm.complete` | 补全，默认流式 |
-| 入站 | Host / REPL | `llm.config.get` / `set` | 模型配置 |
-| 出站 | 调用方 | `llm.chunk`（evt） | 流式片段，归因 |
-| 外部 | OpenAI 兼容 API | HTTP | `POST /chat/completions` |
+| 方法 | 用途 | 状态 |
+|---|---|---|
+| `llm.complete` | OpenAI-compatible Completion | 当前实现 |
+| `llm.cancel` | 取消指定 Call | 当前实现 |
+| `llm.config.get` | 读取模型配置 | 当前实现 |
+| `llm.config.set` | 更新模型配置 | 当前实现 |
 
-## 入站能力
+## 2. llm.complete
 
-### llm.complete
-
-payload（`completeIn`）：
+### 输入
 
 ```json
 {
-  "messages": [{"role": "user", "content": "hello"}],
-  "tools": [{"type": "function", "function": {"name": "...", "parameters": {}}}],
-  "model": "",
-  "temperature": 0.7,
-  "max_tokens": 0,
-  "stream": true
+  "messages": [
+    {
+      "role": "user",
+      "content": "分析这个项目"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "model": "deepseek-chat",
+  "temperature": 0.2,
+  "max_tokens": 4096,
+  "stream": true,
+  "call_id": "t-1-s1"
 }
 ```
 
-- `messages` 必填，空则 `bad_arguments`。
-- `stream` 省略即 `true`。流式时上游带 `stream_options.include_usage`。
-- `model` 空则取配置。
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `messages` | 是 | OpenAI chat messages |
+| `tools` | 否 | function tools |
+| `model` | 否 | 覆盖配置 |
+| `temperature` | 否 | 采样温度 |
+| `max_tokens` | 否 | 最大生成 token |
+| `stream` | 否 | nil 时默认 true |
 
-返回（`completeOut`）：
+### Response
 
 ```json
 {
-  "content": "...",
-  "reasoning": "...",
-  "tool_calls": [{"id": "...", "type": "function", "function": {"name": "...", "arguments": "..."}}],
-  "finish_reason": "stop",
-  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+  "content": "最终正文",
+  "reasoning": "最终推理",
+  "tool_calls": [
+    {
+      "id": "call-1",
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "arguments": "{\"path\":\"README.md\"}"
+      }
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  }
 }
 ```
 
-`finish_reason` 取上游值。上游未给时按结果推断：有 `tool_calls` 则 `tool_calls`，否则 `stop`。
+流式模式下，Response 仍返回累计后的完整结果。Event 只用于实时增量。
 
-### llm.config.get / set
+## 3. llm.cancel
 
-查看或修改 `base_url`、`api_key`、`model`。`get` 对密钥掩码。complete 在途时 `set` 延后生效并写盘。
-
-## 事件
-
-llm.complete 在流式模式下持续发出归因 evt `llm.chunk`。归因 id 即入站 req 的 id。
-
-三种 payload 形状：
+输入：
 
 ```json
-{"channel": "content", "delta": "…"}
-{"channel": "reasoning", "delta": "…"}
-{"channel": "tool_call", "index": 0, "id": "…", "type": "function", "function": {"name": "…", "arguments": "…"}}
+{ "call_id": "t-1-s1" }
 ```
 
-| channel | 来源 | 说明 |
-|---------|------|------|
-| `content` | `delta.content` | 正文增量 |
-| `reasoning` | `delta.reasoning_content` | 推理增量 |
-| `tool_call` | `delta.tool_calls` | 增量形状，按 `index` 累加 |
+输出：
 
-`tool_call` 的 delta 语义与上游一致：`id`、`function.name` 通常只在首个增量出现，`function.arguments` 分片追加。完整拼装以 res 里的 `tool_calls` 为准。
+```json
+{ "call_id": "t-1-s1", "cancelled": true }
+```
 
-## 时序
+`call_id` 由 Agent 传入 `llm.complete`。取消会中止对应上游 HTTP 请求。未注册的 `call_id` 仍返回 `cancelled: true`，用于覆盖调用启动竞态。
 
-### 流式 complete
+## 4. llm.chunk Event
+
+Event 使用 Request 的 id。`capability.method` 是 `llm.chunk`。
+
+### Text delta
+
+```json
+{
+  "channel": "content",
+  "delta": "你"
+}
+```
+
+`channel` 可以是：
+
+| channel | 内容 |
+|---|---|
+| `content` | 正文 delta |
+| `reasoning` | 推理 delta |
+
+### Tool call delta
+
+```json
+{
+  "channel": "tool_call",
+  "index": 0,
+  "id": "call-1",
+  "type": "function",
+  "function": {
+    "name": "read_file",
+    "arguments": "{\"path\":"
+  }
+}
+```
+
+工具调用按 `index` 合并。`id`、`type` 和 `name` 可能在首个 delta 后补全。`arguments` 按顺序追加。
+
+`llm.chunk` 是 llm-openai 私有传输格式。WebUI 不直接消费它。Agent 会把它累计成统一 Stream Snapshot。
+
+## 5. 上游请求
+
+非流式模式请求：
+
+```text
+POST {base_url}/chat/completions
+Authorization: Bearer {api_key}
+Content-Type: application/json
+```
+
+流式模式额外设置：
+
+```text
+Accept: text/event-stream
+```
+
+响应按 `data:` 行解析。`[DONE]` 结束流。单个非流式请求超时是 5 分钟。流式请求没有总超时。
+
+## 6. 配置方法
+
+### llm.config.get
+
+当前输出：
+
+```json
+{
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "api***key",
+  "model": "deepseek-chat"
+}
+```
+
+目标 Settings 契约改为：
+
+```json
+{
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key_configured": true,
+  "model": "deepseek-chat"
+}
+```
+
+### llm.config.set
+
+输入字段均可省略：
+
+```json
+{
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "new-secret",
+  "model": "gpt-test"
+}
+```
+
+当前实现中，空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。Settings 空 secret 表示不修改。清除 secret 需要显式动作。
+
+## 7. 调用关系
 
 ```mermaid
 sequenceDiagram
-    participant H as Host
+    participant A as agent
     participant L as llm-openai
-    participant O as OpenAI 兼容 API
-    H->>L: req llm.complete (stream)
-    L->>O: POST /chat/completions
-    loop 每条 SSE delta
-        O-->>L: data: {...}
-        L-->>H: evt llm.chunk（归因）
-    end
-    O-->>L: data: [DONE]
-    L->>H: res completeOut
+    participant U as OpenAI-compatible API
+    A->>L: llm.complete
+    L->>U: POST /chat/completions
+    U-->>L: SSE delta
+    L-->>A: llm.chunk
+    U-->>L: [DONE]
+    L-->>A: completeOut
 ```
 
-### 非流式 complete
+`llm-openai` 不调用 `session`。
 
-```mermaid
-sequenceDiagram
-    participant H as Host
-    participant L as llm-openai
-    participant O as OpenAI 兼容 API
-    H->>L: req llm.complete (stream: false)
-    L->>O: POST /chat/completions
-    O-->>L: 完整 JSON
-    L->>H: res completeOut
-```
+## 8. 错误
 
-非流式不发 `llm.chunk`。
+| 场景 | 错误码 |
+|---|---|
+| `messages` 为空 | `bad_arguments` |
+| JSON 解码失败 | `bad_arguments` |
+| HTTP 建连或上游失败 | `llm_upstream` |
+| 上游非 2xx | `llm_upstream` |
+| JSON marshal 失败 | `handler_error` |
 
-## 与 Host 的交互
+Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 
-| 项 | 约定 |
-|----|------|
-| 启动上报 | `Serve()` 时经 `host.register` 上报 handler 键 |
-| 出站 Call | 无。唯一出站是 evt |
-| 归因 evt id | 用入站 req 的 id；Host 负责归因转发 |
-| 对端调用方死亡 | Host 丢弃无法投递的 evt；llm-openai 无感 |
-| 无超时 | 上游 HTTP 流不设客户端超时，读到 `[DONE]` 或连接断为止 |
+## 9. 前端通信
 
-## 配置来源
+| UI 面 | 方向 | 方法 |
+|---|---|---|
+| Settings 读取 | UI → Plugin | `llm.config.get` |
+| Settings 保存 | UI → Plugin | `llm.config.set` |
+| Settings Renderer 读取 | UI → Plugin | `llm.settings.get` |
+| Settings Renderer 保存 | UI → Plugin | `llm.settings.save` |
+| LLM 正文 | Plugin → Agent | `llm.chunk` |
+| LLM 最终结果 | Plugin → Agent | `llm.complete` Response |
 
-启动时环境变量优先于 `config.json`：
+llm-openai 没有 `setData` 或 `runCommand` 调用。
 
-| 环境变量 | 配置键 | 说明 |
-|----------|--------|------|
-| `OPENAI_BASE_URL` | `base_url` | API 根地址 |
-| `OPENAI_API_KEY` | `api_key` | Bearer 密钥 |
-| `OPENAI_MODEL` | `model` | 模型名 |
+## 10. 结构体索引
 
-## 错误码
-
-| code | 产生方 | 触发 |
-|------|--------|------|
-| `bad_arguments` | llm-openai | `messages` 为空、payload 非法 |
-| `llm_upstream` | llm-openai | HTTP 非 2xx、网络失败、响应解析失败 |
-| `handler_error` | llm-openai | 其余内部错误 |
-| `plugin_down` | Host | llm-openai 进程死亡时给调用方合成 |
+| Go 类型 | 角色 |
+|---|---|
+| `chatMessage` | 模型消息 |
+| `toolCall` | 工具调用 |
+| `tool` | 工具描述 |
+| `completeIn` | Completion 输入 |
+| `completeOut` | 最终输出 |
+| `chunkText` | content/reasoning delta |
+| `chunkToolCall` | tool call delta |
+| `config` | 磁盘和运行配置 |
+| `configGetOut/configSetIn` | 配置方法 payload |

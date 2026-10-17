@@ -14,6 +14,7 @@ import (
 // Request is one inbound Host req delivered to a handler.
 type Request struct {
 	ID         string
+	ContextID  string
 	Capability string
 	Method     string
 	Payload    json.RawMessage
@@ -21,6 +22,7 @@ type Request struct {
 
 type Event struct {
 	ID         string
+	ContextID  string
 	Capability string
 	Method     string
 	Payload    json.RawMessage
@@ -212,6 +214,7 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 	} else {
 		out, err := h.handleFunc(&Request{
 			ID:         frame.ID,
+			ContextID:  frame.ContextID,
 			Capability: frame.Capability,
 			Method:     frame.Method,
 			Payload:    frame.Payload,
@@ -252,6 +255,7 @@ func (p *Plugin) deliver(frame *protocol.Frame) {
 func (p *Plugin) toEvent(frame *protocol.Frame) *Event {
 	return &Event{
 		ID:         frame.ID,
+		ContextID:  frame.ContextID,
 		Capability: frame.Capability,
 		Method:     frame.Method,
 		Payload:    frame.Payload,
@@ -288,6 +292,11 @@ func (p *Plugin) waitResult(capability, method string, ch chan *protocol.Frame, 
 
 // callPending registers a waiter and writes the outbound req.
 func (p *Plugin) callPending(capability, method string, payload json.RawMessage) (chan *protocol.Frame, error) {
+	return p.callPendingInContext("", capability, method, payload)
+}
+
+// callPendingInContext registers one call in a Host execution context.
+func (p *Plugin) callPendingInContext(contextID, capability, method string, payload json.RawMessage) (chan *protocol.Frame, error) {
 	id := fmt.Sprintf("%s-%d", p.name, p.seq.Add(1))
 	ch := make(chan *protocol.Frame, 32)
 
@@ -300,6 +309,7 @@ func (p *Plugin) callPending(capability, method string, payload json.RawMessage)
 		Version:    protocol.FrameVersion,
 		ID:         id,
 		Type:       protocol.FrameRequest,
+		ContextID:  contextID,
 		Capability: capability,
 		Method:     method,
 		Payload:    payload,
@@ -331,7 +341,21 @@ func (p *Plugin) Call(capability string, method string, payload json.RawMessage)
 // CallWithCallback is Call plus a stream of attributed evt frames delivered to callback
 // until the final res. callback must be fast and non-blocking.
 func (p *Plugin) CallWithCallback(capability string, method string, payload json.RawMessage, callback func(event *Event)) (json.RawMessage, error) {
-	ch, err := p.callPending(capability, method, payload)
+	return p.CallWithCallbackInContext("", capability, method, payload, callback)
+}
+
+// CallInContext invokes capability.method inside one Host execution context.
+func (p *Plugin) CallInContext(contextID, capability, method string, payload json.RawMessage) (json.RawMessage, error) {
+	ch, err := p.callPendingInContext(contextID, capability, method, payload)
+	if err != nil {
+		return nil, err
+	}
+	return p.waitResult(capability, method, ch, nil)
+}
+
+// CallWithCallbackInContext combines CallInContext with attributed event delivery.
+func (p *Plugin) CallWithCallbackInContext(contextID, capability, method string, payload json.RawMessage, callback func(event *Event)) (json.RawMessage, error) {
+	ch, err := p.callPendingInContext(contextID, capability, method, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -340,11 +364,17 @@ func (p *Plugin) CallWithCallback(capability string, method string, payload json
 
 // Emit sends an unattributed evt Frame (no response expected).
 func (p *Plugin) Emit(capability string, method string, payload json.RawMessage) error {
+	return p.EmitInContext("", capability, method, payload)
+}
+
+// EmitInContext sends an unattributed event in one execution context.
+func (p *Plugin) EmitInContext(contextID, capability, method string, payload json.RawMessage) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return protocol.WriteFrame(p.stdout, &protocol.Frame{
 		Version:    protocol.FrameVersion,
 		Type:       protocol.FrameEvent,
+		ContextID:  contextID,
 		Capability: capability,
 		Method:     method,
 		Payload:    payload,
@@ -353,11 +383,17 @@ func (p *Plugin) Emit(capability string, method string, payload json.RawMessage)
 
 // EmitWithID sends an attributed evt (id points at an in-flight Call).
 func (p *Plugin) EmitWithID(id string, capability string, method string, payload json.RawMessage) error {
+	return p.EmitWithIDInContext("", id, capability, method, payload)
+}
+
+// EmitWithIDInContext sends an attributed event in one execution context.
+func (p *Plugin) EmitWithIDInContext(contextID, id string, capability string, method string, payload json.RawMessage) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return protocol.WriteFrame(p.stdout, &protocol.Frame{
 		Version:    protocol.FrameVersion,
 		ID:         id,
+		ContextID:  contextID,
 		Type:       protocol.FrameEvent,
 		Capability: capability,
 		Method:     method,
@@ -370,9 +406,4 @@ func (p *Plugin) writeFrame(frame *protocol.Frame) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return protocol.WriteFrame(p.stdout, frame)
-}
-
-// Print pluginsdk 提供的供插件在命令行输出内容的方法
-func Print(msg string) {
-
 }

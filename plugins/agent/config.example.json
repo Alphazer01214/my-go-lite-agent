@@ -1,0 +1,4 @@
+{
+  "default_scheme": "tool_calling",
+  "max_steps": 128
+}

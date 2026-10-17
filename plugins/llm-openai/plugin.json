@@ -7,6 +7,15 @@
   "requires": [],
   "depends_on": [],
   "autostart": true,
+  "settings": {
+    "get": { "capability": "llm", "method": "settings.get" },
+    "save": { "capability": "llm", "method": "settings.save" },
+    "schema": [
+      { "key": "base_url", "label": "Base URL", "type": "string", "required": true },
+      { "key": "model", "label": "Model", "type": "string", "required": true },
+      { "key": "api_key", "label": "API key", "type": "secret" }
+    ]
+  },
   "description": "Stateless OpenAI-compatible LLM completion with streaming",
   "commands": [
     { "name": "config", "description": "Show or set model config", "usage": "/llm-openai config [get|set k=v]" }

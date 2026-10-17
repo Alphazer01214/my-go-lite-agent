@@ -1,98 +1,152 @@
-# 插件开发规范 — 包结构
+# 插件开发
 
-一个插件 = 一个目录包。目录名即插件名，须与 `plugin.json` 的 `name` 一致。Host 的 Discovery 按目录扫描。
+一个插件是一个目录包。目录名、`plugin.json.name` 和 `pluginsdk.NewPlugin` 的名称必须一致。
 
-名词见 [CONTEXT.md](../CONTEXT.md)，清单字段见 [manifest.md](manifest.md)，进程接口见 [pluginsdk.md](pluginsdk.md)，线协议见 [protocol.md](protocol.md)。
-
-## 包内文件
-
-| 文件 | 必填 | 职责 |
-|------|------|------|
-| `main.go` | 是 | 进程入口。`package main`，经 `pluginsdk` 注册 handler 并 `Serve()`；**不手写 Frame 循环** |
-| `plugin.json` | 是 | Host 注册依据（Manifest）。身份、能力声明、命令与 UI 元数据；Discovery 缺它直接记错并跳过 |
-| `config.json` | 视需要 | 本插件的磁盘配置。**唯一可写配置面**；密钥与用户改动不进 git（见仓库 `.gitignore`） |
-| `README.md` | 强烈建议 | 面向使用者：插件做什么、对外提供哪些 `capability.method`、怎么配置、有哪些命令。缺失只警告，不阻断挂载 |
-
-可选：`ui/`（前端资产，对应 manifest `ui`）、`config.example.json`（无密钥的配置模板）。
-
-## 布局
+## 1. 包结构
 
 ```text
 plugins/<name>/
-  main.go            # 入口
-  plugin.json        # Host 注册依据
-  config.json        # 本插件配置（可选；通常 gitignore）
-  README.md          # 功能与对外方法说明
-  ui/                # 可选，Web 组件
+  main.go
+  plugin.json
+  config.json
+  README.md
+  communication.md
+  ui/
+    main.js
+    main.css
 ```
 
-构建产物（`dist/plugins/<name>/`）至少含：可执行文件（`entry`）、`plugin.json`，以及存在的 `config.json` / `README.md` / `ui/`。构建脚本只编译与拷贝，**不生成** manifest。
+| 文件 | 必填 | 职责 |
+|---|---|---|
+| `main.go` | 是 | 注册 handler 并启动 Plugin Runtime |
+| `plugin.json` | 是 | 静态注册面 |
+| `config.json` | 视需要 | 可写运行配置 |
+| `README.md` | 是 | 功能、配置和方法概览 |
+| `communication.md` | 是 | 方法、payload、Event 和前端通信 |
+| `ui/` | 视需要 | Web Component 和静态资源 |
 
-## 三文件边界
-
-| 文件 | 谁读 | 谁写 | 含什么 |
-|------|------|------|--------|
-| `main.go` | 编译器 / 进程 | 插件作者 | handler 与业务逻辑；只 import `pluginsdk` |
-| `plugin.json` | Host Discovery / 装配 | 插件作者 | 身份（`name`/`version`/`protocol`/`entry`）、能力（`provides`/`requires`/`depends_on`/`autostart`）、交互（`commands`/`timeout_ms`/`ui`） |
-| `config.json` | 插件进程 | 插件作者 / 运行时 `config.set` | 本插件运行参数（模型密钥、scheme、路径等）。Host **不解读**内容 |
-
-- **注册真源是 `plugin.json`**，不是 `main.go` 里的字符串。路由真源是运行时上报的 `(capability, method)`（见 pluginsdk `Serve` 的 `host.register`）。
-- **配置不进 `plugin.json`**。清单是静态元数据；可变、可密钥的内容放 `config.json`。
-- **README 不参与注册或路由**。它只服务人；`provides` 与 README 里写的方法列表应保持一致。
-
-## README 建议结构
-
-```markdown
-# <name>
-
-一句话说明插件做什么。
-
-## 提供的能力
-| capability.method | 说明 |
-|-------------------|------|
-| `foo.bar` | … |
-
-## 配置
-`config.json` 字段与环境变量优先级。
-
-## 命令
-manifest `commands` 的用法（如 `/foo set k=v`）。
-```
-
-## 骨架
+## 2. main.go
 
 ```go
-// main.go
 package main
 
-import "github.com/…/pluginsdk"
+import (
+    "github.com/tomori/my-go-lite-agent/pluginsdk"
+)
 
 func main() {
-    p := pluginsdk.NewPlugin("foo")
-    p.Register("foo", "bar", handleBar)
+    p := pluginsdk.NewPlugin("example")
+    p.Register("example", "ping", handlePing)
     if err := p.Serve(); err != nil {
         panic(err)
     }
 }
 ```
 
-```json
-// plugin.json（字段说明见 manifest.md）
-{
-  "name": "foo",
-  "version": "0.1.0",
-  "protocol": 1,
-  "entry": "foo",
-  "provides": ["foo"],
-  "description": "…",
-  "commands": []
-}
+插件只 import `pluginsdk`。业务代码不手写 Frame 循环。测试夹具可以直接使用 `protocol`。
+
+## 3. 配置边界
+
+`plugin.json` 是静态元数据。`config.json` 是运行配置。
+
+```text
+plugin.json  人和 Host 编写
+config.json  插件 Runtime 读写
 ```
 
-## 约束
+真实密钥不进入 `plugin.json`。本地 `config.json` 不提交 Git。仓库只提交 `config.example.json`。
 
-1. 目录名 = `plugin.json` 的 `name` = `pluginsdk.NewPlugin` 的 name。
-2. `entry` 指向包内构建出的可执行名（注意 Windows 下常为 `*.exe`）。
-3. 插件之间**不直连**；跨能力只 `Call` / `Emit` `(capability, method)`。
-4. 生产代码不手写 Frame；测试夹具可触 `protocol`。
-5. 核心与 Host 零第三方依赖；插件优先 stdlib。
+配置更新应满足：
+
+1. 持久化到插件私有配置文件；
+2. 返回脱敏结果；
+3. 不修改运行中 Call 的配置快照；
+4. 从下一次 Call 开始使用新配置。
+
+## 4. 方法文档
+
+每个插件的 `communication.md` 至少包含：
+
+| 章节 | 内容 |
+|---|---|
+| 能力 | `capability.method` 列表 |
+| 方法 payload | JSON 字段和必填性 |
+| Response | 返回结构 |
+| Event | id、channel、payload |
+| 调用关系 | Mermaid 时序图 |
+| WebUI | Component、State、Command |
+| 错误 | 稳定错误码 |
+| 实现状态 | 当前实现与目标契约 |
+
+不要把 Go 私有结构体名当作公共协议。文档使用 JSON 字段名。
+
+## 5. 前端组件
+
+插件 UI 入口定义 Custom Element。标签必须使用插件名前缀。
+
+```js
+class ExamplePanel extends HTMLElement {
+  setData(state) {
+    this.state = state;
+    this.render();
+  }
+
+  runCommand(command, payload) {
+    if (command === "refresh") {
+      this.refresh();
+    }
+  }
+
+  connectedCallback() {
+    this.render();
+  }
+
+  disconnectedCallback() {
+    this.cleanup();
+  }
+}
+
+customElements.define("example-panel", ExamplePanel);
+```
+
+Component 使用 Shadow DOM 隔离样式。Component 不直接读写插件存储，也不建立第二套路由。
+
+## 6. 测试
+
+插件测试至少覆盖：
+
+- payload 解码；
+- 成功 Response；
+- 稳定错误码；
+- 配置持久化和脱敏；
+- Event payload；
+- 纯投影和纯转换函数；
+- 取消和错误路径。
+
+## 7. 构建
+
+构建脚本只编译和复制文件。构建脚本不生成 `plugin.json`。
+
+发布目录至少包含：
+
+```text
+dist/plugins/<name>/
+  <entry>
+  plugin.json
+  config.json
+  README.md
+  communication.md
+  ui/
+```
+
+构建不会写入真实 API Key。已有用户配置在重建时保留。
+
+## 8. 禁止事项
+
+- 插件之间直连；
+- 按插件名调用业务能力；
+- 在 UI State 中保存插件持久化记录；
+- 把临时传输增量直接作为持久记录；
+- 让浏览器设置 `from`；
+- 在 `plugin.json` 保存 Secret；
+- 用 README 替代 `plugin.json` 注册。

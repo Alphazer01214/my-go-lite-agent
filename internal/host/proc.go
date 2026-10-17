@@ -13,7 +13,16 @@ import (
 // entry 相对 discovery.Dir 解析；无扩展名时补试 .exe（源码 manifest 与构建产物命名兼容）。
 // cmd.Dir 必须是插件目录：插件按 CWD 读 config.json，session 写 ./sessions。
 func (h *Host) launch(discovery plugin.Discovery) error {
+	return h.launchInstance(discovery.Manifest.Name, discovery, "")
+}
+
+// launchInstance starts one process activation. The default activation uses the
+// plugin name as instance id, preserving the existing single-instance contract.
+func (h *Host) launchInstance(instanceID string, discovery plugin.Discovery, configRevision string) error {
 	manifest := discovery.Manifest
+	if instanceID == "" {
+		return fmt.Errorf("instance id is required: %w", ErrBadArguments)
+	}
 	if h.IsPluginDisabled(manifest.Name) {
 		return ErrPluginDisabled
 	}
@@ -49,19 +58,31 @@ func (h *Host) launch(discovery plugin.Discovery) error {
 		close(done)
 	}()
 	h.mu.Lock()
-	h.gen[manifest.Name]++
-	gen := h.gen[manifest.Name]
-	h.plugins[manifest.Name] = &proc{
-		discovery: discovery,
-		cmd:       cmd,
-		stdin:     stdin,
-		gen:       gen,
-		healthy:   true,
-		done:      done,
+	if _, exists := h.plugins[instanceID]; exists {
+		h.mu.Unlock()
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		return fmt.Errorf("instance %s already exists: %w", instanceID, ErrInstanceExists)
+	}
+	h.gen[instanceID]++
+	gen := h.gen[instanceID]
+	h.plugins[instanceID] = &proc{
+		discovery:      discovery,
+		instanceID:     instanceID,
+		pluginName:     manifest.Name,
+		configRevision: configRevision,
+		cmd:            cmd,
+		stdin:          stdin,
+		gen:            gen,
+		healthy:        true,
+		done:           done,
 	}
 	h.mu.Unlock()
 
-	go h.read(manifest.Name, gen, stdout)
+	go h.read(instanceID, manifest.Name, gen, stdout)
 	return nil
 }
 
@@ -87,50 +108,22 @@ func resolveEntry(dir, entry string) (string, error) {
 
 // markUnhealthy 标记插件不健康并做死亡闭包：该插件相关的 pending 全部闭环，
 // 防止调用方永久挂起（v1 无调用超时）。合成响应在锁外写，避免与 read/write 互锁。
-func (h *Host) markUnhealthy(name string, gen int) {
+func (h *Host) markUnhealthy(instanceID string, gen int) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return
 	}
-	p := h.plugins[name]
+	p := h.plugins[instanceID]
 	if p == nil || p.gen != gen {
 		h.mu.Unlock()
 		return
 	}
 	p.healthy = false
-	// 死者为被调方的 pending 需合成 plugin_down；仅为调用方的 pending 直接丢弃
-	//（调用方进程已亡，其 SDK pending 随进程消亡）。
-	var dead []*wait
-	for id, wt := range h.pending {
-		if wt.target != name && wt.caller != name {
-			continue
-		}
-		delete(h.pending, id)
-		if wt.target == name {
-			dead = append(dead, wt)
-		}
-	}
+	h.hlog(fmt.Sprintf("instance unhealthy instance=%s plugin=%s generation=%d", instanceID, p.pluginName, gen))
 	h.mu.Unlock()
 
-	for _, wt := range dead {
-		if wt.kind == WaitHost && wt.resCh != nil {
-			select {
-			case wt.resCh <- &Frame{
-				Version:    FrameVersion,
-				ID:         wt.frameID,
-				Type:       FrameResponse,
-				Capability: wt.capability,
-				Method:     wt.method,
-				From:       FromHost,
-				ErrorCode:  CodePluginDown,
-				ErrorMsg:   fmt.Sprintf("plugin %s is down", name),
-			}:
-			default:
-			}
-			continue
-		}
-		h.replyError(wt.caller, wt.frameID, wt.capability, wt.method,
-			CodePluginDown, fmt.Sprintf("plugin %s is down", name))
-	}
+	// 死者为被调方的 pending 合成 plugin_down；仅为调用方的 pending 直接丢弃。
+	message := fmt.Sprintf("plugin instance %s is down", instanceID)
+	h.failInstancePending(instanceID, CodePluginDown, message)
 }

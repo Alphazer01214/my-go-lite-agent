@@ -1,44 +1,13 @@
 package host
 
-import (
-	"errors"
-	"fmt"
-
-	"github.com/tomori/my-go-lite-agent/internal/plugin"
-)
-
-// register.go 注册插件
-
-// register registers the MOUNTED plugins' provides into the host registry.
-func (h *Host) register(scans []plugin.Discovery) error {
-	var errs []error
-	for _, scan := range scans {
-		manifest := scan.Manifest
-		if err := h.registerProvides(manifest); err != nil {
-			errs = append(errs, fmt.Errorf("register plugin %s: %w", manifest.Name, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func (h *Host) registerProvides(manifest plugin.Manifest) error {
+// unregisterPlugin removes stale discovery-owned routes so a stopped or
+// replaced plugin can be started again without route conflicts.
+func (h *Host) unregisterPlugin(pluginName string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, provide := range manifest.Provides {
-		// tools 允许多属主：只登记第一个，路由不查这张表。
-		if provide == ToolsCapability {
-			if _, ok := h.provides[provide]; !ok {
-				h.provides[provide] = manifest.Name
-			}
-			continue
+	for key, owner := range h.routes {
+		if owner == pluginName {
+			delete(h.routes, key)
 		}
-		if owner, ok := h.provides[provide]; ok && owner != manifest.Name {
-			return fmt.Errorf(
-				"plugin %s wants to provide %s, already provided by %s: %w",
-				manifest.Name, provide, owner, ErrCapabilityConflict,
-			)
-		}
-		h.provides[provide] = manifest.Name
 	}
-	return nil
 }
