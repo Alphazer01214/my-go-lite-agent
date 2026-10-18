@@ -36,18 +36,19 @@ func (b *bufferWC) snapshot() []byte {
 
 func newTestHost(names ...string) *Host {
 	h := &Host{
-		plugins:  make(map[string]*proc),
-		pending:  make(map[string]*wait),
-		routes:   make(map[string]string),
-		disabled: make(map[string]bool),
-		gen:      make(map[string]int),
-		hlog:     func(string) {},
+		plugins:     make(map[string]*proc),
+		pending:     make(map[string]*wait),
+		routes:      make(map[string]string),
+		cancelGrace: DefaultCancelGrace,
+		disabled:    make(map[string]bool),
+		gen:         make(map[string]int),
+		hlog:        func(string) {},
 	}
 	for _, n := range names {
 		h.gen[n] = 1
 		done := make(chan struct{})
 		close(done) // 假 proc 无真实进程，视为已退出
-		h.plugins[n] = &proc{instanceID: n, pluginName: n, stdin: &bufferWC{}, gen: 1, healthy: true, done: done}
+		h.plugins[n] = &proc{instanceID: n, pluginName: n, stdin: &bufferWC{}, gen: 1, state: ProviderStateActive, done: done}
 	}
 	return h
 }

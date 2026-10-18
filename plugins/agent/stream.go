@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -151,7 +152,7 @@ func (a *streamAccumulator) snapshot(sessionID, turnID, stepID, status string) s
 	}
 }
 
-func (p *plugin) updateStream(snapshot streamSnapshot) error {
-	_, err := p.sdk.Call("session", "stream.update", mustJSON(snapshot))
+func (p *plugin) updateStream(ctx context.Context, snapshot streamSnapshot) error {
+	_, err := p.sdk.Call(ctx, "session", "stream.update", mustJSON(snapshot))
 	return err
 }

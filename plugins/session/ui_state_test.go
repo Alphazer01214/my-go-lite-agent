@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -38,7 +39,7 @@ func TestStreamUpdateRejectsStaleSnapshots(t *testing.T) {
 	t.Cleanup(p.close)
 	ui := newFakeUIPublisher()
 	p.setUIPublisher(ui)
-	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,12 +48,12 @@ func TestStreamUpdateRejectsStaleSnapshots(t *testing.T) {
 		Message: streamMessage{Role: RoleAssistant, Content: "new"},
 		Status:  "streaming",
 	}
-	if out, err := p.updateStream(base); err != nil || !out.Accepted {
+	if out, err := p.updateStream(context.Background(), base); err != nil || !out.Accepted {
 		t.Fatalf("first update = %+v, %v", out, err)
 	}
 	base.UpdateID = 1
 	base.Message.Content = "old"
-	out, err := p.updateStream(base)
+	out, err := p.updateStream(context.Background(), base)
 	if err != nil || out.Accepted || out.Reason != "stale" {
 		t.Fatalf("stale update = %+v, %v", out, err)
 	}
@@ -77,10 +78,10 @@ func TestAppendFinalAssistantClearsStreamAndPublishesStates(t *testing.T) {
 	ui := newFakeUIPublisher()
 	p.setUIPublisher(ui)
 
-	if _, err := p.create(createIn{SessionID: "s1", Name: "demo"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1", Name: "demo"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := p.updateStream(streamUpdateIn{
+	_, err := p.updateStream(context.Background(), streamUpdateIn{
 		SessionID: "s1", TurnID: "t1", StepID: "st1", UpdateID: 1,
 		Message: streamMessage{Role: RoleAssistant, Content: "draft"},
 		Status:  "streaming",
@@ -89,7 +90,7 @@ func TestAppendFinalAssistantClearsStreamAndPublishesStates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = p.append(appendIn{
+	_, err = p.append(context.Background(), appendIn{
 		SessionID: "s1",
 		Facts: []factIn{{
 			Type:    TypeMessage,
@@ -126,10 +127,10 @@ func TestAppendFinalAssistantClearsStreamAndPublishesStates(t *testing.T) {
 func TestStateReturnsHistoryChatAndTrace(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
-	if _, err := p.create(createIn{SessionID: "s1", Name: "demo"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1", Name: "demo"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.append(appendIn{
+	if _, err := p.append(context.Background(), appendIn{
 		SessionID: "s1",
 		Facts: []factIn{{
 			Type:    TypeMessage,
@@ -141,7 +142,7 @@ func TestStateReturnsHistoryChatAndTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := p.state(stateIn{SessionID: "s1"})
+	out, err := p.state(context.Background(), stateIn{SessionID: "s1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,10 +160,10 @@ func TestStateReturnsHistoryChatAndTrace(t *testing.T) {
 func TestStateRevisionAdvancesAndCarriesReasoning(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
-	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.append(appendIn{
+	if _, err := p.append(context.Background(), appendIn{
 		SessionID: "s1",
 		Facts: []factIn{{
 			Type:    TypeMessage,
@@ -176,11 +177,11 @@ func TestStateRevisionAdvancesAndCarriesReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := p.state(stateIn{SessionID: "s1"})
+	first, err := p.state(context.Background(), stateIn{SessionID: "s1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := p.state(stateIn{SessionID: "s1"})
+	second, err := p.state(context.Background(), stateIn{SessionID: "s1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,16 +199,16 @@ func TestCancelRequestedPublishesChatState(t *testing.T) {
 	t.Cleanup(p.close)
 	ui := newFakeUIPublisher()
 	p.setUIPublisher(ui)
-	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.append(appendIn{SessionID: "s1", Facts: []factIn{{
+	if _, err := p.append(context.Background(), appendIn{SessionID: "s1", Facts: []factIn{{
 		Type: TypeTurnStart, Role: RoleHost, Meta: mustJSON(map[string]any{"turn_id": "t1"}),
 	}}}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := p.updateStream(streamUpdateIn{
+	if _, err := p.updateStream(context.Background(), streamUpdateIn{
 		SessionID: "s1", TurnID: "t1", StepID: "st1", UpdateID: 1,
 		Message: streamMessage{Role: RoleAssistant},
 		Status:  "cancel_requested",
@@ -215,7 +216,7 @@ func TestCancelRequestedPublishesChatState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := p.chatState("s1")
+	state, err := p.chatState(context.Background(), "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,14 +228,14 @@ func TestCancelRequestedPublishesChatState(t *testing.T) {
 func TestStateTraceRevisionUsesUIRevision(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
-	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := p.state(stateIn{SessionID: "s1"})
+	first, err := p.state(context.Background(), stateIn{SessionID: "s1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := p.state(stateIn{SessionID: "s1"})
+	second, err := p.state(context.Background(), stateIn{SessionID: "s1"})
 	if err != nil {
 		t.Fatal(err)
 	}

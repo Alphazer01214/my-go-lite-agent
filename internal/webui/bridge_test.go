@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -24,6 +25,7 @@ type stubCallBackend struct {
 }
 
 func (s *stubCallBackend) CallWithEvents(
+	_ context.Context,
 	from string,
 	capability string,
 	method string,

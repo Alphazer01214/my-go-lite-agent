@@ -1,4 +1,4 @@
-// Package protocol is the Host↔Plugin wire contract: length-prefixed JSON Frame.
+// Package protocol is the Host↔Plugin wire format: length-prefixed JSON Frame.
 // One definition shared by internal/host and pluginsdk — do not duplicate.
 package protocol
 
@@ -13,7 +13,7 @@ import (
 // Frame encoding: 4-byte big-endian length + UTF-8 JSON body.
 const (
 	// FrameVersion is the wire protocol version.
-	FrameVersion = 1
+	FrameVersion = 2
 	// FrameMaxSize is the max JSON body (16 MiB).
 	FrameMaxSize = 16 << 20
 )
@@ -23,6 +23,7 @@ const (
 	FrameEvent    = "evt"
 	FrameRequest  = "req"
 	FrameResponse = "res"
+	FrameCancel   = "cancel"
 )
 
 // HostCapability is the built-in Host capability name (capability=host).
@@ -43,6 +44,8 @@ type Frame struct {
 	Capability string          `json:"capability,omitempty"`
 	Method     string          `json:"method,omitempty"`
 	Payload    json.RawMessage `json:"payload,omitempty"`
+	Reason     string          `json:"reason,omitempty"`
+	Priority   int             `json:"priority,omitempty"`
 	// ErrorCode / ErrorMsg are always present; empty string on success.
 	ErrorCode string `json:"error_code"`
 	ErrorMsg  string `json:"error_msg"`

@@ -47,7 +47,7 @@ func TestRescanPluginsFindsRuntimeDirectories(t *testing.T) {
 	}
 }
 
-func TestManualStopRetainsAvailableState(t *testing.T) {
+func TestManualStopReturnsInactiveState(t *testing.T) {
 	root := t.TempDir()
 	writePluginPackage(t, root, "demo", `{"name":"demo","version":"1.0.0","protocol":1,"entry":"demo"}`)
 	h := newTestHost()
@@ -59,11 +59,8 @@ func TestManualStopRetainsAvailableState(t *testing.T) {
 	if err := h.StopPlugin("demo"); err != nil {
 		t.Fatal(err)
 	}
-	if !h.IsPluginStopped("demo") {
-		t.Fatal("plugin was not marked stopped")
-	}
 	snapshot := h.PluginSnapshot()
-	if len(snapshot) != 1 || snapshot[0].State != PluginStateAvailable {
+	if len(snapshot) != 1 || snapshot[0].State != ProviderStateInactive {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

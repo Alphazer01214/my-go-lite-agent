@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,7 +25,7 @@ func TestCancelAbortsUpstreamStream(t *testing.T) {
 	p.cfg.BaseURL = server.URL
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.complete(completeIn{
+		_, err := p.complete(context.Background(), completeIn{
 			CallID:   "call-1",
 			Messages: []chatMessage{{Role: "user", Content: "hello"}},
 		}, nil)

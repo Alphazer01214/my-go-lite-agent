@@ -1,6 +1,7 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,29 +13,39 @@ import (
 
 // ExecutionContext is a Host-managed scheduling scope. Plugin business terms such
 // as session or subagent remain outside Host; Host only tracks identity and bindings.
+// ContextBinding pins one Capability to one process generation.
+type ContextBinding struct {
+	Capability string `json:"capability"`
+	InstanceID string `json:"instance_id"`
+	Generation int    `json:"generation"`
+}
+
 type ExecutionContext struct {
-	ID           string            `json:"id"`
-	Owner        string            `json:"owner"`
-	RootID       string            `json:"root_id"`
-	ParentID     string            `json:"parent_id,omitempty"`
-	Bindings     map[string]string `json:"bindings,omitempty"`
-	Participants map[string]bool   `json:"-"`
-	Closed       bool              `json:"closed"`
+	ID           string                    `json:"id"`
+	Owner        string                    `json:"owner"`
+	RootID       string                    `json:"root_id"`
+	ParentID     string                    `json:"parent_id,omitempty"`
+	Bindings     map[string]ContextBinding `json:"bindings,omitempty"`
+	Participants map[string]bool           `json:"-"`
+	Closed       bool                      `json:"closed"`
 }
 
 // PluginInstanceSnapshot is the runtime view of one plugin process instance.
-type PluginInstanceSnapshot struct {
-	InstanceID     string `json:"instance_id"`
-	PluginName     string `json:"plugin_name"`
-	ConfigRevision string `json:"config_revision,omitempty"`
-	State          string `json:"state"`
-	Generation     int    `json:"generation"`
+type RegistrationSnapshot struct {
+	Capability string `json:"capability"`
+	Method     string `json:"method"`
 }
 
-const (
-	PluginInstanceStateMounted  = "mounted"
-	PluginInstanceStateDegraded = "degraded"
-)
+type PluginInstanceSnapshot struct {
+	InstanceID     string                 `json:"instance_id"`
+	PluginName     string                 `json:"plugin_name"`
+	ConfigRevision string                 `json:"config_revision,omitempty"`
+	State          string                 `json:"state"`
+	Generation     int                    `json:"generation"`
+	Registrations  []RegistrationSnapshot `json:"registrations,omitempty"`
+	FailureCode    string                 `json:"failure_code,omitempty"`
+	FailureMessage string                 `json:"failure_message,omitempty"`
+}
 
 var (
 	ErrInstanceNotFound   = errors.New(CodeInstanceNotFound)
@@ -49,18 +60,17 @@ var (
 
 func instanceSnapshot(p *proc) PluginInstanceSnapshot {
 	if p == nil {
-		return PluginInstanceSnapshot{State: PluginInstanceStateDegraded}
-	}
-	state := PluginInstanceStateDegraded
-	if p.healthy {
-		state = PluginInstanceStateMounted
+		return PluginInstanceSnapshot{State: ProviderStateInactive}
 	}
 	return PluginInstanceSnapshot{
 		InstanceID:     p.instanceID,
 		PluginName:     p.pluginName,
 		ConfigRevision: p.configRevision,
-		State:          state,
+		State:          p.state,
 		Generation:     p.gen,
+		Registrations:  append([]RegistrationSnapshot(nil), p.registrations...),
+		FailureCode:    p.failureCode,
+		FailureMessage: p.failureMessage,
 	}
 }
 
@@ -265,21 +275,24 @@ func (h *Host) ClosePluginInstance(instanceID string) error {
 		h.mu.Unlock()
 		return fmt.Errorf("instance %s: %w", instanceID, ErrInstanceNotFound)
 	}
-	if p.stopping {
+	if p.state == ProviderStateStopping {
 		h.mu.Unlock()
 		return nil
 	}
-	p.stopping = true
+	p.state = ProviderStateStopping
 	h.mu.Unlock()
 
+	if !h.waitForPendingTargets([]string{instanceID}, DefaultShutdownGrace) {
+		h.failInstancePending(instanceID, CodePluginDown, "plugin instance closed before Call completed")
+	}
 	stopProc(p)
+	h.markUnhealthy(instanceID, p.gen)
 	h.mu.Lock()
 	if current := h.plugins[instanceID]; current == p {
 		delete(h.plugins, instanceID)
 	}
 	h.mu.Unlock()
-	failed := h.failInstancePending(instanceID, CodePluginDown, "plugin instance closed")
-	h.hlog(fmt.Sprintf("instance closed instance=%s pending_failed=%d", instanceID, failed))
+	h.hlog(fmt.Sprintf("instance closed instance=%s", instanceID))
 	return nil
 }
 
@@ -296,19 +309,24 @@ func (h *Host) RestartPluginInstance(instanceID string) (PluginInstanceSnapshot,
 	h.mu.RUnlock()
 
 	h.mu.Lock()
-	if current := h.plugins[instanceID]; current != p || p.stopping {
+	if current := h.plugins[instanceID]; current != p || p.state == ProviderStateStopping {
 		h.mu.Unlock()
 		return PluginInstanceSnapshot{}, fmt.Errorf("instance %s: %w", instanceID, ErrInstanceClosed)
 	}
+	p.state = ProviderStateStopping
 	h.mu.Unlock()
 
+	if !h.waitForPendingTargets([]string{instanceID}, DefaultShutdownGrace) {
+		h.failInstancePending(instanceID, CodePluginDown, "plugin instance restarting before Call completed")
+	}
 	stopProc(p)
+	h.markUnhealthy(instanceID, p.gen)
 	h.mu.Lock()
 	if current := h.plugins[instanceID]; current == p {
 		delete(h.plugins, instanceID)
 	}
 	h.mu.Unlock()
-	failed := h.failInstancePending(instanceID, CodePluginDown, "plugin instance restarting")
+	failed := 0
 
 	if err := h.launchInstance(instanceID, discovery, configRevision); err != nil {
 		return PluginInstanceSnapshot{}, err
@@ -337,7 +355,7 @@ func (h *Host) CreateExecutionContext(owner, parentID string, bindings map[strin
 	}
 	context := ExecutionContext{
 		Owner:        owner,
-		Bindings:     make(map[string]string, len(bindings)),
+		Bindings:     make(map[string]ContextBinding, len(bindings)),
 		Participants: map[string]bool{owner: true},
 	}
 	for capability, instanceID := range bindings {
@@ -351,7 +369,11 @@ func (h *Host) CreateExecutionContext(owner, parentID string, bindings map[strin
 		if h.hasCapabilityRoute(capability) && !h.ownsCapability(target.pluginName, capability) {
 			return ExecutionContext{}, fmt.Errorf("instance %s does not own %s: %w", instanceID, capability, ErrContextBinding)
 		}
-		context.Bindings[capability] = instanceID
+		context.Bindings[capability] = ContextBinding{
+			Capability: capability,
+			InstanceID: instanceID,
+			Generation: target.gen,
+		}
 	}
 	if parentID != "" {
 		parent, ok := h.contexts[parentID]
@@ -366,9 +388,9 @@ func (h *Host) CreateExecutionContext(owner, parentID string, bindings map[strin
 		}
 		context.ParentID = parent.ID
 		context.RootID = parent.RootID
-		for capability, instanceID := range parent.Bindings {
+		for capability, binding := range parent.Bindings {
 			if _, overridden := context.Bindings[capability]; !overridden {
-				context.Bindings[capability] = instanceID
+				context.Bindings[capability] = binding
 			}
 		}
 		for participant := range parent.Participants {
@@ -407,11 +429,16 @@ func (h *Host) BindExecutionContext(owner, contextID, capability, instanceID str
 	if target == nil {
 		return fmt.Errorf("instance %s: %w", instanceID, ErrInstanceNotFound)
 	}
-	if ownerPlugin := h.routeOwnerLocked(capability, ""); ownerPlugin != "" && ownerPlugin != target.pluginName {
+	if h.hasCapabilityRoute(capability) && !h.ownsCapability(target.pluginName, capability) {
 		return fmt.Errorf("instance %s does not own %s: %w", instanceID, capability, ErrContextBinding)
 	}
-	context.Bindings[capability] = instanceID
-	h.hlog(fmt.Sprintf("context bound context=%s capability=%s instance=%s", contextID, capability, instanceID))
+	context.Bindings[capability] = ContextBinding{
+		Capability: capability,
+		InstanceID: instanceID,
+		Generation: target.gen,
+	}
+	h.hlog(fmt.Sprintf("context bound context=%s capability=%s instance=%s generation=%d",
+		contextID, capability, instanceID, target.gen))
 	return nil
 }
 
@@ -445,6 +472,9 @@ func (h *Host) CloseExecutionContext(owner, contextID string) error {
 	delete(h.contexts, contextID)
 	h.mu.Unlock()
 
+	for _, id := range closed {
+		h.cancelPendingWhere(func(wt *wait) bool { return wt.contextID == id }, cancelReasonCancelled)
+	}
 	failed := 0
 	for _, id := range closed {
 		failed += h.failContextPending(id, CodeContextClosed, "execution context closed")
@@ -468,7 +498,7 @@ func (h *Host) ExecutionContextSnapshot(contextID string) (ExecutionContext, err
 func cloneExecutionContext(context ExecutionContext) ExecutionContext {
 	bindings := context.Bindings
 	participants := context.Participants
-	context.Bindings = make(map[string]string, len(bindings))
+	context.Bindings = make(map[string]ContextBinding, len(bindings))
 	for key, value := range bindings {
 		context.Bindings[key] = value
 	}
@@ -521,12 +551,17 @@ func (h *Host) resolveInstance(contextID, capability, method, defaultPlugin stri
 		if err != nil {
 			return "", err
 		}
-		if instanceID := context.Bindings[capability]; instanceID != "" {
+		if binding := context.Bindings[capability]; binding.InstanceID != "" {
+			instanceID := binding.InstanceID
 			h.mu.RLock()
 			p := h.plugins[instanceID]
 			h.mu.RUnlock()
 			if p == nil {
 				return "", fmt.Errorf("bound instance %s: %w", instanceID, ErrInstanceNotFound)
+			}
+			if p.gen != binding.Generation {
+				return "", fmt.Errorf("bound instance %s generation %d, current %d: %w",
+					instanceID, binding.Generation, p.gen, ErrContextBinding)
 			}
 			if ownerPlugin := h.routeOwner(capability, method); ownerPlugin != "" && ownerPlugin != p.pluginName {
 				return "", fmt.Errorf("bound instance %s does not own %s.%s: %w", instanceID, capability, method, ErrContextBinding)
@@ -563,6 +598,20 @@ func ErrorCode(err error, fallback string) string {
 		return CodePluginDown
 	case errors.Is(err, ErrPluginDisabled):
 		return CodePluginDisabled
+	case errors.Is(err, ErrPluginNotReady):
+		return CodePluginNotReady
+	case errors.Is(err, ErrConsumePriority):
+		return CodeConsumePriorityConflict
+	case errors.Is(err, ErrFlowProceeded):
+		return CodeFlowAlreadyProceeded
+	case errors.Is(err, ErrPipelineLoop):
+		return CodePipelineLoop
+	case errors.Is(err, ErrPipelineHops):
+		return CodePipelineHopsExceeded
+	case errors.Is(err, context.DeadlineExceeded):
+		return CodeCallDeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return CodeCallCancelled
 	case errors.Is(err, ErrContextNotFound):
 		return CodeContextNotFound
 	case errors.Is(err, ErrContextClosed):
@@ -644,6 +693,7 @@ func (h *Host) failWait(wt *wait, code, message string) {
 	if wt == nil {
 		return
 	}
+	stopWaitTimer(wt)
 	if wt.kind == WaitHost && wt.resCh != nil {
 		select {
 		case wt.resCh <- &Frame{

@@ -439,6 +439,7 @@ select:focus-visible {
 .plugin-enabled,
 .plugin-disabled,
 .plugin-capabilities-item,
+.plugin-registrations-item,
 .plugin-mounts-item {
   display: inline-flex;
   align-items: center;
@@ -450,34 +451,68 @@ select:focus-visible {
   line-height: 1.3;
 }
 
-.state-mounted {
+.state-active {
   border-color: #8bc9b7;
   color: var(--accent-strong);
   background: #e6f5f0;
 }
 
-.state-available {
+.state-inactive {
   border-color: #aebdca;
   color: #385267;
   background: #edf3f7;
 }
 
-.state-degraded {
+.state-loading {
+  border-color: #8eb7d6;
+  color: #245b83;
+  background: #eaf3fa;
+}
+
+.state-stopping {
   border-color: #e2b77f;
   color: var(--warning);
   background: var(--warning-surface);
 }
 
-.state-disabled,
+.state-failed,
+.state-missing {
+  border-color: #d99a9a;
+  color: #8c2929;
+  background: #fbecec;
+}
+
 .plugin-disabled {
   color: var(--text-muted);
   background: var(--surface-muted);
 }
 
-.state-missing {
-  border-color: #d99a9a;
+.plugin-instances {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.plugin-instance-select {
+  min-height: 24px;
+  max-width: 190px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.plugin-failure {
+  grid-column: 1 / -1;
+  padding: 6px 8px;
+  border: 1px solid #d99a9a;
+  border-radius: 4px;
   color: #8c2929;
   background: #fbecec;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .plugin-enabled {
@@ -487,6 +522,7 @@ select:focus-visible {
 }
 
 .plugin-capabilities,
+.plugin-registrations,
 .plugin-mounts {
   display: flex;
   min-width: 0;
@@ -495,6 +531,7 @@ select:focus-visible {
 }
 
 .plugin-capabilities-item,
+.plugin-registrations-item,
 .plugin-mounts-item {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -532,6 +569,7 @@ select:focus-visible {
   }
 
   .plugin-capabilities,
+  .plugin-registrations,
   .plugin-mounts {
     grid-column: 1 / -1;
   }
@@ -559,6 +597,7 @@ select:focus-visible {
   }
 
   .plugin-capabilities,
+  .plugin-registrations,
   .plugin-mounts {
     grid-column: auto;
   }
@@ -816,6 +855,7 @@ select:focus-visible {
 }
 
 .plugin-capabilities,
+.plugin-registrations,
 .plugin-dependencies,
 .plugin-mounts {
   grid-column: 3;
@@ -1136,6 +1176,7 @@ select:focus-visible {
   }
 
   .plugin-capabilities,
+  .plugin-registrations,
   .plugin-dependencies,
   .plugin-mounts {
     grid-column: 1 / -1;

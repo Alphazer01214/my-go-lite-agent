@@ -39,6 +39,7 @@ const localDiagnostics = [];
 let mountLoader = null;
 let currentMounts = [];
 let selectedPluginName = "";
+const selectedPluginInstances = new Map();
 
 function diagnosticKey(diagnostic) {
 	return [diagnostic.plugin ?? "", diagnostic.path ?? "", diagnostic.code ?? ""].join("\u0000");
@@ -171,7 +172,19 @@ function renderPluginGraphView(plugins) {
 }
 
 function renderPluginCenter(plugins) {
+	for (const plugin of plugins) {
+		const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
+		const selectedID = selectedPluginInstances.get(plugin?.name);
+		if (selectedID && !instances.some((instance) => instance.instance_id === selectedID)) {
+			selectedPluginInstances.delete(plugin.name);
+		}
+	}
 	renderPluginList(document, elements.pluginList, plugins, {
+		selectedInstanceIds: selectedPluginInstances,
+		onSelectInstance: (name, instanceID) => {
+			selectedPluginInstances.set(name, instanceID);
+			renderPluginCenter(plugins);
+		},
 		onStart: (plugin, button) => runPluginAction(plugin, "start", button),
 		onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
 	});

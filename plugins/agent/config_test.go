@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,7 +24,7 @@ func TestFilterTools(t *testing.T) {
 }
 
 func TestTurnStateCancel(t *testing.T) {
-	st := newTurnState("s1")
+	st := newTurnState(context.Background(), "s1")
 	if st.isCancelled() {
 		t.Fatal("fresh")
 	}

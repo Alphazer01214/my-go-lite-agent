@@ -1,6 +1,7 @@
 package host
 
 import (
+	stdcontext "context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -29,7 +30,7 @@ func TestExecutionContextInheritsCapabilityBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root.RootID != root.ID || root.Bindings["llm"] != "llm-new" {
+	if root.RootID != root.ID || root.Bindings["llm"].InstanceID != "llm-new" {
 		t.Fatalf("root = %#v", root)
 	}
 
@@ -40,7 +41,7 @@ func TestExecutionContextInheritsCapabilityBinding(t *testing.T) {
 	if child.RootID != root.ID || child.ParentID != root.ID {
 		t.Fatalf("child = %#v", child)
 	}
-	if child.Bindings["llm"] != "llm-new" {
+	if child.Bindings["llm"].InstanceID != "llm-new" {
 		t.Fatalf("child bindings = %#v", child.Bindings)
 	}
 }
@@ -65,7 +66,7 @@ func TestCallWithEventsInContextUsesBoundInstance(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		frame, err := h.CallWithEventsInContext(context.ID, "agent", "llm", "complete",
+		frame, err := h.CallWithEventsInContext(stdcontext.Background(), context.ID, "agent", "llm", "complete",
 			mustJSON(map[string]string{"prompt": "hi"}), nil)
 		done <- result{frame: frame, err: err}
 	}()
@@ -104,7 +105,7 @@ func TestCloseExecutionContextFailsPendingCall(t *testing.T) {
 	}
 	done := make(chan *Frame, 1)
 	go func() {
-		frame, _ := h.CallWithEventsInContext(context.ID, "agent", "llm", "complete", mustJSON(map[string]string{}), nil)
+		frame, _ := h.CallWithEventsInContext(stdcontext.Background(), context.ID, "agent", "llm", "complete", mustJSON(map[string]string{}), nil)
 		done <- frame
 	}()
 	req := waitForRequest(t, h, "llm")
@@ -153,7 +154,7 @@ func TestInstanceSnapshotTracksGenerationAndConfigRevision(t *testing.T) {
 	if len(got) != 1 || got[0].InstanceID != "llm" || got[0].PluginName != "llm" {
 		t.Fatalf("snapshot = %#v", got)
 	}
-	if got[0].ConfigRevision != "cfg-9" || got[0].Generation != 4 || got[0].State != PluginInstanceStateMounted {
+	if got[0].ConfigRevision != "cfg-9" || got[0].Generation != 4 || got[0].State != ProviderStateActive {
 		t.Fatalf("snapshot = %#v", got[0])
 	}
 }
@@ -274,7 +275,7 @@ func TestCloseExecutionContextClosesDescendants(t *testing.T) {
 
 	done := make(chan *Frame, 1)
 	go func() {
-		frame, _ := h.CallWithEventsInContext(child.ID, "agent", "llm", "complete", mustJSON(map[string]string{}), nil)
+		frame, _ := h.CallWithEventsInContext(stdcontext.Background(), child.ID, "agent", "llm", "complete", mustJSON(map[string]string{}), nil)
 		done <- frame
 	}()
 	req := waitForRequest(t, h, "llm")
@@ -307,6 +308,57 @@ func TestContextBindingRejectsUnownedCapability(t *testing.T) {
 
 	_, err := h.CreateExecutionContext("agent", "", map[string]string{"llm": "other"})
 	if !errors.Is(err, ErrContextBinding) {
-		t.Fatalf("error = %v, want context binding mismatch", err)
+		t.Fatalf("create error = %v, want context binding mismatch", err)
+	}
+
+	context, err := h.CreateExecutionContext("agent", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.BindExecutionContext("agent", context.ID, "llm", "other"); !errors.Is(err, ErrContextBinding) {
+		t.Fatalf("bind error = %v, want context binding mismatch", err)
+	}
+}
+
+func TestContextBindingPinsGeneration(t *testing.T) {
+	h := newTestHost("llm")
+	configureFakePlugin(h, "llm", "llm")
+	h.routes["llm.complete"] = "llm"
+
+	root, err := h.CreateExecutionContext("llm", "", map[string]string{"llm": "llm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := root.Bindings["llm"]
+	if binding.InstanceID != "llm" || binding.Generation != 1 {
+		t.Fatalf("binding = %#v", binding)
+	}
+
+	child, err := h.CreateExecutionContext("llm", root.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Bindings["llm"] != binding {
+		t.Fatalf("child binding = %#v, want %#v", child.Bindings["llm"], binding)
+	}
+
+	h.plugins["llm"].gen++
+	if _, err := h.resolveInstance(root.ID, "llm", "complete", "llm"); !errors.Is(err, ErrContextBinding) {
+		t.Fatalf("resolve after restart error = %v, want context binding error", err)
+	}
+
+	if err := h.BindExecutionContext("llm", root.ID, "llm", "llm"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.resolveInstance(root.ID, "llm", "complete", "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := h.useExecutionContext(root.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "llm" || updated.Bindings["llm"].Generation == binding.Generation {
+		t.Fatalf("resolved = %q, binding = %#v", got, updated.Bindings["llm"])
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -21,8 +22,8 @@ type plugin struct {
 }
 
 type sdkCaller interface {
-	Call(capability, method string, payload json.RawMessage) (json.RawMessage, error)
-	CallWithCallback(capability, method string, payload json.RawMessage, cb func(*event)) (json.RawMessage, error)
+	Call(ctx context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error)
+	CallWithCallback(ctx context.Context, capability, method string, payload json.RawMessage, cb func(*event)) (json.RawMessage, error)
 	EmitWithID(id string, capability string, method string, payload json.RawMessage) error
 }
 

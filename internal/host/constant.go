@@ -19,6 +19,7 @@ const (
 	FrameEvent     = protocol.FrameEvent
 	FrameRequest   = protocol.FrameRequest
 	FrameResponse  = protocol.FrameResponse
+	FrameCancel    = protocol.FrameCancel
 	FrameVersion   = protocol.FrameVersion
 	FrameMaxSize   = protocol.FrameMaxSize
 	HostCapability = protocol.HostCapability
@@ -33,6 +34,7 @@ var (
 // Host L0 方法（capability == host 时分派）。领域方法不得出现在此列表。
 const (
 	HostMethodRegister        = "register"
+	HostMethodProceed         = "proceed"
 	HostMethodPlugins         = "plugins"
 	HostMethodUIState         = "ui.state"
 	HostMethodUICommand       = "ui.command"
@@ -55,7 +57,14 @@ const (
 	CodePluginNotMounted           = protocol.CodePluginNotMounted
 	CodePluginDown                 = protocol.CodePluginDown
 	CodePluginDisabled             = protocol.CodePluginDisabled
+	CodePluginNotReady             = protocol.CodePluginNotReady
 	CodeTimeout                    = protocol.CodeTimeout
+	CodeCallCancelled              = protocol.CodeCallCancelled
+	CodeCallDeadlineExceeded       = protocol.CodeCallDeadlineExceeded
+	CodeConsumePriorityConflict    = protocol.CodeConsumePriorityConflict
+	CodeFlowAlreadyProceeded       = protocol.CodeFlowAlreadyProceeded
+	CodePipelineLoop               = protocol.CodePipelineLoop
+	CodePipelineHopsExceeded       = protocol.CodePipelineHopsExceeded
 	CodeHandlerError               = protocol.CodeHandlerError
 	CodeServerClosed               = protocol.CodeServerClosed
 	CodeBadPayload                 = protocol.CodeBadPayload
@@ -80,6 +89,11 @@ var (
 	ErrPluginNotMounted = errors.New(CodePluginNotMounted)
 	ErrPluginDown       = errors.New(CodePluginDown)
 	ErrPluginDisabled   = errors.New(CodePluginDisabled)
+	ErrPluginNotReady   = errors.New(CodePluginNotReady)
+	ErrConsumePriority  = errors.New(CodeConsumePriorityConflict)
+	ErrFlowProceeded    = errors.New(CodeFlowAlreadyProceeded)
+	ErrPipelineLoop     = errors.New(CodePipelineLoop)
+	ErrPipelineHops     = errors.New(CodePipelineHopsExceeded)
 	ErrTimeout          = errors.New(CodeTimeout)
 	ErrHandlerError     = errors.New(CodeHandlerError)
 	ErrServerClosed     = errors.New(CodeServerClosed)
@@ -107,13 +121,18 @@ const (
 )
 
 // DefaultShutdownGrace 是 stdin EOF 后等待子进程退出的宽限期。
-const DefaultShutdownGrace = 2 * time.Second
-
-// PluginState* 是 Host 插件生命周期快照状态。
 const (
-	PluginStateMounted   = "mounted"
-	PluginStateAvailable = "available"
-	PluginStateDegraded  = "degraded"
-	PluginStateDisabled  = "disabled"
-	PluginStateMissing   = "missing"
+	DefaultShutdownGrace = 2 * time.Second
+	DefaultCancelGrace   = 2 * time.Second
+	FramePriorityMax     = 2147483647
+	PipelineMaxHops      = 64
+)
+
+// ProviderState* is the public Provider lifecycle state.
+const (
+	ProviderStateInactive = "inactive"
+	ProviderStateLoading  = "loading"
+	ProviderStateActive   = "active"
+	ProviderStateStopping = "stopping"
+	ProviderStateFailed   = "failed"
 )

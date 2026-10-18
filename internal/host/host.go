@@ -24,13 +24,10 @@ type Host struct {
 	// id is the forward id (fwd-xxxxxx) or host call id (host-xxxxxx)
 	pending map[string]*wait
 	// routes maps "capability.method" -> owning plugin name (host.register 上报).
-	routes map[string]string
+	routes      map[string]string
+	cancelGrace time.Duration
 	// disabled plugin name -> true
 	disabled map[string]bool
-	// stopped records explicit manual stop intent for the current Host run.
-	stopped map[string]bool
-	// startupPlanned records the initial autostart closure, including failed launches.
-	startupPlanned map[string]bool
 	// lifecycleMu serializes rescan/start/stop transitions.
 	lifecycleMu sync.Mutex
 	// discoveries is the result of scanning the pluginDir for binaries
@@ -70,10 +67,12 @@ type proc struct {
 	gen   int
 	mu    sync.Mutex
 	// done is closed after cmd.Wait() returns (process fully reaped)
-	done     chan struct{}
-	healthy  bool
-	stopping bool
-	timeout  time.Duration
+	done           chan struct{}
+	state          string
+	registrations  []RegistrationSnapshot
+	failureCode    string
+	failureMessage string
+	timeout        time.Duration
 }
 
 type wait struct {
@@ -81,18 +80,23 @@ type wait struct {
 	caller       string
 	callerPlugin string
 	// target is the resolved owner instance id.
-	target       string
-	targetPlugin string
-	contextID    string
+	target           string
+	targetPlugin     string
+	targetGeneration int
+	contextID        string
 	// frameID is the caller's frame id
 	frameID string
 	// kind
 	kind   WaitKind
 	events []*Frame
 
-	capability string
-	method     string
-	payload    json.RawMessage
+	capability     string
+	method         string
+	payload        json.RawMessage
+	cancelReason   string
+	cancelTimer    *time.Timer
+	pipeline       *pipelineState
+	targetPriority int
 
 	// resCh / onEvent serve WaitHost (host-initiated calls).
 	// resCh is buffered 1; death closure and handleResponse write exactly one res into it.
@@ -171,7 +175,21 @@ func (h *Host) IsPluginDisabled(name string) bool {
 	return h.disabled[name]
 }
 
-// alive reports whether the named plugin is mounted and healthy.
+// acceptingNewCall reports whether one instance can receive a new business Call.
+func (h *Host) acceptingNewCall(instanceID string) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	p := h.plugins[instanceID]
+	if p == nil {
+		return fmt.Errorf("plugin instance %s not mounted: %w", instanceID, ErrPluginNotMounted)
+	}
+	if p.state != ProviderStateActive {
+		return fmt.Errorf("plugin instance %s is %s: %w", instanceID, p.state, ErrPluginNotReady)
+	}
+	return nil
+}
+
+// alive reports whether the named plugin is mounted and active.
 // nil means alive; otherwise an error (sentinel via errors.Is).
 func (h *Host) alive(name string) error {
 	h.mu.RLock()
@@ -180,8 +198,8 @@ func (h *Host) alive(name string) error {
 	if !ok || plg == nil {
 		return fmt.Errorf("plugin %s not mounted: %w", name, ErrPluginNotMounted)
 	}
-	if !plg.healthy {
-		return fmt.Errorf("plugin %s is not healthy: %w", name, ErrPluginDown)
+	if plg.state != ProviderStateActive {
+		return fmt.Errorf("plugin %s is not active: %w", name, ErrPluginNotReady)
 	}
 	return nil
 }
@@ -191,26 +209,22 @@ func (h *Host) alive(name string) error {
 // logFunc 为 nil 时日志走 stderr（stdout 留给对话）。
 func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	h := &Host{
-		plugins:        make(map[string]*proc),
-		pending:        make(map[string]*wait),
-		routes:         make(map[string]string),
-		discoveries:    discoveries,
-		disabled:       make(map[string]bool),
-		stopped:        make(map[string]bool),
-		startupPlanned: make(map[string]bool),
-		mountedUI:      make(map[string]bool),
-		gen:            make(map[string]int),
-		contexts:       make(map[string]*ExecutionContext),
-		hlog:           defaultLogFunc,
+		plugins:     make(map[string]*proc),
+		pending:     make(map[string]*wait),
+		routes:      make(map[string]string),
+		cancelGrace: DefaultCancelGrace,
+		discoveries: discoveries,
+		disabled:    make(map[string]bool),
+		mountedUI:   make(map[string]bool),
+		gen:         make(map[string]int),
+		contexts:    make(map[string]*ExecutionContext),
+		hlog:        defaultLogFunc,
 	}
 	if logFunc != nil {
 		h.hlog = logFunc
 	}
 
 	ordered, warns := plugin.AutostartClosure(discoveries)
-	for _, d := range ordered {
-		h.startupPlanned[d.Manifest.Name] = true
-	}
 	for _, w := range warns {
 		h.hlog("mount warn: " + w)
 	}
@@ -234,15 +248,25 @@ func (h *Host) Close() {
 		return
 	}
 	h.closed = true
-	// 一次性摘走全部 pending，锁外闭环
-	waits := make([]*wait, 0, len(h.pending))
-	for id, wt := range h.pending {
-		waits = append(waits, wt)
-		delete(h.pending, id)
+	pendingKeys := make([]string, 0, len(h.pending))
+	for id := range h.pending {
+		pendingKeys = append(pendingKeys, id)
 	}
 	procs := make([]*proc, 0, len(h.plugins))
 	for _, p := range h.plugins {
 		procs = append(procs, p)
+	}
+	h.mu.Unlock()
+
+	for _, key := range pendingKeys {
+		_ = h.cancelPending(key, cancelReasonCancelled)
+	}
+
+	h.mu.Lock()
+	waits := make([]*wait, 0, len(h.pending))
+	for id, wt := range h.pending {
+		waits = append(waits, wt)
+		delete(h.pending, id)
 	}
 	h.mu.Unlock()
 

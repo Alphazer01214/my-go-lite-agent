@@ -10,11 +10,11 @@
 | `llm-openai` | 当前实现 | OpenAI-compatible Completion |
 | `session` | 当前实现 | Session Fact Log 和投影 |
 
-## 2. 跨插件契约
+## 2. 跨插件通信
 
-`agent`、`session` 和 `llm-openai` 共用的 JSON 形状统一放在 [contracts](../contracts/README.md)。
+跨插件 JSON 形状由提供方插件的 `communication.md` 定义。
 
-Schema 是规范来源。插件内保留兼容类型名，但不得独立演化字段语义。
+调用方在自己的插件目录内维护适配类型。平台目录不保存插件业务消息。
 
 ## 3. 文档要求
 

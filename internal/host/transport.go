@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/tomori/my-go-lite-agent/protocol"
@@ -41,6 +42,8 @@ func (h *Host) route(from string, frame *Frame) {
 		h.handleResponse(frame)
 	case FrameEvent:
 		h.handleEvent(from, frame)
+	case FrameCancel:
+		h.handleCancel(from, frame)
 	default:
 		return
 	}
@@ -69,22 +72,48 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
 		return err
 	}
-	ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
-	if ownerPlugin == "" {
-		err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
-		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
-		return err
-	}
-	owner, err := h.resolveInstance(frame.ContextID, frame.Capability, frame.Method, ownerPlugin)
-	if err == nil {
-		err = h.forward(from, owner, ownerPlugin, frame)
-	}
+	frame.Priority = FramePriorityMax
+	state := newPipelineState(frame.ContextID, frame.Capability, frame.Method)
+	candidate, err := h.selectPipelineCandidate(state)
 	if err != nil {
+		if !isPipelineNoCandidate(err) {
+			code := ErrorCode(err, CodeRouteFailed)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
+			return err
+		}
+		ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
+		if ownerPlugin == "" {
+			err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
+			return err
+		}
+		owner, resolveErr := h.resolveInstance(frame.ContextID, frame.Capability, frame.Method, ownerPlugin)
+		if resolveErr != nil {
+			code := ErrorCode(resolveErr, CodeRouteFailed)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, resolveErr.Error())
+			return resolveErr
+		}
+		priority := 0
+		if p := h.plugins[owner]; p != nil {
+			if manifest, ok := h.manifestForPlugin(p.pluginName); ok {
+				priority = manifest.Priority
+			}
+		}
+		candidate = pipelineCandidate{instanceID: owner, pluginName: ownerPlugin, priority: priority}
+		state.visited[owner] = true
+		state.hops = 1
+		state.nextPriority = priority - 1
+	}
+	if err := h.forwardPipeline(from, candidate, frame, state); err != nil {
 		code := ErrorCode(err, CodeRouteFailed)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 		return err
 	}
 	return nil
+}
+
+func isPipelineNoCandidate(err error) bool {
+	return errors.Is(err, ErrMethodNotFound)
 }
 
 // dispatchHost handles capability=host methods (protocol §5.1).
@@ -93,6 +122,8 @@ func (h *Host) dispatchHost(from string, frame *Frame) error {
 	switch frame.Method {
 	case HostMethodRegister:
 		return h.hostRegister(from, frame)
+	case HostMethodProceed:
+		return h.hostProceed(from, frame)
 	case HostMethodPlugins:
 		return h.hostPlugins(from, frame)
 	case HostMethodUIState:
@@ -130,7 +161,21 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 	}
 	if err := json.Unmarshal(frame.Payload, &in); err != nil {
 		err = fmt.Errorf("bad register payload: %w", err)
+		h.failProviderRegistration(from, CodeBadPayload, err.Error())
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeBadPayload, err.Error())
+		return err
+	}
+	h.mu.RLock()
+	current := h.plugins[from]
+	h.mu.RUnlock()
+	if current == nil {
+		err := fmt.Errorf("register from unknown instance %s: %w", from, ErrPluginNotMounted)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodePluginNotMounted, err.Error())
+		return err
+	}
+	if current.state != ProviderStateLoading && current.state != ProviderStateActive {
+		err := fmt.Errorf("instance %s is %s: %w", from, current.state, ErrPluginNotReady)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodePluginNotReady, err.Error())
 		return err
 	}
 	type routeKey struct {
@@ -141,6 +186,13 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 	rejected := make([]routeKey, 0)
 
 	h.mu.Lock()
+	current = h.plugins[from]
+	if current == nil {
+		h.mu.Unlock()
+		err := fmt.Errorf("register from unknown instance %s: %w", from, ErrPluginNotMounted)
+		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodePluginNotMounted, err.Error())
+		return err
+	}
 	for _, hd := range in.Handlers {
 		if hd.Capability == "" || hd.Method == "" {
 			rejected = append(rejected, routeKey{hd.Capability, hd.Method})
@@ -148,12 +200,30 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 		}
 		key := hd.Capability + "." + hd.Method
 		if owner, ok := h.routes[key]; ok && owner != pluginName {
-			rejected = append(rejected, routeKey{hd.Capability, hd.Method})
-			continue
+			manifest := current.discovery.Manifest
+			if !consumesMethod(manifest, hd.Capability, hd.Method) {
+				rejected = append(rejected, routeKey{hd.Capability, hd.Method})
+				continue
+			}
 		}
 		h.routes[key] = pluginName
 		accepted = append(accepted, routeKey{hd.Capability, hd.Method})
 	}
+	current.state = ProviderStateActive
+	current.failureCode = ""
+	current.failureMessage = ""
+	current.registrations = current.registrations[:0]
+	for _, key := range accepted {
+		current.registrations = append(current.registrations, RegistrationSnapshot{
+			Capability: key.Capability, Method: key.Method,
+		})
+	}
+	sort.Slice(current.registrations, func(i, j int) bool {
+		if current.registrations[i].Capability == current.registrations[j].Capability {
+			return current.registrations[i].Method < current.registrations[j].Method
+		}
+		return current.registrations[i].Capability < current.registrations[j].Capability
+	})
 	h.mu.Unlock()
 
 	payload, err := json.Marshal(map[string]any{"accepted": accepted, "rejected": rejected})
@@ -225,10 +295,12 @@ func (h *Host) handleResponse(frame *Frame) error {
 		return fmt.Errorf("response for unknown frame: %s", frame.ID)
 	}
 	delete(h.pending, frame.ID)
+	stopWaitTimer(wt)
 	h.mu.Unlock()
 
 	// id 改回 caller 视角；from 标被调方（溯源，不参与路由）
 	res := *frame
+	res.Priority = wt.targetPriority
 	res.ID = wt.frameID
 	res.From = wt.targetPlugin
 	if res.From == "" {
@@ -273,6 +345,7 @@ func (h *Host) handleEvent(from string, frame *Frame) error {
 
 	// id 改回 caller 视角；from 标 evt 来源插件
 	ev := *frame
+	ev.Priority = wt.targetPriority
 	ev.ID = originalID
 	ev.From = h.pluginNameForInstance(from)
 	ev.ContextID = contextID
@@ -318,8 +391,10 @@ func (h *Host) replyOK(caller string, originalID string, capability string,
 // forward sends a req frame from one plugin to another, and waits for the response.
 // owner is the resolved plugin process name (Host-internal; not a Frame field).
 // Self-call (owner == from) is a legal loopback.
-func (h *Host) forward(from string, owner string, ownerPlugin string, frame *Frame) error {
-	if err := h.alive(owner); err != nil {
+func (h *Host) forwardPipeline(from string, candidate pipelineCandidate, frame *Frame, state *pipelineState) error {
+	owner := candidate.instanceID
+	ownerPlugin := candidate.pluginName
+	if err := h.acceptingNewCall(owner); err != nil {
 		return err
 	}
 	if err := h.joinExecutionContext(frame.ContextID, owner); err != nil {
@@ -328,40 +403,41 @@ func (h *Host) forward(from string, owner string, ownerPlugin string, frame *Fra
 	fromPlugin := h.pluginNameForInstance(from)
 
 	h.mu.Lock()
+	p := h.plugins[owner]
+	if p == nil {
+		h.mu.Unlock()
+		return fmt.Errorf("plugin %s not mounted: %w", owner, ErrPluginNotMounted)
+	}
 	// Here handles the frame original plugin(from) sent
 	// the frame is turned into a wait in pending, with the **fwd** key
 	// the fwd key (fwd-xxxxxx) marks the frame is waiting for a response
 	h.seq++
 	wt := &wait{
-		kind:         WaitPlugin,
-		caller:       from,
-		callerPlugin: fromPlugin,
-		target:       owner,
-		targetPlugin: ownerPlugin,
-		contextID:    frame.ContextID,
-		frameID:      frame.ID,
-		capability:   frame.Capability,
-		method:       frame.Method,
-		payload:      append(json.RawMessage(nil), frame.Payload...),
+		kind:             WaitPlugin,
+		caller:           from,
+		callerPlugin:     fromPlugin,
+		target:           owner,
+		targetPlugin:     ownerPlugin,
+		targetGeneration: p.gen,
+		targetPriority:   candidate.priority,
+		pipeline:         state,
+		contextID:        frame.ContextID,
+		frameID:          frame.ID,
+		capability:       frame.Capability,
+		method:           frame.Method,
+		payload:          append(json.RawMessage(nil), frame.Payload...),
 	}
 	// pending[fwd-xxx] = wait{plugin-xxx}
 	forwardID := fmt.Sprintf("fwd-%d", h.seq)
 	h.pending[forwardID] = wt
-	p := h.plugins[owner]
 	h.mu.Unlock()
-
-	if p == nil {
-		h.mu.Lock()
-		delete(h.pending, forwardID)
-		h.mu.Unlock()
-		return fmt.Errorf("plugin %s not mounted: %w", owner, ErrPluginNotMounted)
-	}
 
 	// Here the frame is forwarded, with the fwd-xxx
 	// from 注入真实来源插件名（protocol §3.5），插件无法伪造
 	forwardFrame := *frame
 	forwardFrame.ID = forwardID
 	forwardFrame.From = fromPlugin
+	forwardFrame.Priority = candidate.priority
 
 	if err := h.write(owner, &forwardFrame); err != nil {
 		h.mu.Lock()
@@ -386,9 +462,6 @@ func (h *Host) isClosed() bool {
 }
 
 func (h *Host) write(to string, frame *Frame) error {
-	if err := h.alive(to); err != nil {
-		return err
-	}
 	h.mu.RLock()
 	plg := h.plugins[to]
 	h.mu.RUnlock()

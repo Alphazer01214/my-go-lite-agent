@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,9 +19,9 @@ func errHandler(msg string) error {
 
 type event = pluginsdk.Event
 
-func handle(fn func(req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
-	return func(req *pluginsdk.Request) (json.RawMessage, error) {
-		out, err := fn(req)
+func handle(fn func(ctx context.Context, req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
+	return func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+		out, err := fn(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -50,27 +51,27 @@ func main() {
 	s := pluginsdk.NewPlugin("agent")
 	p.sdk = s
 
-	s.Register("loop", "turn", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("loop", "turn", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in turnIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
 		}
-		return p.turn(in)
+		return p.turn(ctx, in)
 	})).WithInfo("turn", "run one agent turn (multi-session concurrent)"))
 
-	s.Register("loop", "cancel", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("loop", "cancel", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in cancelIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
 		}
-		return p.cancel(in)
+		return p.cancel(ctx, in)
 	})).WithInfo("cancel", "cancel in-flight turn for a session"))
 
-	s.Register("agent", "config.get", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("agent", "config.get", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		return p.getConfig(), nil
 	})).WithInfo("config.get", "show agent config"))
 
-	s.Register("agent", "config.set", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("agent", "config.set", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in configSetIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
@@ -78,11 +79,11 @@ func main() {
 		return p.configSet(in)
 	})).WithInfo("config.set", "update config (deferred while working)"))
 
-	s.Register("agent", "settings.get", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("agent", "settings.get", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		return p.settingsGet(), nil
 	})).WithInfo("settings.get", "read Settings Renderer values"))
 
-	s.Register("agent", "settings.save", pluginsdk.NewHandler(handle(func(req *pluginsdk.Request) (any, error) {
+	s.Register("agent", "settings.save", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in settingsSaveIn
 		if err := decode(req, &in); err != nil {
 			return nil, err

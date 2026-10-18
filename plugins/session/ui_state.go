@@ -1,9 +1,8 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-
-	"github.com/tomori/my-go-lite-agent/contracts"
 )
 
 type uiPublisher interface {
@@ -11,18 +10,6 @@ type uiPublisher interface {
 	SendCommand(mountID string, command string, payload json.RawMessage) error
 }
 
-// Compatibility aliases keep plugin-local names while the shared JSON shape is
-// defined by contracts/core-plugin-contracts.schema.json.
-type (
-	streamUpdateIn = contracts.StreamSnapshot
-	streamMessage  = contracts.StreamMessage
-	streamSnapshot = contracts.StreamSnapshot
-)
-
-type streamUpdateOut struct {
-	Accepted bool   `json:"accepted"`
-	Reason   string `json:"reason,omitempty"`
-}
 type chatMessageUI struct {
 	Seq        int             `json:"seq"`
 	TurnID     string          `json:"turn_id,omitempty"`
@@ -96,7 +83,7 @@ func (p *plugin) setUIPublisher(ui uiPublisher) {
 	p.ui = ui
 }
 
-func (p *plugin) updateStream(in streamUpdateIn) (streamUpdateOut, error) {
+func (p *plugin) updateStream(ctx context.Context, in streamUpdateIn) (streamUpdateOut, error) {
 	if in.SessionID == "" || in.TurnID == "" || in.StepID == "" {
 		return streamUpdateOut{}, errBadArguments("session_id, turn_id and step_id are required")
 	}
@@ -138,7 +125,7 @@ func (p *plugin) updateStream(in streamUpdateIn) (streamUpdateOut, error) {
 		_ = ui.SendCommand("chat", "stream", payload)
 	}
 	if in.Status == "cancel_requested" {
-		p.publishChat(in.SessionID)
+		p.publishChat(ctx, in.SessionID)
 	}
 	return streamUpdateOut{Accepted: true}, nil
 }
@@ -167,7 +154,7 @@ func (p *plugin) setSelected(id string) {
 }
 
 // selectSession moves the selection and republishes every mount that depends on it.
-func (p *plugin) selectSession(in selectIn) (selectOut, error) {
+func (p *plugin) selectSession(ctx context.Context, in selectIn) (selectOut, error) {
 	if in.SessionID == "" {
 		return selectOut{}, errBadArguments("session_id is required")
 	}
@@ -175,7 +162,7 @@ func (p *plugin) selectSession(in selectIn) (selectOut, error) {
 		return selectOut{}, err
 	}
 	p.setSelected(in.SessionID)
-	p.publishForSelection()
+	p.publishForSelection(ctx)
 	return selectOut{SessionID: in.SessionID}, nil
 }
 
@@ -196,7 +183,7 @@ func (p *plugin) effectiveID(requested string) string {
 	return id
 }
 
-func (p *plugin) state(in stateIn) (stateOut, error) {
+func (p *plugin) state(ctx context.Context, in stateIn) (stateOut, error) {
 	id := p.effectiveID(in.SessionID)
 	out := stateOut{History: historyStateUI{Sessions: []sessionSummary{}, SelectedID: id}}
 	list, err := p.list()
@@ -208,7 +195,7 @@ func (p *plugin) state(in stateIn) (stateOut, error) {
 	if id == "" {
 		return out, nil
 	}
-	chat, err := p.chatState(id)
+	chat, err := p.chatState(ctx, id)
 	if err != nil {
 		return stateOut{}, err
 	}
@@ -222,49 +209,49 @@ func (p *plugin) state(in stateIn) (stateOut, error) {
 }
 
 // publishForSelection pushes History plus the selected session's Chat and Trace.
-func (p *plugin) publishForSelection() {
-	p.publishHistory()
-	p.publishSession(p.selectedID())
+func (p *plugin) publishForSelection(ctx context.Context) {
+	p.publishHistory(ctx)
+	p.publishSession(ctx, p.selectedID())
 }
 
-func (p *plugin) publishSession(sessionID string) {
+func (p *plugin) publishSession(ctx context.Context, sessionID string) {
 	if sessionID == "" {
 		return
 	}
-	p.publishChat(sessionID)
-	p.publishTrace(sessionID)
+	p.publishChat(ctx, sessionID)
+	p.publishTrace(ctx, sessionID)
 }
 
 // publishAfterAppend reports count changes to History, and refreshes the
 // visible Chat and Trace only when the appended session is the selected one.
-func (p *plugin) publishAfterAppend(sessionID string) {
-	p.publishHistory()
+func (p *plugin) publishAfterAppend(ctx context.Context, sessionID string) {
+	p.publishHistory(ctx)
 	if sessionID == p.selectedID() {
-		p.publishSession(sessionID)
+		p.publishSession(ctx, sessionID)
 	}
 }
 
 // publishAfterCreate never steals an existing selection. When nothing is
 // selected yet, the Runtime adopts the new session so the first message from
 // the browser becomes visible without a manual pick.
-func (p *plugin) publishAfterCreate(sessionID string) {
+func (p *plugin) publishAfterCreate(ctx context.Context, sessionID string) {
 	if p.selectedID() == "" {
 		p.setSelected(sessionID)
-		p.publishForSelection()
+		p.publishForSelection(ctx)
 		return
 	}
-	p.publishHistory()
+	p.publishHistory(ctx)
 }
 
-func (p *plugin) publishChat(sessionID string) {
-	state, err := p.chatState(sessionID)
+func (p *plugin) publishChat(ctx context.Context, sessionID string) {
+	state, err := p.chatState(ctx, sessionID)
 	if err != nil {
 		return
 	}
-	p.publishState("chat", state)
+	p.publishState(ctx, "chat", state)
 }
 
-func (p *plugin) publishHistory() {
+func (p *plugin) publishHistory(ctx context.Context) {
 	p.mu.RLock()
 	ui := p.ui
 	p.mu.RUnlock()
@@ -276,10 +263,10 @@ func (p *plugin) publishHistory() {
 		return
 	}
 	state := historyStateUI{Sessions: out.Sessions, SelectedID: p.selectedID(), Revision: p.nextUIRevision()}
-	p.publishState("history", state)
+	p.publishState(ctx, "history", state)
 }
 
-func (p *plugin) publishTrace(sessionID string) {
+func (p *plugin) publishTrace(ctx context.Context, sessionID string) {
 	if _, err := p.get(sessionID); err != nil {
 		return
 	}
@@ -288,10 +275,10 @@ func (p *plugin) publishTrace(sessionID string) {
 		return
 	}
 	state := traceStateUI{SessionID: sessionID, Revision: p.nextUIRevision(), Facts: facts}
-	p.publishState("trace", state)
+	p.publishState(ctx, "trace", state)
 }
 
-func (p *plugin) publishState(mountID string, state any) {
+func (p *plugin) publishState(ctx context.Context, mountID string, state any) {
 	p.mu.RLock()
 	ui := p.ui
 	p.mu.RUnlock()
@@ -305,11 +292,11 @@ func (p *plugin) publishState(mountID string, state any) {
 	_ = ui.SetState(mountID, payload)
 }
 
-func (p *plugin) chatState(sessionID string) (chatStateUI, error) {
-	return p.chatStateInternal(sessionID, true)
+func (p *plugin) chatState(ctx context.Context, sessionID string) (chatStateUI, error) {
+	return p.chatStateInternal(ctx, sessionID, true)
 }
 
-func (p *plugin) chatStateInternal(sessionID string, allowRecovery bool) (chatStateUI, error) {
+func (p *plugin) chatStateInternal(ctx context.Context, sessionID string, allowRecovery bool) (chatStateUI, error) {
 	if _, err := p.get(sessionID); err != nil {
 		return chatStateUI{}, err
 	}
@@ -350,10 +337,10 @@ func (p *plugin) chatStateInternal(sessionID string, allowRecovery bool) (chatSt
 	if state.Messages == nil {
 		state.Messages = []chatMessageUI{}
 	}
-	ownerState := p.pluginState(turnOwner)
+	ownerState := p.pluginState(ctx, turnOwner)
 	if allowRecovery && state.Turn.Status == "running" && turnOwner != "" && ownerState != "" && ownerState != "unknown" && ownerState != "mounted" {
 		if p.recoverOpenTurn(sessionID, state.Turn.TurnID, turnOwner) {
-			return p.chatStateInternal(sessionID, false)
+			return p.chatStateInternal(ctx, sessionID, false)
 		}
 	}
 	p.mu.RLock()
@@ -366,11 +353,11 @@ func (p *plugin) chatStateInternal(sessionID string, allowRecovery bool) (chatSt
 	return state, nil
 }
 
-func (p *plugin) pluginState(name string) string {
+func (p *plugin) pluginState(ctx context.Context, name string) string {
 	if p.sdk == nil || name == "" {
 		return ""
 	}
-	raw, err := p.sdk.Call("host", "plugins", json.RawMessage(`{}`))
+	raw, err := p.sdk.Call(ctx, "host", "plugins", json.RawMessage(`{}`))
 	if err != nil {
 		return ""
 	}

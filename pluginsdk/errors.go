@@ -8,13 +8,19 @@ import (
 
 // Re-export wire error codes so plugins only need this package for constants.
 const (
-	CodeMethodNotFound = protocol.CodeMethodNotFound
-	CodeHandlerError   = protocol.CodeHandlerError
-	CodeBadPayload     = protocol.CodeBadPayload
-	CodeBadArguments   = protocol.CodeBadArguments
-	CodeServerClosed   = protocol.CodeServerClosed
-	HostCapability     = protocol.HostCapability
+	CodeMethodNotFound       = protocol.CodeMethodNotFound
+	CodeHandlerError         = protocol.CodeHandlerError
+	CodeBadPayload           = protocol.CodeBadPayload
+	CodeBadArguments         = protocol.CodeBadArguments
+	CodeCallCancelled        = protocol.CodeCallCancelled
+	CodeCallDeadlineExceeded = protocol.CodeCallDeadlineExceeded
+	CodeFlowAlreadyProceeded = protocol.CodeFlowAlreadyProceeded
+	CodeServerClosed         = protocol.CodeServerClosed
+	HostCapability           = protocol.HostCapability
 )
+
+// ErrContextRequired reports a nil Go context.Context.
+var ErrContextRequired = errors.New(CodeBadArguments)
 
 // codedError is an error carrying a stable wire error_code.
 type codedError struct {

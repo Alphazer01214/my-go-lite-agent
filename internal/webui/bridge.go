@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -10,6 +11,7 @@ import (
 
 type CallBackend interface {
 	CallWithEvents(
+		ctx context.Context,
 		from string,
 		capability string,
 		method string,
@@ -71,6 +73,7 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 
 	go func() {
 		frame, callErr := backend.CallWithEvents(
+			r.Context(),
 			"webui",
 			request.Capability,
 			request.Method,
@@ -113,7 +116,7 @@ func writeBrowserResponse(w http.ResponseWriter, requestID string, frame *protoc
 
 func callErrorResponse(request browserCall, err error) *protocol.Frame {
 	return &protocol.Frame{
-		Version:    protocol.FrameVersion,
+		Version:    BrowserVersion,
 		ID:         request.ID,
 		Type:       protocol.FrameResponse,
 		From:       host.FromHost,

@@ -1,10 +1,51 @@
 const stateLabels = Object.freeze({
-	mounted: "已挂载",
-	available: "可用",
-	degraded: "降级",
-	disabled: "已禁用",
-	missing: "缺失",
+	inactive: "未激活",
+	loading: "加载中",
+	active: "运行中",
+	stopping: "停止中",
+	failed: "失败",
 });
+
+function selectedProviderInstance(plugin, handlers) {
+	const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
+	const selectedID = handlers?.selectedInstanceIds?.get(plugin?.name)
+		|| plugin?.selected_instance_id;
+	return instances.find((instance) => instance?.instance_id === selectedID)
+		|| instances.find((instance) => instance?.instance_id === plugin?.selected_instance_id)
+		|| instances[0]
+		|| null;
+}
+
+function displayState(plugin, instance) {
+	if (!plugin || plugin.missing) return "missing";
+	return instance?.state || plugin?.state || "inactive";
+}
+
+function instanceSelector(document, plugin, instance, handlers) {
+	const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
+	if (instances.length === 0) return null;
+	const wrap = document.createElement("div");
+	wrap.className = "plugin-instances";
+	wrap.dataset.label = "实例";
+	const label = document.createElement("span");
+	label.className = "plugin-detail-label";
+	label.textContent = "实例";
+	const select = document.createElement("select");
+	select.className = "plugin-instance-select";
+	select.dataset.plugin = plugin.name || "";
+	for (const item of instances) {
+		const option = document.createElement("option");
+		option.value = item.instance_id || "";
+		option.textContent = `${item.instance_id || "实例"} · G${item.generation || 0} · ${stateLabels[item.state] || item.state || "未知"}`;
+		select.append(option);
+	}
+	select.value = instance?.instance_id || "";
+	select.addEventListener("change", () => {
+		handlers?.onSelectInstance?.(plugin.name, select.value);
+	});
+	wrap.append(label, select);
+	return wrap;
+}
 
 const edgeLabels = Object.freeze({
 	mount: "装载",
@@ -43,8 +84,9 @@ function appendTextList(document, parent, className, label, values, emptyText, f
 }
 
 function pluginAction(document, plugin, handlers) {
-	if (plugin.state === "missing") return null;
-	const stopping = plugin.state === "mounted";
+	if (plugin.missing) return null;
+	const state = displayState(plugin, selectedProviderInstance(plugin, handlers));
+	const stopping = state === "active" || state === "loading" || state === "stopping";
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = stopping ? "plugin-action plugin-stop" : "plugin-action plugin-start";
@@ -92,19 +134,43 @@ export function renderPluginList(document, list, plugins, handlers = {}) {
 		if (action) primary.append(action);
 		row.append(primary);
 
+		const selectedInstance = selectedProviderInstance(plugin, handlers);
 		const status = document.createElement("div");
 		status.className = "plugin-status";
 		const state = document.createElement("span");
-		const stateName = typeof plugin.state === "string" ? plugin.state : "";
+		const stateName = displayState(plugin, selectedInstance);
 		state.className = `state-badge state-${stateName.replace(/[^a-z0-9_-]/g, "-") || "unknown"}`;
 		state.textContent = stateLabels[stateName] || stateName || "未知";
 		status.append(state);
+		if (plugin.missing) {
+			const missing = document.createElement("span");
+			missing.className = "plugin-missing state-badge state-missing";
+			missing.textContent = "缺失";
+			status.append(missing);
+		}
+		const selector = instanceSelector(document, plugin, selectedInstance, handlers);
+		if (selector) status.append(selector);
 		const enabled = document.createElement("span");
 		enabled.className = plugin.enabled ? "plugin-enabled" : "plugin-disabled";
 		enabled.textContent = plugin.enabled ? "启用" : "禁用";
 		status.append(enabled);
 		row.append(status);
 
+		appendTextList(
+			document,
+			row,
+			"plugin-registrations",
+			"Registration",
+			selectedInstance?.registrations,
+			"无 Registration",
+			(item) => `${item?.capability || ""}.${item?.method || ""}`,
+		);
+		if (selectedInstance?.failure_message) {
+			const failure = document.createElement("div");
+			failure.className = "plugin-failure";
+			failure.textContent = `${selectedInstance.failure_code || "failed"}: ${selectedInstance.failure_message}`;
+			row.append(failure);
+		}
 		appendTextList(document, row, "plugin-capabilities", "Capability", plugin.provides, "无 Capability");
 		appendTextList(document, row, "plugin-dependencies", "依赖", plugin.depends_on, "无硬依赖");
 		appendTextList(
@@ -179,12 +245,12 @@ function buildRelationshipGraphModel(plugins, includeHost) {
 		return {
 			id: name,
 			kind: "plugin",
-			state: plugin?.state || "missing",
+			state: displayState(plugin, null),
 			enabled: plugin?.enabled !== false,
 			depth,
 			x: pluginLeft + depth * columnGap,
 			y: 44 + (height - 80 - groupHeight) / 2 + index * rowGap,
-			missing: !plugin,
+			missing: !plugin || plugin.missing === true,
 			provides: [...(plugin?.provides || [])],
 			dependsOn: [...(plugin?.depends_on || [])],
 			usedBy: [...(usedBy.get(name) || [])].sort(),
@@ -197,7 +263,7 @@ function buildRelationshipGraphModel(plugins, includeHost) {
 		nodes.unshift({
 			id: "Host",
 			kind: "host",
-			state: "mounted",
+			state: "active",
 			enabled: true,
 			depth: -1,
 			x: 70,
@@ -209,7 +275,7 @@ function buildRelationshipGraphModel(plugins, includeHost) {
 			mounts: [],
 		});
 		for (const plugin of items) {
-			if (!plugin?.name || plugin.state === "missing") continue;
+			if (!plugin?.name || plugin.missing) continue;
 			edges.push({ from: "Host", to: plugin.name, type: "mount" });
 		}
 	}

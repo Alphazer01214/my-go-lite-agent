@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -55,7 +56,7 @@ type fakeHostStateSDK struct {
 	state string
 }
 
-func (f fakeHostStateSDK) Call(capability, method string, payload json.RawMessage) (json.RawMessage, error) {
+func (f fakeHostStateSDK) Call(_ context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error) {
 	if capability != "host" || method != "plugins" {
 		return nil, errHandler("unexpected call")
 	}
@@ -66,10 +67,10 @@ func TestChatStateRecoversWhenTurnOwnerIsDown(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
 	p.sdk = fakeHostStateSDK{state: "degraded"}
-	if _, err := p.create(createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.append(appendIn{SessionID: "s1", Facts: []factIn{{
+	if _, err := p.append(context.Background(), appendIn{SessionID: "s1", Facts: []factIn{{
 		Type: TypeTurnStart,
 		Role: RoleHost,
 		Meta: mustJSON(map[string]any{"turn_id": "t1", "plugin": "agent"}),
@@ -77,7 +78,7 @@ func TestChatStateRecoversWhenTurnOwnerIsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := p.chatState("s1")
+	state, err := p.chatState(context.Background(), "s1")
 	if err != nil {
 		t.Fatal(err)
 	}

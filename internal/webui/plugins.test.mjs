@@ -22,7 +22,10 @@ function fakeDocument() {
 				setAttribute(name, value) {
 					this.attributes[name] = String(value);
 				},
-				addEventListener() {},
+				listeners: {},
+				addEventListener(name, listener) {
+					this.listeners[name] = listener;
+				},
 				replaceChildren(...children) {
 					this.children = children;
 				},
@@ -47,7 +50,7 @@ test("renders plugin lifecycle, capabilities and UI mounts", () => {
 		{
 			name: "session",
 			version: "0.1.0",
-			state: "mounted",
+			state: "active",
 			enabled: true,
 			provides: ["session"],
 			depends_on: [],
@@ -55,7 +58,8 @@ test("renders plugin lifecycle, capabilities and UI mounts", () => {
 		},
 		{
 			name: "missing-user",
-			state: "missing",
+			state: "inactive",
+			missing: true,
 			enabled: true,
 			depends_on: ["missing"],
 		},
@@ -65,7 +69,7 @@ test("renders plugin lifecycle, capabilities and UI mounts", () => {
 	const rendered = list.children.map(textOf).join("\n");
 	assert.match(rendered, /session/);
 	assert.match(rendered, /0\.1\.0/);
-	assert.match(rendered, /已挂载/);
+	assert.match(rendered, /运行中/);
 	assert.match(rendered, /启用/);
 	assert.match(rendered, /session/);
 	assert.match(rendered, /Capability/);
@@ -87,10 +91,10 @@ test("renders a stable empty state", () => {
 
 test("derives a deterministic dependency graph model", () => {
 	const model = dependencyGraphModel([
-		{ name: "agent", state: "mounted", depends_on: ["session", "llm-openai"] },
-		{ name: "session", state: "mounted", depends_on: [] },
-		{ name: "llm-openai", state: "available", depends_on: [] },
-		{ name: "missing-user", state: "degraded", depends_on: ["missing"] },
+		{ name: "agent", state: "active", depends_on: ["session", "llm-openai"] },
+		{ name: "session", state: "active", depends_on: [] },
+		{ name: "llm-openai", state: "inactive", depends_on: [] },
+		{ name: "missing-user", state: "failed", depends_on: ["missing"] },
 	]);
 
 	assert.deepEqual(model.nodes.map((node) => node.id).sort(), [
@@ -104,9 +108,9 @@ test("derives a deterministic dependency graph model", () => {
 
 test("adds Host lifecycle edges without changing plugin dependency depth", () => {
 	const model = relationshipGraphModel([
-		{ name: "agent", state: "mounted", provides: ["loop"], depends_on: ["session", "llm-openai"] },
-		{ name: "session", state: "mounted", provides: ["session"], depends_on: [], mounts: [{ id: "chat" }] },
-		{ name: "llm-openai", state: "mounted", provides: ["llm"], depends_on: [] },
+		{ name: "agent", state: "active", provides: ["loop"], depends_on: ["session", "llm-openai"] },
+		{ name: "session", state: "active", provides: ["session"], depends_on: [], mounts: [{ id: "chat" }] },
+		{ name: "llm-openai", state: "active", provides: ["llm"], depends_on: [] },
 	]);
 
 	assert.equal(model.nodes[0].id, "Host");
@@ -123,17 +127,69 @@ test("renders selected plugin relationship details", () => {
 	const document = fakeDocument();
 	const root = document.createElement("aside");
 	const model = relationshipGraphModel([
-		{ name: "agent", state: "mounted", provides: ["loop"], depends_on: ["session"], mounts: [] },
-		{ name: "session", state: "mounted", provides: ["session"], depends_on: [], mounts: [{ plugin: "session", id: "chat" }] },
+		{ name: "agent", state: "active", provides: ["loop"], depends_on: ["session"], mounts: [] },
+		{ name: "session", state: "active", provides: ["session"], depends_on: [], mounts: [{ plugin: "session", id: "chat" }] },
 	]);
 
 	renderDependencyDetails(document, root, model, "agent");
 	const rendered = textOf(root);
 	assert.match(rendered, /agent/);
-	assert.match(rendered, /已挂载/);
+	assert.match(rendered, /运行中/);
 	assert.match(rendered, /Capability/);
 	assert.match(rendered, /loop/);
 	assert.match(rendered, /硬依赖/);
 	assert.match(rendered, /session/);
 	assert.match(rendered, /无 UI Mount/);
+});
+
+
+function findNode(node, predicate) {
+	if (predicate(node)) return node;
+	for (const child of node.children || []) {
+		const found = findNode(child, predicate);
+		if (found) return found;
+	}
+	return null;
+}
+
+test("selects one provider instance for display", () => {
+	const document = fakeDocument();
+	const list = document.createElement("ul");
+	const selectedInstanceIds = new Map();
+	let selection = null;
+	const plugin = {
+		name: "demo",
+		state: "active",
+		selected_instance_id: "demo-a",
+		enabled: true,
+		instances: [
+			{ instance_id: "demo-a", generation: 1, state: "active", registrations: [{ capability: "agent", method: "run" }] },
+			{ instance_id: "demo-b", generation: 2, state: "loading", registrations: [] },
+		],
+	};
+
+	renderPluginList(document, list, [plugin], {
+		selectedInstanceIds,
+		onSelectInstance: (name, instanceID) => {
+			selection = { name, instanceID };
+			selectedInstanceIds.set(name, instanceID);
+		},
+	});
+
+	let rendered = list.children.map(textOf).join("\n");
+	assert.match(rendered, /demo-a/);
+	assert.match(rendered, /demo-b/);
+	assert.match(rendered, /运行中/);
+	assert.match(rendered, /agent\.run/);
+
+	const select = findNode(list, (node) => node.className === "plugin-instance-select");
+	assert.ok(select);
+	assert.equal(select.value, "demo-a");
+	select.value = "demo-b";
+	select.listeners.change();
+	assert.deepEqual(selection, { name: "demo", instanceID: "demo-b" });
+
+	renderPluginList(document, list, [plugin], { selectedInstanceIds });
+	rendered = list.children.map(textOf).join("\n");
+	assert.match(rendered, /加载中/);
 });

@@ -23,8 +23,8 @@ func TestBootstrapIncludesPluginStatusSnapshot(t *testing.T) {
 	registry, _ := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
 	server := NewServer(registry, nil)
 	server.SetPluginStateProvider(fakePluginStateProvider{states: []host.PluginSnapshot{
-		{Name: "demo", Version: "1.0.0", State: host.PluginStateMounted, Enabled: true, Provides: []string{"demo"}},
-		{Name: "missing", State: host.PluginStateMissing, Enabled: true},
+		{Name: "demo", Version: "1.0.0", State: host.ProviderStateActive, Enabled: true, Provides: []string{"demo"}},
+		{Name: "missing", State: host.ProviderStateInactive, Enabled: true, Missing: true},
 	}})
 
 	req := httptest.NewRequest(http.MethodGet, "/bridge/bootstrap", nil)
@@ -42,7 +42,7 @@ func TestBootstrapIncludesPluginStatusSnapshot(t *testing.T) {
 		t.Fatalf("plugins = %#v", bootstrap.Plugins)
 	}
 	demo := bootstrap.Plugins[0]
-	if demo.Name != "demo" || demo.Version != "1.0.0" || demo.State != host.PluginStateMounted || !demo.Enabled {
+	if demo.Name != "demo" || demo.Version != "1.0.0" || demo.State != host.ProviderStateActive || !demo.Enabled {
 		t.Fatalf("demo = %#v", demo)
 	}
 	if len(demo.Provides) != 1 || demo.Provides[0] != "demo" {
@@ -51,7 +51,7 @@ func TestBootstrapIncludesPluginStatusSnapshot(t *testing.T) {
 	if len(demo.Mounts) != 1 || demo.Mounts[0] != (MountRef{Plugin: "demo", ID: "chat"}) {
 		t.Fatalf("demo mounts = %#v", demo.Mounts)
 	}
-	if bootstrap.Plugins[1].Name != "missing" || bootstrap.Plugins[1].State != host.PluginStateMissing {
+	if bootstrap.Plugins[1].Name != "missing" || bootstrap.Plugins[1].State != host.ProviderStateInactive {
 		t.Fatalf("missing = %#v", bootstrap.Plugins[1])
 	}
 }
@@ -68,7 +68,7 @@ func TestBootstrapPluginSnapshotFallsBackToDiscoveredState(t *testing.T) {
 		t.Fatalf("plugins = %#v", bootstrap.Plugins)
 	}
 	got := bootstrap.Plugins[0]
-	if got.Name != "demo" || got.Version != "2.3.4" || got.State != host.PluginStateAvailable || !got.Enabled {
+	if got.Name != "demo" || got.Version != "2.3.4" || got.State != host.ProviderStateInactive || !got.Enabled {
 		t.Fatalf("plugin = %#v", got)
 	}
 }

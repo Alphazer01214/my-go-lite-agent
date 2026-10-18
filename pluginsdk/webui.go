@@ -2,6 +2,7 @@ package pluginsdk
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -37,7 +38,7 @@ func (u *WebUI) SetState(mountID string, state json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("encode ui state: %w", err)
 	}
-	_, err = u.p.Call(protocol.HostCapability, "ui.state", payload)
+	_, err = u.p.Call(context.Background(), protocol.HostCapability, "ui.state", payload)
 	return err
 }
 
@@ -64,6 +65,6 @@ func (u *WebUI) SendCommand(mountID string, command string, payload json.RawMess
 	if err != nil {
 		return fmt.Errorf("encode ui command: %w", err)
 	}
-	_, err = u.p.Call(protocol.HostCapability, "ui.command", body)
+	_, err = u.p.Call(context.Background(), protocol.HostCapability, "ui.command", body)
 	return err
 }

@@ -74,7 +74,7 @@ func NewRegistry(discoveries plugin.Discoveries) (*Registry, []plugin.Diagnostic
 		registry.plugins[pluginName] = BootstrapPlugin{PluginSnapshot: host.PluginSnapshot{
 			Name:      pluginName,
 			Version:   discovery.Manifest.Version,
-			State:     host.PluginStateAvailable,
+			State:     host.ProviderStateInactive,
 			Enabled:   true,
 			Provides:  append([]string(nil), discovery.Manifest.Provides...),
 			DependsOn: append([]string(nil), discovery.Manifest.DependsOn...),

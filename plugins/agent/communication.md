@@ -1,6 +1,6 @@
 # agent 通信契约
 
-跨插件 JSON 的规范来源是 [Core Plugin Contracts](../../contracts/README.md)。本文 payload 示例须与 Schema 一致。
+本文是该插件跨插件 JSON 的规范来源。调用方按本文维护自己的适配类型。
 
 本文记录 `agent` 的方法、payload、跨插件调用和 WebUI 交互。JSON 字段是公共契约。Go 私有类型名不是公共契约。
 

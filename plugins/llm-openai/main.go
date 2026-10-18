@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 
@@ -19,9 +20,9 @@ func errHandler(msg string) error {
 	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, msg)
 }
 
-func handle(fn func(req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
-	return func(req *pluginsdk.Request) (json.RawMessage, error) {
-		out, err := fn(req)
+func handle(fn func(ctx context.Context, req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
+	return func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+		out, err := fn(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +51,7 @@ func main() {
 	p := newPlugin()
 	s := pluginsdk.NewPlugin("llm-openai")
 
-	s.Register("llm", "complete", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "complete", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		var in completeIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
@@ -58,25 +59,25 @@ func main() {
 		emit := func(payload json.RawMessage) error {
 			return s.EmitWithID(req.ID, "llm", "chunk", payload)
 		}
-		out, err := p.complete(in, emit)
+		out, err := p.complete(ctx, in, emit)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(out)
 	}).WithInfo("complete", "OpenAI-compatible chat completion (stream by default)"))
 
-	s.Register("llm", "cancel", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "cancel", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		var in llmCancelIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
 		}
 		return json.Marshal(llmCancelOut{CallID: in.CallID, Cancelled: p.cancelCall(in.CallID)})
 	}).WithInfo("cancel", "cancel one in-flight completion"))
-	s.Register("llm", "config.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "config.get", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.getConfig())
 	}).WithInfo("config.get", "show model config (key masked)"))
 
-	s.Register("llm", "config.set", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "config.set", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		var in configSetIn
 		if err := decode(req, &in); err != nil {
 			return nil, err
@@ -88,11 +89,11 @@ func main() {
 		return json.Marshal(out)
 	}).WithInfo("config.set", "update config (deferred while working)"))
 
-	s.Register("llm", "settings.get", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "settings.get", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.settingsGet())
 	}).WithInfo("settings.get", "read Settings Renderer values"))
 
-	s.Register("llm", "settings.save", pluginsdk.NewHandler(func(req *pluginsdk.Request) (json.RawMessage, error) {
+	s.Register("llm", "settings.save", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		var in settingsSaveIn
 		if err := decode(req, &in); err != nil {
 			return nil, err

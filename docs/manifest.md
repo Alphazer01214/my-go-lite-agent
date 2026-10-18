@@ -14,7 +14,9 @@
   "entry": "example-plugin",
   "description": "Example plugin",
   "autostart": true,
+  "priority": 0,
   "provides": ["example"],
+  "consumes": [],
   "requires": [],
   "depends_on": [],
   "commands": [],
@@ -31,8 +33,10 @@
 | `entry` | 是 | 可执行入口 |
 | `description` | 否 | 人类可读说明 |
 | `autostart` | 否 | 是否作为启动根 |
+| `priority` | 否 | Consumer 处理顺序，缺省为 `0` |
 | `provides` | 否 | 对外能力名 |
 | `requires` | 否 | 弱依赖能力名 |
+| `consumes` | 否 | 参与流水线的 `(capability, method)` |
 | `depends_on` | 否 | 硬依赖插件名 |
 | `commands` | 否 | 命令元数据 |
 | `ui` | 否 | WebUI 贡献 |
@@ -44,11 +48,13 @@
 
 Host 启动时扫描一次 `plugins/`。运行期间只在用户触发“重新扫描”时再次扫描。
 
-手动扫描不会自动启动新插件。新插件先进入 `available`，再由插件中心手动启动。
+手动扫描不会自动启动新插件。新插件先以 `inactive` 展示，再由插件中心手动启动。
 
 ## 2. 能力声明
 
 `provides` 是观测和装配信息。真正路由以运行时 `host.register` 上报的 `(capability, method)` 为准。
+
+`consumes` 声明插件参与的 `(capability, method)` 流水线。`priority` 决定消费顺序。同一 Method 的 Consumer Priority 必须唯一。
 
 `requires` 是弱依赖。缺少能力时插件仍可启动。调用失败返回可恢复错误。
 
@@ -243,5 +249,6 @@ type Diagnostic struct {
 - 未知字段只报告并继续解析；
 - UI 和 Settings 错误不影响业务 Capability；
 - 无法使用的 Mount 或静态资源被跳过；
-- entry 无法启动时，插件标记为 `missing`；
+- entry 无法解析时，插件保持 `inactive`；
+- 进程启动失败时，Provider 进入 `failed`；
 - 其他插件继续扫描和启动。

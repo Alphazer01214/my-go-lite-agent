@@ -1,6 +1,7 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -10,17 +11,19 @@ import (
 // to onEvent until the final response. The callback is called from the plugin
 // read loop and must be fast and non-blocking.
 func (h *Host) CallWithEvents(
+	ctx context.Context,
 	from string,
 	capability string,
 	method string,
 	payload json.RawMessage,
 	onEvent func(*Frame),
 ) (*Frame, error) {
-	return h.CallWithEventsInContext("", from, capability, method, payload, onEvent)
+	return h.CallWithEventsInContext(ctx, "", from, capability, method, payload, onEvent)
 }
 
 // CallWithEventsInContext binds a Host-initiated call to one execution context.
 func (h *Host) CallWithEventsInContext(
+	ctx context.Context,
 	contextID string,
 	from string,
 	capability string,
@@ -28,6 +31,12 @@ func (h *Host) CallWithEventsInContext(
 	payload json.RawMessage,
 	onEvent func(*Frame),
 ) (*Frame, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context is required: %w", ErrBadArguments)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("call %s.%s: %w", capability, method, err)
+	}
 	if contextID != "" {
 		if _, err := h.useExecutionContext(contextID, from); err != nil {
 			return nil, err
@@ -51,7 +60,7 @@ func (h *Host) CallWithEventsInContext(
 	if err != nil {
 		return nil, err
 	}
-	if err := h.alive(owner); err != nil {
+	if err := h.acceptingNewCall(owner); err != nil {
 		return nil, err
 	}
 
@@ -60,18 +69,19 @@ func (h *Host) CallWithEventsInContext(
 	callID := HostCallIDPrefix + strconv.Itoa(h.seq)
 	response := make(chan *Frame, 1)
 	pendingWait := &wait{
-		kind:         WaitHost,
-		caller:       from,
-		callerPlugin: from,
-		target:       owner,
-		targetPlugin: ownerPlugin,
-		contextID:    contextID,
-		frameID:      callID,
-		capability:   capability,
-		method:       method,
-		payload:      append(json.RawMessage(nil), payload...),
-		resCh:        response,
-		onEvent:      onEvent,
+		kind:             WaitHost,
+		caller:           from,
+		callerPlugin:     from,
+		target:           owner,
+		targetPlugin:     ownerPlugin,
+		targetGeneration: h.plugins[owner].gen,
+		contextID:        contextID,
+		frameID:          callID,
+		capability:       capability,
+		method:           method,
+		payload:          append(json.RawMessage(nil), payload...),
+		resCh:            response,
+		onEvent:          onEvent,
 	}
 	h.pending[callID] = pendingWait
 	h.mu.Unlock()
@@ -93,5 +103,18 @@ func (h *Host) CallWithEventsInContext(
 		return nil, fmt.Errorf("call %s.%s: %w", capability, method, err)
 	}
 
-	return <-response, nil
+	select {
+	case result := <-response:
+		return result, nil
+	case <-ctx.Done():
+		if err := h.cancelPending(callID, cancelReason(ctx.Err())); err != nil {
+			select {
+			case result := <-response:
+				return result, nil
+			default:
+				return nil, fmt.Errorf("call %s.%s: %w", capability, method, err)
+			}
+		}
+		return <-response, nil
+	}
 }

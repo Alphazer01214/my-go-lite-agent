@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ type fakeAgentSDK struct {
 	release        chan struct{}
 }
 
-func (f *fakeAgentSDK) Call(capability, method string, payload json.RawMessage) (json.RawMessage, error) {
+func (f *fakeAgentSDK) Call(_ context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch capability + "." + method {
@@ -51,7 +52,7 @@ func (f *fakeAgentSDK) Call(capability, method string, payload json.RawMessage) 
 	}
 }
 
-func (f *fakeAgentSDK) CallWithCallback(capability, method string, payload json.RawMessage, callback func(*event)) (json.RawMessage, error) {
+func (f *fakeAgentSDK) CallWithCallback(_ context.Context, capability, method string, payload json.RawMessage, callback func(*event)) (json.RawMessage, error) {
 	if capability != "llm" || method != "complete" {
 		return nil, errHandler("unexpected callback call")
 	}
@@ -80,7 +81,7 @@ func TestTurnPersistsMetadataAndPublishesStreamSnapshots(t *testing.T) {
 	p := newPlugin()
 	p.sdk = sdk
 
-	out, err := p.turn(turnIn{
+	out, err := p.turn(context.Background(), turnIn{
 		Input:     "hello",
 		SessionID: "s1",
 		MaxSteps:  1,
@@ -146,7 +147,7 @@ func TestCancelSavesAccumulatedAssistantDraft(t *testing.T) {
 
 	done := make(chan turnOut, 1)
 	go func() {
-		out, err := p.turn(turnIn{Input: "hello", SessionID: "s1", MaxSteps: 2})
+		out, err := p.turn(context.Background(), turnIn{Input: "hello", SessionID: "s1", MaxSteps: 2})
 		if err != nil {
 			t.Errorf("turn: %v", err)
 		}
@@ -154,7 +155,7 @@ func TestCancelSavesAccumulatedAssistantDraft(t *testing.T) {
 	}()
 
 	<-sdk.started
-	cancelled, err := p.cancel(cancelIn{SessionID: "s1"})
+	cancelled, err := p.cancel(context.Background(), cancelIn{SessionID: "s1"})
 	if err != nil || !cancelled.Cancelled {
 		t.Fatalf("cancel = %+v, %v", cancelled, err)
 	}
@@ -197,7 +198,7 @@ func TestPreCancelledTurnWritesTerminal(t *testing.T) {
 	sdk := &fakeAgentSDK{}
 	p := newPlugin()
 	p.sdk = sdk
-	st := newTurnState("s1")
+	st := newTurnState(context.Background(), "s1")
 	st.markCancelled()
 
 	out, err := p.runTurn(st, turnIn{Input: "hello", SessionID: "s1"}, schemeToolCalling, 2)

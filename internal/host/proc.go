@@ -17,7 +17,7 @@ func (h *Host) launch(discovery plugin.Discovery) error {
 }
 
 // launchInstance starts one process activation. The default activation uses the
-// plugin name as instance id, preserving the existing single-instance contract.
+// plugin name as instance id, preserving the existing single-instance behavior.
 func (h *Host) launchInstance(instanceID string, discovery plugin.Discovery, configRevision string) error {
 	manifest := discovery.Manifest
 	if instanceID == "" {
@@ -48,28 +48,17 @@ func (h *Host) launchInstance(instanceID string, discovery plugin.Discovery, con
 	if err != nil {
 		return err
 	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	// 收尸：进程退出后 Wait 回收，避免僵尸；done 供 Close 等待退出
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
 	h.mu.Lock()
 	if _, exists := h.plugins[instanceID]; exists {
 		h.mu.Unlock()
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		<-done
+		_ = stdout.Close()
 		return fmt.Errorf("instance %s already exists: %w", instanceID, ErrInstanceExists)
 	}
 	h.gen[instanceID]++
 	gen := h.gen[instanceID]
-	h.plugins[instanceID] = &proc{
+	done := make(chan struct{})
+	p := &proc{
 		discovery:      discovery,
 		instanceID:     instanceID,
 		pluginName:     manifest.Name,
@@ -77,10 +66,30 @@ func (h *Host) launchInstance(instanceID string, discovery plugin.Discovery, con
 		cmd:            cmd,
 		stdin:          stdin,
 		gen:            gen,
-		healthy:        true,
+		state:          ProviderStateLoading,
 		done:           done,
 	}
+	h.plugins[instanceID] = p
 	h.mu.Unlock()
+
+	if err := cmd.Start(); err != nil {
+		message := fmt.Sprintf("plugin start failed: %v", err)
+		h.mu.Lock()
+		p.state = ProviderStateFailed
+		p.failureCode = CodePluginDown
+		p.failureMessage = message
+		h.mu.Unlock()
+		_ = stdin.Close()
+		_ = stdout.Close()
+		close(done)
+		return err
+	}
+
+	// 收尸：进程退出后 Wait 回收，避免僵尸；done 供 Close 等待退出
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
 
 	go h.read(instanceID, manifest.Name, gen, stdout)
 	return nil
@@ -115,15 +124,35 @@ func (h *Host) markUnhealthy(instanceID string, gen int) {
 		return
 	}
 	p := h.plugins[instanceID]
-	if p == nil || p.gen != gen {
+	if p == nil || p.gen != gen || p.state == ProviderStateInactive {
 		h.mu.Unlock()
 		return
 	}
-	p.healthy = false
-	h.hlog(fmt.Sprintf("instance unhealthy instance=%s plugin=%s generation=%d", instanceID, p.pluginName, gen))
+	if p.state == ProviderStateStopping {
+		p.state = ProviderStateInactive
+		h.mu.Unlock()
+		return
+	}
+	message := fmt.Sprintf("plugin instance %s is down", instanceID)
+	p.state = ProviderStateFailed
+	p.failureCode = CodePluginDown
+	p.failureMessage = message
+	h.hlog(fmt.Sprintf("instance failed instance=%s plugin=%s generation=%d", instanceID, p.pluginName, gen))
 	h.mu.Unlock()
 
 	// 死者为被调方的 pending 合成 plugin_down；仅为调用方的 pending 直接丢弃。
-	message := fmt.Sprintf("plugin instance %s is down", instanceID)
 	h.failInstancePending(instanceID, CodePluginDown, message)
+}
+
+func (h *Host) failProviderRegistration(instanceID, code, message string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p := h.plugins[instanceID]
+	if p == nil {
+		return
+	}
+	p.state = ProviderStateFailed
+	p.failureCode = code
+	p.failureMessage = message
+	p.registrations = nil
 }

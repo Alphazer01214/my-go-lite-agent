@@ -172,7 +172,16 @@ POST /bridge/plugins/{plugin}/stop
     {
       "name": "example-plugin",
       "version": "1.0.0",
-      "state": "mounted",
+      "state": "active",
+      "selected_instance_id": "example-plugin",
+      "instances": [
+        {
+          "instance_id": "example-plugin",
+          "generation": 1,
+          "state": "active",
+          "registrations": [{"capability": "example", "method": "run"}]
+        }
+      ],
       "enabled": true,
       "provides": ["example"],
       "depends_on": [],
@@ -193,7 +202,9 @@ POST /bridge/plugins/{plugin}/stop
 
 Bootstrap 返回插件状态、静态 Mount 和当前 Diagnostic 快照，不返回业务 State。
 
-`plugins[].state` 使用 Host 插件生命周期状态：`mounted`、`available`、`degraded`、`disabled` 或 `missing`。`enabled` 表示插件是否允许启动；`provides`、`depends_on` 和 `mounts` 只返回静态 Manifest 信息。快照不包含插件目录或可执行文件路径。
+`plugins[]` 按插件名分组。`instances[]` 列出该插件的全部 Plugin Instance。Provider `state` 使用 `inactive`、`loading`、`active`、`stopping` 或 `failed`。
+
+`selected_instance_id` 指出默认展示的实例。插件中心可以选择其他实例。`enabled` 表示插件是否允许启动；`missing` 表示依赖目标未发现。`provides`、`depends_on` 和 `mounts` 只返回静态 Manifest 信息。快照不包含插件目录或可执行文件路径。
 
 ### Browser Request
 
@@ -228,9 +239,9 @@ Bootstrap 返回插件状态、静态 Mount 和当前 Diagnostic 快照，不返
 
 `POST /bridge/call` 返回 NDJSON。零到多个归因 Event 后必须有一条 Response。
 
-浏览器断开不会取消后端 Call。业务继续执行，无法写入的 Event 和 Response 被丢弃。Host 不缓存结果，也不支持按 Call ID 重放。
+浏览器断开会取消该 Browser Call 的 Go Context。Host 继续等待后端唯一终态，并丢弃无法写入的 Event 和 Response。Host 不缓存结果，也不支持按 Call ID 重放。
 
-需要停止业务时，浏览器必须调用插件定义的取消方法。断开连接本身不构成取消。
+断开连接会取消这次 Browser Call。插件定义的业务取消方法仍可用于取消其他业务状态。
 
 ### Diagnostic Push
 
@@ -354,13 +365,13 @@ Host Shell 的顶栏提供统一的 `插件中心` 入口。中心包含三个�
 - `设置`：Settings Renderer；
 - `依赖关系`：Host 与插件拓扑图。
 
-插件页展示名称、版本、生命周期、Capability、硬依赖和 UI Mount。用户可手动重新扫描，也可启动或停止单个插件。
+插件页按名称展示插件，并列出全部实例。用户可选择一个实例查看 Generation、注册项和失败信息。用户可手动重新扫描，也可启动或停止单个插件。
 
-启动会校验硬依赖已经挂载。停止会闭环相关 pending。依赖停止时不级联停止依赖方；依赖方进入 `degraded`。
+启动会校验硬依赖已经进入 `active`。停止先进入 `stopping`，并等待旧 Call 完成。依赖停止时不级联停止依赖方；后续依赖调用返回 `plugin_not_ready`。
 
 依赖图由 Bootstrap 中的插件快照和 `depends_on` 生成。Host 节点使用虚线连接已发现插件，表示装载和路由。
 
-硬依赖实线从依赖方指向被依赖插件。缺失节点显示为 `missing`。图下保留同方向的文本关系列表。
+硬依赖实线从依赖方指向被依赖插件。缺失节点显示为 `missing`。实例选择只改变详情展示，不改变依赖图。图下保留同方向的文本关系列表。
 
 点击插件节点后，右侧显示 Capability、硬依赖、被依赖方和 UI Mount。节点高亮当前插件及其一跳关系。
 

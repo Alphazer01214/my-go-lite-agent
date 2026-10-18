@@ -17,15 +17,15 @@ type Fact struct {
 
 // Fact types (model-visible: message + active context_summary only).
 const (
-	TypeSessionStart    = "session_start"
-	TypeTurnStart       = "turn_start"
-	TypeTurnEnd         = "turn_end"
-	TypeStepStart       = "step_start"
-	TypeStepEnd         = "step_end"
-	TypeRequestHeader   = "request_header"
-	TypeLLMUsage        = "llm_usage"
-	TypeMessage         = "message"
-	TypeContextSummary  = "context_summary"
+	TypeSessionStart   = "session_start"
+	TypeTurnStart      = "turn_start"
+	TypeTurnEnd        = "turn_end"
+	TypeStepStart      = "step_start"
+	TypeStepEnd        = "step_end"
+	TypeRequestHeader  = "request_header"
+	TypeLLMUsage       = "llm_usage"
+	TypeMessage        = "message"
+	TypeContextSummary = "context_summary"
 )
 
 const (
@@ -59,6 +59,30 @@ type chatMessage struct {
 	Content    string          `json:"content"`
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
+}
+
+type streamMessage struct {
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	Reasoning  string          `json:"reasoning,omitempty"`
+	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+}
+
+type streamSnapshot struct {
+	SessionID string        `json:"session_id"`
+	TurnID    string        `json:"turn_id"`
+	StepID    string        `json:"step_id"`
+	UpdateID  int           `json:"update_id"`
+	Message   streamMessage `json:"message"`
+	Status    string        `json:"status"`
+}
+
+type streamUpdateIn = streamSnapshot
+
+type streamUpdateOut struct {
+	Accepted bool   `json:"accepted"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // --- method payloads (Frame payload bodies) ---
@@ -142,15 +166,15 @@ type infoIn struct {
 }
 
 type infoOut struct {
-	SessionID       string `json:"session_id"`
-	Name            string `json:"name,omitempty"`
-	Workspace       string `json:"workspace,omitempty"`
-	ParentSessionID string `json:"parent_session_id,omitempty"`
-	Origin          string `json:"origin,omitempty"`
-	DelegationDepth int    `json:"delegation_depth,omitempty"`
+	SessionID        string `json:"session_id"`
+	Name             string `json:"name,omitempty"`
+	Workspace        string `json:"workspace,omitempty"`
+	ParentSessionID  string `json:"parent_session_id,omitempty"`
+	Origin           string `json:"origin,omitempty"`
+	DelegationDepth  int    `json:"delegation_depth,omitempty"`
 	CreatedTimestamp int64  `json:"created_ts"`
-	FactCount       int    `json:"fact_count"`
-	NextSeq         int    `json:"next_seq"`
+	FactCount        int    `json:"fact_count"`
+	NextSeq          int    `json:"next_seq"`
 }
 
 // plugin config (config.json)

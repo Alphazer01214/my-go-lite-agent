@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
 )
@@ -69,7 +70,7 @@ func (h *Host) StartPlugin(name string) error {
 	h.mu.RLock()
 	current := h.plugins[name]
 	h.mu.RUnlock()
-	if current != nil && current.healthy {
+	if current != nil && current.state == ProviderStateActive {
 		return nil
 	}
 
@@ -84,12 +85,6 @@ func (h *Host) StartPlugin(name string) error {
 	}
 	h.unregisterPlugin(name)
 
-	h.mu.Lock()
-	if h.stopped == nil {
-		h.stopped = make(map[string]bool)
-	}
-	h.stopped[name] = false
-	h.mu.Unlock()
 	if err := h.launchInstance(name, discovery, ""); err != nil {
 		h.unregisterPlugin(name)
 		return err
@@ -98,8 +93,8 @@ func (h *Host) StartPlugin(name string) error {
 	return nil
 }
 
-// StopPlugin stops one plugin process. The manual stop state is retained until
-// StartPlugin is called; it is not persisted across Host restarts.
+// StopPlugin stops every process instance belonging to one plugin name.
+// New Calls stop immediately; existing Calls get one shutdown grace period.
 func (h *Host) StopPlugin(name string) error {
 	if name == "" {
 		return fmt.Errorf("plugin name is required: %w", ErrBadArguments)
@@ -114,35 +109,72 @@ func (h *Host) StopPlugin(name string) error {
 		return fmt.Errorf("plugin %s is not discovered: %w", name, ErrPluginNotMounted)
 	}
 
-	h.mu.RLock()
-	current := h.plugins[name]
-	h.mu.RUnlock()
-	if current == nil {
-		h.mu.Lock()
-		if h.stopped == nil {
-			h.stopped = make(map[string]bool)
+	h.mu.Lock()
+	var targets []*proc
+	for instanceID, current := range h.plugins {
+		if current == nil || (current.pluginName != name && instanceID != name) {
+			continue
 		}
-		h.stopped[name] = true
-		h.mu.Unlock()
+		current.state = ProviderStateStopping
+		targets = append(targets, current)
+	}
+	h.mu.Unlock()
+	if len(targets) == 0 {
 		return nil
 	}
 
-	// Close pending work before removing the process identity.
-	h.markUnhealthy(name, current.gen)
-	stopProc(current)
+	instanceIDs := make([]string, 0, len(targets))
+	for _, current := range targets {
+		instanceIDs = append(instanceIDs, current.instanceID)
+	}
+	if !h.waitForPendingTargets(instanceIDs, DefaultShutdownGrace) {
+		for _, instanceID := range instanceIDs {
+			h.failInstancePending(instanceID, CodePluginDown, "plugin stopped before Call completed")
+		}
+	}
 
-	h.mu.Lock()
-	if h.plugins[name] == current {
-		delete(h.plugins, name)
+	for _, current := range targets {
+		stopProc(current)
+		h.markUnhealthy(current.instanceID, current.gen)
+		h.mu.Lock()
+		if h.plugins[current.instanceID] == current {
+			delete(h.plugins, current.instanceID)
+		}
+		h.mu.Unlock()
 	}
-	if h.stopped == nil {
-		h.stopped = make(map[string]bool)
-	}
-	h.stopped[name] = true
-	h.mu.Unlock()
 	h.unregisterPlugin(name)
-	h.hlog(fmt.Sprintf("plugin stopped plugin=%s", name))
+	h.hlog(fmt.Sprintf("plugin stopped plugin=%s instances=%d", name, len(targets)))
 	return nil
+}
+
+func (h *Host) waitForPendingTargets(instanceIDs []string, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		h.mu.RLock()
+		remaining := 0
+		for _, wt := range h.pending {
+			for _, instanceID := range instanceIDs {
+				if wt.target == instanceID {
+					remaining++
+					break
+				}
+			}
+		}
+		h.mu.RUnlock()
+		if remaining == 0 {
+			return true
+		}
+
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // removeProcess tears down a stale process identity before a manual restart.
@@ -158,13 +190,6 @@ func (h *Host) removeProcess(name string, current *proc) {
 		delete(h.plugins, name)
 	}
 	h.mu.Unlock()
-}
-
-// IsPluginStopped reports explicit manual stop intent.
-func (h *Host) IsPluginStopped(name string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.stopped[name]
 }
 
 var _ PluginLifecycle = (*Host)(nil)

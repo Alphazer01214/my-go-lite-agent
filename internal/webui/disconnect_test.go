@@ -19,6 +19,7 @@ type blockingCallBackend struct {
 }
 
 func (b *blockingCallBackend) CallWithEvents(
+	ctx context.Context,
 	from string,
 	capability string,
 	method string,
@@ -26,15 +27,20 @@ func (b *blockingCallBackend) CallWithEvents(
 	onEvent func(*protocol.Frame),
 ) (*protocol.Frame, error) {
 	close(b.started)
-	<-b.release
-	close(b.done)
+	select {
+	case <-ctx.Done():
+		close(b.done)
+		return nil, ctx.Err()
+	case <-b.release:
+		close(b.done)
+	}
 	return &protocol.Frame{
 		Version: protocol.FrameVersion, ID: "host-1", Type: protocol.FrameResponse,
 		From: "demo", Capability: capability, Method: method,
 	}, nil
 }
 
-func TestBrowserCallDisconnectDoesNotCancelBackend(t *testing.T) {
+func TestBrowserCallDisconnectCancelsBackend(t *testing.T) {
 	backend := &blockingCallBackend{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
@@ -66,14 +72,9 @@ func TestBrowserCallDisconnectDoesNotCancelBackend(t *testing.T) {
 
 	select {
 	case <-backend.done:
-		t.Fatal("backend call ended before release")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("backend call was not canceled by disconnect")
 	}
 
 	close(backend.release)
-	select {
-	case <-backend.done:
-	case <-time.After(time.Second):
-		t.Fatal("backend call did not finish after release")
-	}
 }

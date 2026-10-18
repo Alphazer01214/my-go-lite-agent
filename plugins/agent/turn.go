@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -8,6 +9,7 @@ import (
 )
 
 type turnState struct {
+	ctx          context.Context
 	sessionID    string
 	turnID       string
 	stepID       string
@@ -18,8 +20,8 @@ type turnState struct {
 	done         chan struct{}
 }
 
-func newTurnState(id string) *turnState {
-	return &turnState{sessionID: id, done: make(chan struct{})}
+func newTurnState(ctx context.Context, id string) *turnState {
+	return &turnState{ctx: ctx, sessionID: id, done: make(chan struct{})}
 }
 
 func (t *turnState) isCancelled() bool {
@@ -88,7 +90,7 @@ func (t *turnState) nextUpdateID() int {
 
 type emitFunc func(payload json.RawMessage) error
 
-func (p *plugin) turn(in turnIn) (turnOut, error) {
+func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 	if in.Input == "" {
 		return turnOut{}, errBadArguments("input is required")
 	}
@@ -105,7 +107,7 @@ func (p *plugin) turn(in turnIn) (turnOut, error) {
 	sessionID := in.SessionID
 	var err error
 	if sessionID == "" {
-		sessionID, err = p.createSession(in.Workspace)
+		sessionID, err = p.createSession(ctx, in.Workspace)
 		if err != nil {
 			return turnOut{}, err
 		}
@@ -115,7 +117,7 @@ func (p *plugin) turn(in turnIn) (turnOut, error) {
 	slot.turnMu.Lock()
 	defer slot.turnMu.Unlock()
 
-	st := newTurnState(sessionID)
+	st := newTurnState(ctx, sessionID)
 	slot.mu.Lock()
 	slot.active = st
 	slot.mu.Unlock()
@@ -134,7 +136,7 @@ func (p *plugin) turn(in turnIn) (turnOut, error) {
 	}, scheme, maxSteps)
 }
 
-func (p *plugin) cancel(in cancelIn) (cancelOut, error) {
+func (p *plugin) cancel(ctx context.Context, in cancelIn) (cancelOut, error) {
 	if in.SessionID == "" {
 		return cancelOut{}, errBadArguments("session_id is required")
 	}
@@ -148,10 +150,10 @@ func (p *plugin) cancel(in cancelIn) (cancelOut, error) {
 	active.markCancelled()
 	callID, turnID, stepID := active.cancelContext()
 	if callID != "" {
-		_, _ = p.sdk.Call("llm", "cancel", mustJSON(llmCancelIn{CallID: callID}))
+		_, _ = p.sdk.Call(ctx, "llm", "cancel", mustJSON(llmCancelIn{CallID: callID}))
 	}
 	if turnID != "" && stepID != "" {
-		_ = p.updateStream(streamSnapshot{
+		_ = p.updateStream(ctx, streamSnapshot{
 			SessionID: in.SessionID,
 			TurnID:    turnID,
 			StepID:    stepID,
@@ -163,8 +165,8 @@ func (p *plugin) cancel(in cancelIn) (cancelOut, error) {
 	return cancelOut{SessionID: in.SessionID, Cancelled: true}, nil
 }
 
-func (p *plugin) createSession(workspace string) (string, error) {
-	raw, err := p.sdk.Call("session", "create", mustJSON(sessionCreateIn{Workspace: workspace}))
+func (p *plugin) createSession(ctx context.Context, workspace string) (string, error) {
+	raw, err := p.sdk.Call(ctx, "session", "create", mustJSON(sessionCreateIn{Workspace: workspace}))
 	if err != nil {
 		return "", err
 	}
@@ -175,8 +177,8 @@ func (p *plugin) createSession(workspace string) (string, error) {
 	return out.SessionID, nil
 }
 
-func (p *plugin) appendFacts(sessionID string, facts []map[string]any) ([]int, error) {
-	raw, err := p.sdk.Call("session", "append", mustJSON(sessionAppendIn{SessionID: sessionID, Facts: facts}))
+func (p *plugin) appendFacts(ctx context.Context, sessionID string, facts []map[string]any) ([]int, error) {
+	raw, err := p.sdk.Call(ctx, "session", "append", mustJSON(sessionAppendIn{SessionID: sessionID, Facts: facts}))
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +187,8 @@ func (p *plugin) appendFacts(sessionID string, facts []map[string]any) ([]int, e
 	return out.Seqs, nil
 }
 
-func (p *plugin) assembleMessages(sessionID string) ([]chatMessage, error) {
-	raw, err := p.sdk.Call("session", "derive", mustJSON(map[string]string{"session_id": sessionID}))
+func (p *plugin) assembleMessages(ctx context.Context, sessionID string) ([]chatMessage, error) {
+	raw, err := p.sdk.Call(ctx, "session", "derive", mustJSON(map[string]string{"session_id": sessionID}))
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +199,11 @@ func (p *plugin) assembleMessages(sessionID string) ([]chatMessage, error) {
 	return out.Messages, nil
 }
 
-func (p *plugin) collectTools(scheme string, allowed []string) ([]toolSpec, []toolDefinition, error) {
+func (p *plugin) collectTools(ctx context.Context, scheme string, allowed []string) ([]toolSpec, []toolDefinition, error) {
 	if len(allowed) == 0 && scheme == schemeChat {
 		return nil, nil, nil
 	}
-	raw, err := p.sdk.Call("tools", "list", mustJSON(map[string]any{}))
+	raw, err := p.sdk.Call(ctx, "tools", "list", mustJSON(map[string]any{}))
 	if err != nil {
 		return nil, nil, nil // tools optional
 	}
@@ -233,12 +235,12 @@ func (p *plugin) collectTools(scheme string, allowed []string) ([]toolSpec, []to
 	return filtered, tools, nil
 }
 
-func (p *plugin) callTool(name, arguments, workspace, callID string) (string, error) {
+func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callID string) (string, error) {
 	args := json.RawMessage(arguments)
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
-	raw, err := p.sdk.Call("tools", "call", mustJSON(map[string]any{
+	raw, err := p.sdk.Call(ctx, "tools", "call", mustJSON(map[string]any{
 		"name":      name,
 		"arguments": args,
 		"workspace": workspace,
@@ -276,7 +278,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		if retErr == nil || !turnStarted {
 			return
 		}
-		s, appendErr := p.appendFacts(in.SessionID, []map[string]any{{
+		s, appendErr := p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 			"type": "turn_end", "role": "host",
 			"meta": appendMeta("", map[string]any{"reason": "error", "error": retErr.Error()}),
 		}})
@@ -286,7 +288,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		out.Seqs = seqs
 	}()
 
-	s, err := p.appendFacts(in.SessionID, []map[string]any{{
+	s, err := p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 		"type": "turn_start", "role": "host", "meta": appendMeta("", map[string]any{"workspace": in.Workspace}),
 	}})
 	if err != nil {
@@ -295,7 +297,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	turnStarted = true
 	seqs = append(seqs, s...)
 
-	s, err = p.appendFacts(in.SessionID, []map[string]any{{
+	s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 		"type": "message", "role": "user", "content": in.Input, "meta": appendMeta("", nil),
 	}})
 	if err != nil {
@@ -303,7 +305,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 	seqs = append(seqs, s...)
 
-	_, tools, err := p.collectTools(scheme, in.AllowedTools)
+	_, tools, err := p.collectTools(st.ctx, scheme, in.AllowedTools)
 	if err != nil {
 		return out, err
 	}
@@ -317,12 +319,12 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		stepID := fmt.Sprintf("%s-s%d", turnID, step)
 		st.setStepID(stepID)
 
-		msgs, err := p.assembleMessages(in.SessionID)
+		msgs, err := p.assembleMessages(st.ctx, in.SessionID)
 		if err != nil {
 			return out, err
 		}
 
-		s, err = p.appendFacts(in.SessionID, []map[string]any{
+		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{
 			{"type": "step_start", "role": "host", "meta": appendMeta(stepID, map[string]any{"step": step})},
 			{"type": "request_header", "role": "host", "meta": appendMeta(stepID, map[string]any{"step": step})},
 		})
@@ -358,7 +360,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 						return
 					}
 					if flushPolicy.observe(time.Now()) {
-						_ = p.updateStream(st.withNextUpdate(acc.snapshot(in.SessionID, turnID, stepID, "streaming")))
+						_ = p.updateStream(st.ctx, st.withNextUpdate(acc.snapshot(in.SessionID, turnID, stepID, "streaming")))
 					}
 				case <-stopStream:
 					return
@@ -368,7 +370,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 
 		result := make(chan llmRes, 1)
 		go func() {
-			raw, err := p.sdk.CallWithCallback("llm", "complete", mustJSON(llmIn), func(ev *event) {
+			raw, err := p.sdk.CallWithCallback(st.ctx, "llm", "complete", mustJSON(llmIn), func(ev *event) {
 				if !acc.apply(ev.Payload) {
 					return
 				}
@@ -405,14 +407,14 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			partial := acc.message()
 			out.Reply = partial.Content
 			if partial.Content != "" || partial.Reasoning != "" || len(partial.ToolCalls) > 0 {
-				_ = p.updateStream(st.withNextUpdate(streamSnapshot{
+				_ = p.updateStream(st.ctx, st.withNextUpdate(streamSnapshot{
 					SessionID: in.SessionID,
 					TurnID:    turnID,
 					StepID:    stepID,
 					Message:   partial,
 					Status:    "cancelled",
 				}))
-				s, err = p.appendFacts(in.SessionID, []map[string]any{{
+				s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 					"type": "message", "role": "assistant", "content": partial.Content,
 					"meta": appendMeta(stepID, map[string]any{"reasoning": partial.Reasoning}),
 				}})
@@ -420,7 +422,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 					seqs = append(seqs, s...)
 				}
 			}
-			s, err = p.appendFacts(in.SessionID, []map[string]any{{
+			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 				"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "cancelled"}),
 			}})
 			if err == nil {
@@ -436,7 +438,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			Reasoning: llmOut.Reasoning,
 			ToolCalls: llmOut.ToolCalls,
 		}
-		_ = p.updateStream(st.withNextUpdate(streamSnapshot{
+		_ = p.updateStream(st.ctx, st.withNextUpdate(streamSnapshot{
 			SessionID: in.SessionID,
 			TurnID:    turnID,
 			StepID:    stepID,
@@ -445,7 +447,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}))
 		addUsage(&out.Usage, llmOut.Usage)
 
-		s, err = p.appendFacts(in.SessionID, []map[string]any{
+		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{
 			{"type": "llm_usage", "role": "host", "meta": appendMeta(stepID, map[string]any{"usage": llmOut.Usage})},
 			{
 				"type": "message", "role": "assistant", "content": llmOut.Content,
@@ -459,7 +461,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		out.Reply = llmOut.Content
 
 		if len(llmOut.ToolCalls) == 0 {
-			s, err = p.appendFacts(in.SessionID, []map[string]any{{
+			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 				"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{"reason": "completed", "step": step}),
 			}})
 			if err != nil {
@@ -474,11 +476,11 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 				out.Cancelled = true
 				break
 			}
-			content, callErr := p.callTool(tc.Function.Name, tc.Function.Arguments, in.Workspace, tc.ID)
+			content, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.Workspace, tc.ID)
 			if callErr != nil {
 				content = "tool error: " + callErr.Error()
 			}
-			s, err = p.appendFacts(in.SessionID, []map[string]any{{
+			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 				"type": "message", "role": "tool", "content": content, "tool_call_id": tc.ID,
 				"meta": appendMeta(stepID, map[string]any{"tool_name": tc.Function.Name}),
 			}})
@@ -488,7 +490,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			seqs = append(seqs, s...)
 		}
 
-		s, err = p.appendFacts(in.SessionID, []map[string]any{{
+		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 			"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{"reason": "tool_calls", "step": step}),
 		}})
 		if err != nil {
@@ -497,7 +499,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		seqs = append(seqs, s...)
 
 		if step == maxSteps {
-			s, err = p.appendFacts(in.SessionID, []map[string]any{{
+			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 				"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "max_steps"}),
 			}})
 			if err != nil {
@@ -510,7 +512,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 
 	if out.Cancelled {
-		s, err = p.appendFacts(in.SessionID, []map[string]any{{
+		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 			"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "cancelled"}),
 		}})
 		if err != nil {
@@ -522,7 +524,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		if out.Steps >= maxSteps {
 			reason = "max_steps"
 		}
-		s, err = p.appendFacts(in.SessionID, []map[string]any{{
+		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 			"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": reason}),
 		}})
 		if err != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -9,7 +10,7 @@ type failingAgentSDK struct {
 	fakeAgentSDK
 }
 
-func (f *failingAgentSDK) CallWithCallback(capability, method string, payload json.RawMessage, callback func(*event)) (json.RawMessage, error) {
+func (f *failingAgentSDK) CallWithCallback(_ context.Context, capability, method string, payload json.RawMessage, callback func(*event)) (json.RawMessage, error) {
 	return nil, errHandler("llm_upstream: http 401")
 }
 
@@ -18,7 +19,7 @@ func TestTurnErrorWritesTerminalTurnEnd(t *testing.T) {
 	p := newPlugin()
 	p.sdk = sdk
 
-	out, err := p.turn(turnIn{Input: "hello", SessionID: "s1", MaxSteps: 2})
+	out, err := p.turn(context.Background(), turnIn{Input: "hello", SessionID: "s1", MaxSteps: 2})
 	if err == nil {
 		t.Fatal("turn error = nil")
 	}

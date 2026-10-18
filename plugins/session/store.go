@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,7 +23,7 @@ type store struct {
 }
 
 type sdkCaller interface {
-	Call(capability, method string, payload json.RawMessage) (json.RawMessage, error)
+	Call(ctx context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error)
 }
 
 type plugin struct {
@@ -245,7 +246,7 @@ func errHandler(msg string) error {
 }
 
 // create is agent-explicit only; never called from append. Idempotent.
-func (p *plugin) create(in createIn) (createOut, error) {
+func (p *plugin) create(ctx context.Context, in createIn) (createOut, error) {
 	id := in.SessionID
 	if id == "" {
 		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
@@ -283,12 +284,12 @@ func (p *plugin) create(in createIn) (createOut, error) {
 	p.reg[id] = st
 	p.mu.Unlock()
 
-	p.publishAfterCreate(id)
+	p.publishAfterCreate(ctx, id)
 	return createOut{SessionID: id, CreatedTimestamp: meta.CreatedTimestamp}, nil
 }
 
 // append never implicitly creates a session.
-func (p *plugin) append(in appendIn) (appendOut, error) {
+func (p *plugin) append(ctx context.Context, in appendIn) (appendOut, error) {
 	if len(in.Facts) == 0 {
 		return appendOut{}, errBadArguments("facts must be non-empty")
 	}
@@ -314,7 +315,7 @@ func (p *plugin) append(in appendIn) (appendOut, error) {
 			p.clearStream(st.id, meta.TurnID, meta.StepID)
 		}
 	}
-	p.publishAfterAppend(st.id)
+	p.publishAfterAppend(ctx, st.id)
 	return appendOut{SessionID: st.id, Seqs: seqs, NextSeq: next}, nil
 }
 

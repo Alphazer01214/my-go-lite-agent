@@ -1,6 +1,7 @@
 package pluginsdk
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -57,10 +58,10 @@ func TestDispatchUnknownMethod(t *testing.T) {
 
 func TestDispatchHandlerErrorAndOK(t *testing.T) {
 	p, _, outR := newPipePlugin(t)
-	p.Register("demo", "fail", NewHandler(func(req *Request) (json.RawMessage, error) {
+	p.Register("demo", "fail", NewHandler(func(_ context.Context, req *Request) (json.RawMessage, error) {
 		return nil, ErrCode("bad_arguments", "nope")
 	}))
-	p.Register("demo", "ok", NewHandler(func(req *Request) (json.RawMessage, error) {
+	p.Register("demo", "ok", NewHandler(func(_ context.Context, req *Request) (json.RawMessage, error) {
 		return json.RawMessage(`{"v":1}`), nil
 	}))
 
@@ -90,7 +91,7 @@ func TestDispatchHandlerErrorAndOK(t *testing.T) {
 
 func TestListenDispatchAndComplete(t *testing.T) {
 	p, inW, outR := newPipePlugin(t)
-	p.Register("demo", "echo", NewHandler(func(req *Request) (json.RawMessage, error) {
+	p.Register("demo", "echo", NewHandler(func(_ context.Context, req *Request) (json.RawMessage, error) {
 		return req.Payload, nil
 	}))
 
@@ -113,7 +114,7 @@ func TestListenDispatchAndComplete(t *testing.T) {
 
 	callDone := make(chan error, 1)
 	go func() {
-		_, err := p.Call("other", "go", json.RawMessage(`{}`))
+		_, err := p.Call(context.Background(), "other", "go", json.RawMessage(`{}`))
 		callDone <- err
 	}()
 
@@ -164,7 +165,7 @@ func TestCallWithCallback(t *testing.T) {
 	got := make(chan string, 4)
 	callDone := make(chan error, 1)
 	go func() {
-		payload, err := p.CallWithCallback("llm", "complete", json.RawMessage(`{}`), func(ev *Event) {
+		payload, err := p.CallWithCallback(context.Background(), "llm", "complete", json.RawMessage(`{}`), func(ev *Event) {
 			got <- ev.Method
 		})
 		if err != nil {
@@ -215,7 +216,7 @@ func TestUnattributedEventDoesNotCompleteCall(t *testing.T) {
 
 	callDone := make(chan error, 1)
 	go func() {
-		_, err := p.Call("other", "go", json.RawMessage(`{}`))
+		_, err := p.Call(context.Background(), "other", "go", json.RawMessage(`{}`))
 		callDone <- err
 	}()
 
@@ -254,7 +255,7 @@ func TestFailUnblocksCall(t *testing.T) {
 
 	callDone := make(chan error, 1)
 	go func() {
-		_, err := p.Call("other", "go", json.RawMessage(`{}`))
+		_, err := p.Call(context.Background(), "other", "go", json.RawMessage(`{}`))
 		callDone <- err
 	}()
 
@@ -282,7 +283,7 @@ func TestFailUnblocksCall(t *testing.T) {
 
 func TestListRegisteredAndInfo(t *testing.T) {
 	p := NewPlugin("tester")
-	p.Register("demo", "echo", NewHandler(func(req *Request) (json.RawMessage, error) {
+	p.Register("demo", "echo", NewHandler(func(_ context.Context, req *Request) (json.RawMessage, error) {
 		return req.Payload, nil
 	}).WithInfo("Echo", "echoes payload"))
 
@@ -321,7 +322,7 @@ func (e *wrapErr) Unwrap() error { return e.inner }
 
 func TestDispatchExposesContextID(t *testing.T) {
 	p, _, outR := newPipePlugin(t)
-	p.Register("demo", "echo", NewHandler(func(req *Request) (json.RawMessage, error) {
+	p.Register("demo", "echo", NewHandler(func(_ context.Context, req *Request) (json.RawMessage, error) {
 		if req.ContextID != "ctx-in" {
 			t.Fatalf("request context = %q", req.ContextID)
 		}
@@ -350,7 +351,7 @@ func TestCallInContextPreservesContextID(t *testing.T) {
 	}
 	result := make(chan callResult, 1)
 	go func() {
-		payload, err := p.CallWithCallbackInContext("ctx-out", "demo", "run", json.RawMessage(`{}`), func(event *Event) {
+		payload, err := p.CallWithCallbackInContext(context.Background(), "ctx-out", "demo", "run", json.RawMessage(`{}`), func(event *Event) {
 			if event.ContextID != "ctx-out" {
 				t.Errorf("event context = %q", event.ContextID)
 			}

@@ -29,7 +29,7 @@ type Request struct {
     Payload    json.RawMessage
 }
 
-type HandleFunc func(req *Request) (json.RawMessage, error)
+type HandleFunc func(ctx context.Context, req *Request) (json.RawMessage, error)
 
 type Handler struct {
     Name        string
@@ -62,20 +62,46 @@ handler 返回：
 
 ```go
 Call(
+    ctx context.Context,
     capability string,
     method string,
     payload json.RawMessage,
 ) (json.RawMessage, error)
 ```
 
-Call 同步发起 Request，并等待同 id 的 Response。
+Call 同步发起 Request，并等待同 id 的 Response。`ctx` 不能为 `nil`。
 
-Call 不指定目标插件。Host 按 `(capability, method)` 路由。
+嵌套 Call 必须传递 Handler 收到的同一个 `ctx`。Context 取消会发送 `cancel` Frame，并等待原 Request 的唯一终态。普通取消返回 `call_cancelled`。超过期限返回 `call_deadline_exceeded`。
+
+Call 不指定目标插件。Host 按 `(capability, method)` 路由。`priority` 由 Host 管理，插件不能指定下一跳。
+
+`CallInContext` 在 Go Context 之外再指定 Host Execution Context：
+
+```go
+CallInContext(
+    ctx context.Context,
+    contextID string,
+    capability string,
+    method string,
+    payload json.RawMessage,
+) (json.RawMessage, error)
+```
+
+Go Context 控制 Call 的等待和期限。`contextID` 只选择 Host 的 Plugin Instance。
+
+`Request.Proceed` 继续 Frame Priority 流水线：
+
+```go
+result, err := req.Proceed(ctx, payload)
+```
+
+每个 Request 最多调用一次 `Proceed`。重复调用返回 `flow_already_proceeded`。`Proceed` 只把结果交给下一跳，不暴露 Host 内部路由。
 
 ## 4. CallWithCallback
 
 ```go
 CallWithCallback(
+    ctx context.Context,
     capability string,
     method string,
     payload json.RawMessage,
@@ -159,9 +185,8 @@ func (u *WebUI) SendCommand(mountID string, command string, payload json.RawMess
 
 当前 v1 不提供：
 
-- Call 超时；
-- Context 取消；
 - 通用广播扇出；
+- 插件自定义 Priority；
 - 按插件名寻址；
 - 异步 Call；
 - 插件 shutdown Frame。

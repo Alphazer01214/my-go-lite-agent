@@ -1,6 +1,7 @@
 package host
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestCallWithEventsReturnsResponse(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		frame, err := h.CallWithEvents("webui", "llm", "complete",
+		frame, err := h.CallWithEvents(context.Background(), "webui", "llm", "complete",
 			mustJSON(map[string]string{"prompt": "hi"}), nil)
 		done <- result{frame: frame, err: err}
 	}()
@@ -71,7 +72,7 @@ func TestCallWithEventsPreservesEventOrder(t *testing.T) {
 	events := make(chan *Frame, 3)
 	done := make(chan *Frame, 1)
 	go func() {
-		frame, _ := h.CallWithEvents("webui", "loop", "turn", mustJSON(map[string]string{}),
+		frame, _ := h.CallWithEvents(context.Background(), "webui", "loop", "turn", mustJSON(map[string]string{}),
 			func(frame *Frame) {
 				events <- frame
 			})
@@ -131,7 +132,7 @@ func TestCallWithEventsRejectsInvalidAndHostCalls(t *testing.T) {
 		{name: "unknown route", from: "webui", capability: "ghost", method: "run", want: ErrMethodNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			frame, err := h.CallWithEvents(test.from, test.capability, test.method, mustJSON(map[string]string{}), nil)
+			frame, err := h.CallWithEvents(context.Background(), test.from, test.capability, test.method, mustJSON(map[string]string{}), nil)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
@@ -155,7 +156,7 @@ func TestCallWithEventsReturnsPluginDownResponse(t *testing.T) {
 
 	done := make(chan *Frame, 1)
 	go func() {
-		frame, err := h.CallWithEvents("webui", "llm", "complete", mustJSON(map[string]string{}), nil)
+		frame, err := h.CallWithEvents(context.Background(), "webui", "llm", "complete", mustJSON(map[string]string{}), nil)
 		if err != nil {
 			t.Errorf("CallWithEvents: %v", err)
 		}
@@ -181,7 +182,7 @@ func TestCallWithEventsAllowsNilEventCallback(t *testing.T) {
 
 	done := make(chan *Frame, 1)
 	go func() {
-		frame, err := h.CallWithEvents("webui", "loop", "turn", mustJSON(map[string]string{}), nil)
+		frame, err := h.CallWithEvents(context.Background(), "webui", "loop", "turn", mustJSON(map[string]string{}), nil)
 		if err != nil {
 			t.Errorf("CallWithEvents: %v", err)
 		}

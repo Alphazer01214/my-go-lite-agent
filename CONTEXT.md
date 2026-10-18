@@ -24,7 +24,7 @@ Execution Context 是 Host 管理的通用调度范围。它记录根、父级�
 
 ### Config Revision
 
-Config Revision 是配置快照的不透明版本标识。Host 只传递和追踪 Config Revision，不读取插件配置内容。Plugin Instance 在创建时固定配置代。Execution Context 通过实例绑定间接固定配置。
+Config Revision 是配置快照的不透明版本标识。Host 只传递和追踪 Config Revision，不读取插件配置内容。Plugin Instance 在创建时固定配置代。Execution Context 通过实例绑定间接固定配置和 Generation。
 
 ### Capability
 

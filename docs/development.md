@@ -112,12 +112,13 @@ Outbound Call
 
 | 类型 | 字段或职责 |
 |---|---|
-| `Manifest` | name、version、protocol、entry、能力、依赖、commands、UI |
+| `Manifest` | name、version、protocol、entry、priority、能力、依赖、consumes、commands、UI |
 | `UIManifest` | UI 静态贡献 |
 | `UIComponent` | Component 和 Mount 声明 |
 | `SettingsManifest` | Settings 调用地址和表单声明 |
 | `SettingsMethod` | Settings Capability Call 地址 |
 | `SettingsField` | 单个 Settings 表单字段 |
+| `ConsumesMethod` | Consumer 参与的 `(capability, method)` |
 | `Command` | 命令帮助信息 |
 | `Discoveries` | 扫描结果和诊断 |
 | `Discovery` | 插件目录与 Manifest |
@@ -130,10 +131,12 @@ Manifest 的目标 Schema 见 [manifest.md](manifest.md)。
 | 类型 | 字段或职责 |
 |---|---|
 | `Host` | Plugin Instance 索引、执行上下文、路由表、pending、关闭状态 |
-| `proc` | Plugin Instance 进程、stdio、代际、配置代、健康状态 |
+| `proc` | Plugin Instance 进程、stdio、代际、配置代、生命周期和注册项 |
 | `wait` | caller、target、context_id、原 id、Event 回调 |
 | `ExecutionContext` | 根、父级、Capability 绑定、参与者 |
-| `PluginInstanceSnapshot` | 实例标识、插件名、配置代、状态、代际 |
+| `ContextBinding` | Capability、Plugin Instance 和固定 Generation |
+| `PluginInstanceSnapshot` | 实例标识、插件名、配置代、五态状态、代际、注册项和失败信息 |
+| `PluginSnapshot` | 按插件名分组的实例列表和默认展示实例 |
 | `CallResult` | Response 与归因 Events |
 | `TraceFunc` | Frame 观测回调 |
 
@@ -204,7 +207,7 @@ sequenceDiagram
 
 Host 改写 id，并保留调用方原始 id。Response 到达后，pending 项删除。
 
-存在 `context_id` 时，Host 先校验调用方是上下文参与者。Capability 绑定决定目标 Plugin Instance。Response 和归因 Event 保留同一执行上下文。
+存在 `context_id` 时，Host 先校验调用方是上下文参与者。Capability 绑定决定目标 Plugin Instance 和 Generation。Generation 不一致时拒绝调用。Response 和归因 Event 保留同一执行上下文。
 
 ### 5.2 Event
 
@@ -284,7 +287,7 @@ GET  /bridge/ui
 
 `POST /bridge/call` 返回 NDJSON Event 和最终 Response。`GET /bridge/ui` 接收 State、Command 和 Diagnostic。
 
-浏览器断开后，后端 Call 仍继续执行。未发送的 Event 和 Response 被丢弃。取消业务必须使用插件显式取消方法。
+浏览器断开后，HTTP Request Context 会取消后端 Call。Host 为原 Request 保留唯一终态。未发送的 Event 和 Response 被丢弃。
 
 Browser Envelope 见 [webui.md](webui.md)。
 

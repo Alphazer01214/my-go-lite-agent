@@ -10,6 +10,8 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
+const BrowserVersion = 1
+
 type browserCall struct {
 	Version    int             `json:"version"`
 	ID         string          `json:"id"`
@@ -49,8 +51,8 @@ func decodeBrowserCall(reader io.Reader) (browserCall, error) {
 		return browserCall{}, fmt.Errorf("decode browser call trailing data: %w", err)
 	}
 
-	if raw.Version != protocol.FrameVersion {
-		return browserCall{}, fmt.Errorf("browser call version must be %d", protocol.FrameVersion)
+	if raw.Version != BrowserVersion {
+		return browserCall{}, fmt.Errorf("browser call version must be %d", BrowserVersion)
 	}
 	if raw.ID == "" {
 		return browserCall{}, errors.New("browser call id is required")
@@ -98,6 +100,7 @@ func browserFrame(source *protocol.Frame, requestID string) (*protocol.Frame, er
 	}
 
 	out := *source
+	out.Version = BrowserVersion
 	out.ID = requestID
 	out.Payload = append(json.RawMessage(nil), source.Payload...)
 	return &out, nil

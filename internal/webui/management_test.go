@@ -53,7 +53,7 @@ func TestPluginRescanRefreshesRegistry(t *testing.T) {
 	manager := &fakePluginLifecycle{
 		discoveries: plugin.Discoveries{Plugins: []plugin.Discovery{next}},
 		states: []host.PluginSnapshot{
-			{Name: "new", State: host.PluginStateAvailable, Enabled: true},
+			{Name: "new", State: host.ProviderStateInactive, Enabled: true},
 		},
 	}
 	server := NewServer(mustRegistry(t, plugin.Discoveries{Plugins: []plugin.Discovery{old}}), nil)
@@ -77,7 +77,7 @@ func TestPluginRescanRefreshesRegistry(t *testing.T) {
 }
 
 func TestPluginStartStopReturnsBootstrap(t *testing.T) {
-	manager := &fakePluginLifecycle{states: []host.PluginSnapshot{{Name: "demo", State: host.PluginStateMounted, Enabled: true}}}
+	manager := &fakePluginLifecycle{states: []host.PluginSnapshot{{Name: "demo", State: host.ProviderStateActive, Enabled: true}}}
 	server := NewServer(nil, nil)
 	server.SetPluginManager(manager)
 

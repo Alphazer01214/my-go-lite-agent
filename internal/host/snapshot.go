@@ -2,58 +2,65 @@ package host
 
 import (
 	"sort"
-
-	"github.com/tomori/my-go-lite-agent/internal/plugin"
 )
 
-type pluginProcessState struct {
-	healthy bool
-}
-
-// PluginSnapshot is the management-plane view of one discovered or referenced plugin.
-// It intentionally contains only lifecycle and static manifest metadata, never local paths.
+// PluginSnapshot is one plugin-name group with all current Provider instances.
+// State and SelectedInstanceID describe the deterministic default display.
 type PluginSnapshot struct {
-	Name      string   `json:"name"`
-	Version   string   `json:"version,omitempty"`
-	State     string   `json:"state"`
-	Enabled   bool     `json:"enabled"`
-	Provides  []string `json:"provides,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
+	Name               string                   `json:"name"`
+	Version            string                   `json:"version,omitempty"`
+	State              string                   `json:"state"`
+	SelectedInstanceID string                   `json:"selected_instance_id,omitempty"`
+	Instances          []PluginInstanceSnapshot `json:"instances,omitempty"`
+	Enabled            bool                     `json:"enabled"`
+	Missing            bool                     `json:"missing,omitempty"`
+	Provides           []string                 `json:"provides,omitempty"`
+	DependsOn          []string                 `json:"depends_on,omitempty"`
 }
 
-// PluginSnapshot returns deterministic plugin lifecycle state for host.plugins and WebUI Bootstrap.
+func selectProviderInstance(items []PluginInstanceSnapshot) (string, string) {
+	if len(items) == 0 {
+		return "", ProviderStateInactive
+	}
+	priority := map[string]int{
+		ProviderStateActive:   0,
+		ProviderStateFailed:   1,
+		ProviderStateLoading:  2,
+		ProviderStateStopping: 3,
+		ProviderStateInactive: 4,
+	}
+	best := items[0]
+	for _, item := range items[1:] {
+		if priority[item.State] < priority[best.State] {
+			best = item
+			continue
+		}
+		if priority[item.State] == priority[best.State] && item.InstanceID < best.InstanceID {
+			best = item
+		}
+	}
+	return best.InstanceID, best.State
+}
+
+// PluginSnapshot returns deterministic plugin-name groups for host.plugins and WebUI.
 func (h *Host) PluginSnapshot() []PluginSnapshot {
 	h.mu.RLock()
 	discoveries := h.discoveries
-	processes := make(map[string]pluginProcessState, len(h.plugins))
-	for instanceID, proc := range h.plugins {
-		name := instanceID
-		if proc != nil && proc.pluginName != "" {
-			name = proc.pluginName
+	instances := make(map[string][]PluginInstanceSnapshot, len(h.plugins))
+	for _, p := range h.plugins {
+		if p == nil || p.pluginName == "" {
+			continue
 		}
-		state := processes[name]
-		if proc != nil && proc.healthy {
-			state.healthy = true
-		}
-		processes[name] = state
+		instances[p.pluginName] = append(instances[p.pluginName], instanceSnapshot(p))
 	}
 	disabled := make(map[string]bool, len(h.disabled))
-	stopped := make(map[string]bool, len(h.stopped))
-	startupPlanned := make(map[string]bool, len(h.startupPlanned))
 	for name, value := range h.disabled {
 		disabled[name] = value
 	}
-	for name, value := range h.stopped {
-		stopped[name] = value
-	}
-	for name, value := range h.startupPlanned {
-		startupPlanned[name] = value
-	}
 	h.mu.RUnlock()
 
-	ordered, _ := plugin.AutostartClosure(discoveries)
-	for _, discovery := range ordered {
-		startupPlanned[discovery.Manifest.Name] = true
+	for _, items := range instances {
+		sort.Slice(items, func(i, j int) bool { return items[i].InstanceID < items[j].InstanceID })
 	}
 
 	seen := make(map[string]struct{}, len(discoveries.Plugins))
@@ -73,28 +80,17 @@ func (h *Host) PluginSnapshot() []PluginSnapshot {
 			referenced[dependency] = struct{}{}
 		}
 
-		state := PluginStateAvailable
-		enabled := !disabled[manifest.Name]
-		_, processExists := processes[manifest.Name]
-		plannedToStart := startupPlanned[manifest.Name]
-		switch {
-		case !enabled:
-			state = PluginStateDisabled
-		case processes[manifest.Name].healthy:
-			state = PluginStateMounted
-		case stopped[manifest.Name]:
-			state = PluginStateAvailable
-		case processExists || plannedToStart:
-			state = PluginStateDegraded
-		}
-
+		providerInstances := instances[manifest.Name]
+		selectedID, state := selectProviderInstance(providerInstances)
 		items = append(items, PluginSnapshot{
-			Name:      manifest.Name,
-			Version:   manifest.Version,
-			State:     state,
-			Enabled:   enabled,
-			Provides:  append([]string(nil), manifest.Provides...),
-			DependsOn: append([]string(nil), manifest.DependsOn...),
+			Name:               manifest.Name,
+			Version:            manifest.Version,
+			State:              state,
+			SelectedInstanceID: selectedID,
+			Instances:          append([]PluginInstanceSnapshot(nil), providerInstances...),
+			Enabled:            !disabled[manifest.Name],
+			Provides:           append([]string(nil), manifest.Provides...),
+			DependsOn:          append([]string(nil), manifest.DependsOn...),
 		})
 	}
 
@@ -104,13 +100,12 @@ func (h *Host) PluginSnapshot() []PluginSnapshot {
 		}
 		items = append(items, PluginSnapshot{
 			Name:    name,
-			State:   PluginStateMissing,
+			State:   ProviderStateInactive,
 			Enabled: true,
+			Missing: true,
 		})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Name < items[j].Name
-	})
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items
 }

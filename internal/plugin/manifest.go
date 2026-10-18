@@ -17,13 +17,20 @@ type Manifest struct {
 	Autostart   bool   `json:"autostart,omitempty"`
 	Entry       string `json:"entry"`
 
-	Provides  []string `json:"provides,omitempty"`
-	Requires  []string `json:"requires,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
+	Priority  int              `json:"priority,omitempty"`
+	Provides  []string         `json:"provides,omitempty"`
+	Requires  []string         `json:"requires,omitempty"`
+	DependsOn []string         `json:"depends_on,omitempty"`
+	Consumes  []ConsumesMethod `json:"consumes,omitempty"`
 
 	Commands []Command         `json:"commands,omitempty"`
 	UI       *UIManifest       `json:"ui,omitempty"`
 	Settings *SettingsManifest `json:"settings,omitempty"`
+}
+
+type ConsumesMethod struct {
+	Capability string `json:"capability"`
+	Method     string `json:"method"`
 }
 
 type UIManifest struct {
@@ -72,8 +79,8 @@ type Command struct {
 
 var manifestFields = map[string]struct{}{
 	"name": {}, "version": {}, "protocol": {}, "description": {},
-	"autostart": {}, "entry": {}, "provides": {}, "requires": {},
-	"depends_on": {}, "commands": {}, "ui": {}, "settings": {},
+	"autostart": {}, "entry": {}, "priority": {}, "provides": {}, "requires": {},
+	"depends_on": {}, "consumes": {}, "commands": {}, "ui": {}, "settings": {},
 }
 
 var (

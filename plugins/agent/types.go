@@ -1,30 +1,111 @@
 package main
 
-import (
-	"encoding/json"
+import "encoding/json"
 
-	"github.com/tomori/my-go-lite-agent/contracts"
-)
+type usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
 
-// Compatibility aliases keep existing plugin-local names while the shared JSON
-// shape remains owned by contracts/core-plugin-contracts.schema.json.
-type (
-	turnIn         = contracts.TurnInput
-	turnOut        = contracts.TurnOutput
-	cancelIn       = contracts.CancelInput
-	cancelOut      = contracts.CancelOutput
-	usage          = contracts.Usage
-	chatMessage    = contracts.ChatMessage
-	toolCall       = contracts.ToolCall
-	toolDefinition = contracts.ToolDefinition
-	toolFunction   = contracts.ToolFunction
-	llmCompleteIn  = contracts.LLMCompleteInput
-	llmCompleteOut = contracts.LLMCompleteOutput
-	llmCancelIn    = contracts.LLMCancelInput
-	llmCancelOut   = contracts.LLMCancelOutput
-	streamMessage  = contracts.StreamMessage
-	streamSnapshot = contracts.StreamSnapshot
-)
+type functionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type toolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function functionCall `json:"function"`
+}
+
+type toolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type toolDefinition struct {
+	Type     string       `json:"type"`
+	Function toolFunction `json:"function"`
+}
+
+type chatMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type llmCompleteIn struct {
+	CallID      string           `json:"call_id,omitempty"`
+	Messages    []chatMessage    `json:"messages"`
+	Tools       []toolDefinition `json:"tools,omitempty"`
+	Model       string           `json:"model,omitempty"`
+	Temperature *float64         `json:"temperature,omitempty"`
+	MaxTokens   int              `json:"max_tokens,omitempty"`
+	Stream      *bool            `json:"stream,omitempty"`
+}
+
+type llmCompleteOut struct {
+	Content      string     `json:"content"`
+	Reasoning    string     `json:"reasoning,omitempty"`
+	ToolCalls    []toolCall `json:"tool_calls,omitempty"`
+	FinishReason string     `json:"finish_reason"`
+	Usage        usage      `json:"usage"`
+}
+
+type llmCancelIn struct {
+	CallID string `json:"call_id"`
+}
+
+type llmCancelOut struct {
+	CallID    string `json:"call_id"`
+	Cancelled bool   `json:"cancelled"`
+}
+
+type streamMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitempty"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type streamSnapshot struct {
+	SessionID string        `json:"session_id"`
+	TurnID    string        `json:"turn_id"`
+	StepID    string        `json:"step_id"`
+	UpdateID  int           `json:"update_id"`
+	Message   streamMessage `json:"message"`
+	Status    string        `json:"status"`
+}
+
+type turnIn struct {
+	Input        string   `json:"input"`
+	SessionID    string   `json:"session_id,omitempty"`
+	Workspace    string   `json:"workspace,omitempty"`
+	MaxSteps     int      `json:"max_steps,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+}
+
+type turnOut struct {
+	SessionID string `json:"session_id"`
+	Reply     string `json:"reply"`
+	Steps     int    `json:"steps"`
+	Cancelled bool   `json:"cancelled"`
+	Usage     usage  `json:"usage"`
+	Seqs      []int  `json:"seqs"`
+}
+
+type cancelIn struct {
+	SessionID string `json:"session_id"`
+}
+
+type cancelOut struct {
+	SessionID string `json:"session_id"`
+	Cancelled bool   `json:"cancelled"`
+}
 
 func addUsage(dst *usage, src usage) {
 	dst.PromptTokens += src.PromptTokens

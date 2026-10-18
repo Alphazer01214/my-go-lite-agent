@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/tomori/my-go-lite-agent/contracts"
 )
 
 const (
@@ -71,8 +69,11 @@ type upstreamDelta struct {
 // emitFunc delivers one marshaled chunk payload (attributed evt).
 type emitFunc func(payload json.RawMessage) error
 
-func (p *plugin) complete(in completeIn, emit emitFunc) (completeOut, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (completeOut, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	p.registerCall(in.CallID, cancel)
 	defer p.finishCall(in.CallID)
@@ -232,7 +233,7 @@ func (p *plugin) completeStream(ctx context.Context, cfg config, req upstreamReq
 					Index:   tc.Index,
 					ID:      tc.ID,
 					Type:    tc.Type,
-					Function: contracts.FunctionCall{
+					Function: functionCall{
 						Name:      tc.Function.Name,
 						Arguments: tc.Function.Arguments,
 					},
