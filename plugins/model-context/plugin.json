@@ -1,0 +1,12 @@
+{
+  "name": "model-context",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "model-context",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["model-context"],
+  "requires": ["session", "tools"],
+  "depends_on": ["session", "tools"],
+  "description": "Model Context assembly, snapshot and deterministic compaction"
+}

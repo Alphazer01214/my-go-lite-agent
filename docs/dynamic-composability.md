@@ -16,7 +16,7 @@
 | Context Call | 已实现 |
 | Cancel Frame | 已实现 |
 | Frame Priority 流水线 | 已实现 |
-| 新插件 | 待实现 |
+| Tool 与 Model Context 插件 | 已实现 |
 
 ### 1.2 概念预算
 
@@ -391,6 +391,7 @@ Frame Priority 切片完成本节验收。
 | `file-tools` | 文件操作 |
 | `shell-tools` | Shell 操作 |
 | `web-tools` | 搜索和网页读取 |
+| `subagent` | 同步子 Agent 编排 |
 
 不预先创建 `skills`、`mcp`、`memory`、`telemetry` 或 `browser-tools` 插件。
 
@@ -613,6 +614,6 @@ Sandbox 可以允许、修改、拒绝或转为待确认状态。它不负责实
 | 8 | Tool Provider | file、shell、web |
 | 9 | Sandbox | 高危 Frame 消费 |
 
-下一轮从第 6 项 Tools 开始。
+第 6 至第 9 项已形成可运行实现。后续工作集中在搜索、后台 Shell、下载和更细的权限确认。
 
 实现时一次只完成一个可验收切片。每个切片完成后运行 `go test ./...`，并同步更新对应平台文档。

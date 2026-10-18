@@ -16,6 +16,7 @@ import (
 // Request is one inbound Host req delivered to a handler.
 type Request struct {
 	ID          string
+	From        string
 	ContextID   string
 	Capability  string
 	Method      string
@@ -287,6 +288,7 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 	} else {
 		req := &Request{
 			ID:         frame.ID,
+			From:       frame.From,
 			ContextID:  frame.ContextID,
 			Capability: frame.Capability,
 			Method:     frame.Method,

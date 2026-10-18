@@ -23,6 +23,7 @@ return p.Serve()
 ```go
 type Request struct {
     ID         string
+    From       string
     ContextID  string
     Capability string
     Method     string
@@ -51,6 +52,8 @@ p.Register(
 ```
 
 路由键是 `capability.method`。同插件重复注册同键时，最后一次生效。
+
+`From` 是 Host 注入的真实插件来源。它只用于身份和溯源，不参与路由。插件不能通过 payload 伪造该字段。
 
 handler 返回：
 

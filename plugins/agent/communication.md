@@ -25,7 +25,11 @@
   "session_id": "s-123",
   "workspace": "E:/project",
   "max_steps": 32,
-  "allowed_tools": ["read_file"]
+  "allowed_tools": ["file_read"],
+  "denied_tools": ["shell_execute"],
+  "parent_session_id": "s-parent",
+  "origin": "subagent",
+  "delegation_depth": 1
 }
 ```
 
@@ -36,6 +40,10 @@
 | `workspace` | 否 | 工具工作目录 |
 | `max_steps` | 否 | 覆盖配置值 |
 | `allowed_tools` | 否 | 非空时只保留交集工具 |
+| `denied_tools` | 否 | 从交集或全集中移除工具 |
+| `parent_session_id` | 否 | 子 Agent 的父 Session |
+| `origin` | 否 | Session 来源，例如 `subagent` |
+| `delegation_depth` | 否 | 委派深度 |
 
 ### Response
 
@@ -109,12 +117,12 @@ flowchart LR
     A -->|session.append| S
     A -->|session.derive| S
     A -->|session.stream.update| S
-    A -->|llm.complete| L
-  A -->|llm.cancel| L[llm-openai]
-    A -.->|tools.list/call| T[tools plugins]
+    A -->|model-context.build| M[model-context]
+    A -->|llm.complete/cancel| L[llm-openai]
+    A -.->|tools.list/call| T[tools]
 ```
 
-最小组合直接使用 `session.derive`。工具插件缺失时跳过工具阶段。
+`model-context` 缺失时 Agent 回退到 `session.derive` 和 `tools.list`。`tools` 缺失时跳过工具阶段。
 
 ## 6. Session Fact 序列
 
@@ -196,7 +204,7 @@ Agent 没有顶层 Component。Agent 不直接调用 `setData` 或 `runCommand`�
 | `input` 为空 | `bad_arguments` |
 | Session 创建或写入失败 | 返回错误 |
 | LLM 调用失败 | 返回 `llm_upstream` 或下游错误 |
-| 工具失败 | 写 tool error，继续 Turn |
+| 工具失败 | 写 tool error 和 `is_error`，继续 Turn |
 | 达到 `max_steps` | 写 `turn_end(max_steps)` |
 | 取消 | 中止 LLM Call，并写 `turn_end(cancelled)` |
 | 插件退出 | Host 合成 `plugin_down`；Session 可补写 `turn_end(error)` |

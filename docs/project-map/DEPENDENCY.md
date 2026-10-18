@@ -11,8 +11,23 @@ flowchart LR
   Host -->|routes| Agent["agent (plugin) ::plugins/agent/main.go:54"]
   Host -->|routes| Session["session (plugin) ::plugins/session/main.go:56"]
   Host -->|routes| LLM["llm-openai (plugin) ::plugins/llm-openai/main.go:54"]
+  Host -->|routes| Tools["tools (plugin) ::plugins/tools/main.go:33"]
+  Host -->|routes| Context["model-context (plugin) ::plugins/model-context/main.go:34"]
+  Host -->|pipeline| Sandbox["sandbox (plugin) ::plugins/sandbox/main.go:23"]
+  Host -->|routes| File["file-tools (plugin) ::plugins/file-tools/main.go:28"]
+  Host -->|routes| Shell["shell-tools (plugin) ::plugins/shell-tools/main.go:37"]
+  Host -->|routes| Web["web-tools (plugin) ::plugins/web-tools/main.go:17"]
+  Host -->|routes| Subagent["subagent (plugin) ::plugins/subagent/main.go:24"]
   Agent -->|depends_on| Session
   Agent -->|depends_on| LLM
+  Agent -->|depends_on| Tools
+  Agent -->|depends_on| Context
+  Context -->|depends_on| Tools
+  File -->|depends_on| Tools
+  Shell -->|depends_on| Tools
+  Web -->|depends_on| Tools
+  Sandbox -->|consumes| Tools
+  Subagent -->|depends_on| Agent
   Session -->|publishes ui.state| Host
   Agent -->|publishes session stream| Session
 ```
@@ -26,7 +41,11 @@ flowchart LR
   Call -->|loop.turn| Turn["turn (method) ::plugins/agent/turn.go:93"]
   Turn -->|session.create| Create["create (method) ::plugins/session/store.go:204"]
   Turn -->|session.append| Append["append (method) ::plugins/session/store.go:247"]
-  Turn -->|session.derive| Derive["derive (method) ::plugins/session/store.go:379"]
+  Turn -->|model-context.build| Build["build (method) ::plugins/model-context/builder.go:52"]
+  Build -->|session.derive| Derive["derive (method) ::plugins/session/store.go:379"]
+  Build -->|tools.list| List["list (method) ::plugins/tools/main.go:127"]
+  Turn -->|tools.call| ToolCall["call (method) ::plugins/tools/main.go:136"]
+  ToolCall -->|target method| Provider["Tool Provider"]
   Turn -->|llm.complete| Complete["complete (method) ::plugins/llm-openai/openai.go:71"]
   Complete -->|llm.chunk| Accumulate["streamAccumulator.apply (method) ::plugins/agent/stream.go:81"]
   Accumulate -->|session.stream.update| Update["updateStream (method) ::plugins/session/ui_state.go:86"]
@@ -57,9 +76,17 @@ flowchart LR
 
 ```mermaid
 flowchart BT
+  Tools["tools (plugin) ::plugins/tools/main.go:33"] --> Context["model-context (plugin) ::plugins/model-context/main.go:34"]
+  Tools --> File["file-tools (plugin) ::plugins/file-tools/main.go:28"]
+  Tools --> Shell["shell-tools (plugin) ::plugins/shell-tools/main.go:37"]
+  Tools --> Web["web-tools (plugin) ::plugins/web-tools/main.go:17"]
+  Tools --> Sandbox["sandbox (plugin) ::plugins/sandbox/main.go:23"]
+  Context --> Agent["agent (plugin) ::plugins/agent/main.go:54"]
   Session["session (plugin) ::plugins/session/main.go:56"] --> Agent["agent (plugin) ::plugins/agent/main.go:54"]
   LLM["llm-openai (plugin) ::plugins/llm-openai/main.go:54"] --> Agent
+  Agent --> Subagent["subagent (plugin) ::plugins/subagent/main.go:24"]
   Scan["AutostartClosure (fn) ::internal/plugin/mount.go:8"] -->|DFS post-order| Session
+  Scan -->|DFS post-order| Tools
   Scan -->|DFS post-order| LLM
   Scan -->|then| Agent
 ```
@@ -86,6 +113,11 @@ flowchart LR
 | Host → Plugin | 装载、路由、pending | `internal/host/` |
 | Agent → Session | `depends_on` 与调用 | `plugins/agent/plugin.json` |
 | Agent → LLM | `depends_on` 与调用 | `plugins/agent/plugin.json` |
+| Agent → Tools | `depends_on`、`tools.list/call` | `plugins/agent/plugin.json` |
+| Agent → Model Context | `depends_on`、`model-context.build` | `plugins/agent/plugin.json` |
+| Tool Provider → Tools | 启动依赖与 `tools.register` | `plugins/*-tools/plugin.json` |
+| Sandbox → Tool Call | Pipeline Consumer | `plugins/sandbox/plugin.json` |
+| Subagent → Agent | `depends_on`、`agent.loop.turn` | `plugins/subagent/plugin.json` |
 | LLM → Agent | `llm.chunk` 归因事件 | `plugins/llm-openai/main.go:60` |
 | Session → WebUI | UI State、Command | `internal/webui/publisher.go:147` |
 | WebUI → Host | Browser Call | `internal/webui/bridge.go:23` |

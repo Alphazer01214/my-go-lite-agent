@@ -9,6 +9,13 @@
 | `agent` | 当前实现 | Turn、Step、工具循环、取消 |
 | `llm-openai` | 当前实现 | OpenAI-compatible Completion |
 | `session` | 当前实现 | Session Fact Log 和投影 |
+| `model-context` | 当前实现 | Model Context 构建、Snapshot 和压缩 |
+| `tools` | 当前实现 | Tool 注册、发现和分发 |
+| `sandbox` | 当前实现 | 高危 Frame 策略检查 |
+| `file-tools` | 当前实现 | Workspace 文件读写与搜索 |
+| `shell-tools` | 当前实现 | 同步进程执行和取消 |
+| `web-tools` | 当前实现 | SSRF 安全的 HTTP Fetch |
+| `subagent` | 当前实现 | 同步子 Agent 编排 |
 
 ## 2. 跨插件通信
 
@@ -41,24 +48,33 @@
 
 `agent` 只提供 Settings。`llm-openai` 只提供 Settings。两者不直接渲染聊天正文。
 
-## 5. 最小组合
+## 5. 完整组合
 
-当前最小运行组合是：
+当前完整运行组合是：
 
 ```text
-agent + llm-openai + session
+tools
+├── sandbox
+├── file-tools
+├── shell-tools
+├── web-tools
+└── model-context
+    └── agent
+        ├── llm-openai
+        ├── session
+        └── subagent
 ```
 
-启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI。
+启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI，`model-context` 负责模型输入，`tools` 和 Provider 负责工具执行。
 
-最小组合不加载额外插件。工具能力为空时，Agent 跳过工具阶段。
+没有 Tool Provider 时，`tools.list` 返回空列表，Agent 跳过工具阶段。
 
 ## 6. 构建清单
 
 `scripts/shipped-plugins.conf` 是发布目标的唯一清单，`scripts/build.sh` 和 `scripts/build.ps1` 共用。当前收录：
 
 ```text
-core: agent session llm-openai
+core: agent session llm-openai tools model-context sandbox file-tools shell-tools web-tools subagent
 tools:（空）
 ```
 

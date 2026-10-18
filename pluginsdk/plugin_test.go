@@ -326,11 +326,14 @@ func TestDispatchExposesContextID(t *testing.T) {
 		if req.ContextID != "ctx-in" {
 			t.Fatalf("request context = %q", req.ContextID)
 		}
+		if req.From != "caller-plugin" {
+			t.Fatalf("request from = %q", req.From)
+		}
 		return req.Payload, nil
 	}))
 
 	go p.dispatch(&protocol.Frame{
-		ID: "ctx-call", ContextID: "ctx-in", Type: protocol.FrameRequest,
+		ID: "ctx-call", From: "caller-plugin", ContextID: "ctx-in", Type: protocol.FrameRequest,
 		Capability: "demo", Method: "echo", Payload: json.RawMessage(`{}`),
 	})
 	res, err := protocol.ReadFrame(outR)

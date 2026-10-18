@@ -4,6 +4,8 @@
 
 设计输入见 [Agent Tools 设计交接](2026-10-18-agent-tools-design-handoff.md)。平台原则见 [ARCHITECTURE.md](../../ARCHITECTURE.md) 和 [CONTEXT.md](../../CONTEXT.md)。
 
+第一轮实现已完成，见 [Agent Framework 实现记录](2026-10-18-agent-framework-implementation.md)。本文继续作为目标契约和后续切片参考。
+
 ## 1. 设计边界
 
 ### 1.1 目标
@@ -37,11 +39,10 @@
 
 | 内容 | 状态 |
 |---|---|
-| 当前代码 | 没有 `tools` 插件 |
-| 当前代码 | 没有 File、Shell 和 Web Provider |
-| 本文 | 设计提案 |
-| `Request.From` | 待确认 |
-| 实现 | 未开始 |
+| 当前代码 | `tools`、Sandbox、File、Shell 和 Web Provider 已实现 |
+| `Request.From` | 已实现 |
+| 本文 | 目标契约 |
+| 实现 | 第一轮完成 |
 
 ## 2. 关键决策
 
@@ -49,16 +50,16 @@
 
 | 编号 | 决策 | 理由 | 状态 |
 |---|---|---|---|
-| D1 | 模型名称使用下划线 | OpenAI-compatible 接口普遍限制函数名 | 待确认 |
-| D2 | `pluginsdk.Request` 暴露 `From` | `source_plugin` 必须可信 | 待确认 |
-| D3 | Agent 只弱依赖 `tools` | 最小组合仍可无工具运行 | 待确认 |
-| D4 | 使用统一 Tool Result 包络 | Agent 和 Sandbox 只需理解一种结果 | 待确认 |
-| D5 | 首批只做同步调用 | 不引入后台任务和任务句柄 | 待确认 |
-| D6 | Tool Target 必须属于注册方 | 防止 `tools` 变成通用 Broker | 待确认 |
-| D7 | 禁止 Target 为 `host` 或 `tools` | 防止权限提升和递归调用 | 待确认 |
-| D8 | Workspace 使用绝对路径 | 插件进程 CWD 是插件目录 | 待确认 |
-| D9 | 注册表只保存在内存 | 注册是运行时状态，不进入持久化 | 待确认 |
-| D10 | Sandbox 不信任自报风险 | 风险是提示，策略才是约束 | 待确认 |
+| D1 | 模型名称使用下划线 | OpenAI-compatible 接口普遍限制函数名 | 已采用 |
+| D2 | `pluginsdk.Request` 暴露 `From` | `source_plugin` 必须可信 | 已采用 |
+| D3 | Agent 只弱依赖 `tools` | 最小组合仍可无工具运行 | 已采用 |
+| D4 | 使用统一 Tool Result 包络 | Agent 和 Sandbox 只需理解一种结果 | 已采用 |
+| D5 | 首批只做同步调用 | 不引入后台任务和任务句柄 | 已采用 |
+| D6 | Tool Target 必须属于注册方 | 防止 `tools` 变成通用 Broker | 已采用 |
+| D7 | 禁止 Target 为 `host` 或 `tools` | 防止权限提升和递归调用 | 已采用 |
+| D8 | Workspace 使用绝对路径 | 插件进程 CWD 是插件目录 | 已采用 |
+| D9 | 注册表只保存在内存 | 注册是运行时状态，不进入持久化 | 已采用 |
+| D10 | Sandbox 不信任自报风险 | 风险是提示，策略才是约束 | 已采用 |
 
 ### 2.1 D1 名称
 
@@ -1379,15 +1380,13 @@ go test -race ./...
 14. Tool Result 不超过大小限制。
 15. 文档、Manifest 和测试同步更新。
 
-## 15. 待确认
+## 15. 已采用决策
 
-以下事项需要逐项确认：
+第一轮实现采用以下选择：
 
-1. 模型名称使用 `file_read` 还是 `file.read`。
-2. 是否在 `pluginsdk.Request` 增加 `From`。
-3. `tools`、Provider 和 Sandbox 是否使用 autostart 启动。
-4. 首批是否只做同步调用。
-5. 首批是否暂缓 `web_search`。
-6. Sandbox 首批是否只做放行和拒绝。
-
-确认后再进入实现。未确认项不写入平台契约。
+1. 模型名称使用 `file_read`，Target 使用 `file.read`。
+2. `pluginsdk.Request` 增加可信 `From`。
+3. `tools`、Provider 和 Sandbox 使用 autostart 启动。
+4. 首批只做同步调用。
+5. 首批暂缓 `web_search` 和 `web_download`。
+6. Sandbox 首批只做放行和拒绝，不包含 UI 确认。

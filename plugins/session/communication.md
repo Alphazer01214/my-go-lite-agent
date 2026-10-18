@@ -61,6 +61,8 @@
 | `llm_usage` | Token 使用量 | 否 |
 | `message` | 用户、assistant、tool、system | 是 |
 | `context_summary` | 上下文摘要 | 激活时是 |
+| `context_snapshot` | 某次模型输入快照 | 否 |
+| `context_compaction` | 上下文压缩记录 | 否 |
 
 v1 不保存 `stream_chunk`。Agent 累计 stream，最终写 `message` Fact。
 

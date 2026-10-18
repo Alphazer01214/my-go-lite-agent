@@ -9,17 +9,17 @@
 | `loop` | Turn 生命周期 |
 | `agent` | Agent 配置 |
 
-`plugin.json` 声明的硬依赖是 `session` 和 `llm-openai`。工具能力是可选依赖。
+`plugin.json` 声明的硬依赖是 `session`、`llm-openai`、`tools` 和 `model-context`。运行中仍保留降级路径：Model Context 不可用时读取 `session.derive`，Tools 不可用时跳过工具阶段。
 
 ## 2. 当前职责
 
 - 创建或复用 Session；
 - 写入 user message；
-- 读取模型上下文；
-- 收集工具；
+- 调用 `model-context.build` 获取模型输入和工具定义；
+- 在 Model Context 不可用时回退到 Session 投影；
 - 调用 `llm.complete`；
-- 执行 `tools.call`；
-- 写入 assistant/tool message；
+- 执行 `tools.call` 并读取统一 Tool Result；
+- 写入 assistant/tool message，以及工具错误和截断元数据；
 - 写入 turn、step 和 usage 元数据；
 - 处理取消和最大步数。
 

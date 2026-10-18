@@ -367,12 +367,16 @@ seed_dist_config "agent" "$AGENT_DIST_CFG"
 # ── examples & docs ─────────────────────────────────────────────────────────
 mkdir -p "$DIST/config"
 if [[ ! -f "$DIST/config/permissions.json" ]]; then
-  cat > "$DIST/config/permissions.json" <<'EOF'
+  if [[ -f "$ROOT/config/permissions.example.json" ]]; then
+    cp "$ROOT/config/permissions.example.json" "$DIST/config/permissions.json"
+  else
+    cat > "$DIST/config/permissions.json" <<'EOF'
 {
-  "defaultAction": "allow",
+  "defaults": {"low": "allow", "medium": "allow", "high": "deny"},
   "rules": []
 }
 EOF
+  fi
 fi
 copy_dist_asset "README.md" "$DIST/"
 copy_dist_asset "CONTEXT.md" "$DIST/"

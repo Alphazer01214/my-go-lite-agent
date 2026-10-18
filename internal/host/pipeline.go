@@ -55,6 +55,15 @@ func consumesMethod(manifest plugin.Manifest, capability, method string) bool {
 	return false
 }
 
+func providesCapability(manifest plugin.Manifest, capability string) bool {
+	for _, provided := range manifest.Provides {
+		if provided == capability {
+			return true
+		}
+	}
+	return false
+}
+
 func hasRegistration(p *proc, capability, method string) bool {
 	for _, registration := range p.registrations {
 		if registration.Capability == capability && registration.Method == method {

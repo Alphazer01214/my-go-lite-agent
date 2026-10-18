@@ -82,7 +82,23 @@
 | `completeStream` | fn | `plugins/llm-openai/openai.go:150` | 流式上游调用 |
 | `emitJSON` | fn | `plugins/llm-openai/openai.go:274` | 发送 `llm.chunk` |
 
-## 7. 浏览器
+## 7. Tool 与上下文插件
+
+| 符号 | Kind | 位置 | 角色 |
+|---|---|---|---|
+| `toolsPlugin.register` | fn | `plugins/tools/main.go` | 注册 Tool |
+| `toolsPlugin.list` | fn | `plugins/tools/main.go` | 过滤并列出 Tool |
+| `toolsPlugin.call` | fn | `plugins/tools/main.go` | 分发 Tool Call |
+| `registry.put` | fn | `plugins/tools/registry.go` | 维护唯一 Tool 名称 |
+| `plugin.build` | fn | `plugins/model-context/builder.go` | 构建 Model Context |
+| `plugin.compact` | fn | `plugins/model-context/compact.go` | 写入上下文摘要 |
+| `sandbox.check` | fn | `plugins/sandbox/main.go` | 执行策略并 Proceed |
+| `policyStore.decide` | fn | `plugins/sandbox/policy.go` | 匹配风险规则 |
+| `plugin.execute` | fn | `plugins/shell-tools/main.go` | 执行进程 |
+| `fetchWithClient` | fn | `plugins/web-tools/fetch.go` | 受限 HTTP 读取 |
+| `plugin.run` | fn | `plugins/subagent/main.go` | 运行同步子 Agent |
+
+## 8. 浏览器
 
 | 符号 | Kind | 位置 | 角色 |
 |---|---|---|---|
@@ -93,22 +109,27 @@
 | `applyBootstrap` | fn | `internal/webui/static/app.js:210` | 更新插件中心与 Mount |
 | `renderPluginCenter` | fn | `internal/webui/static/app.js:174` | 渲染插件关系视图 |
 
-## 8. 核心边
+## 9. 核心边
 
 | From | To | Kind | 证据 |
 |---|---|---|---|
 | `liteagent-server` | `Host` | owns | `cmd/liteagent-server/server.go:41` |
 | `agent` | `session` | depends_on | `plugins/agent/plugin.json:8` |
 | `agent` | `llm-openai` | depends_on | `plugins/agent/plugin.json:8` |
+| `agent` | `tools` | depends_on | `plugins/agent/plugin.json` |
+| `agent` | `model-context` | depends_on | `plugins/agent/plugin.json` |
 | `agent` | `session` | calls | `plugins/agent/turn.go:169` |
 | `agent` | `llm-openai` | calls | `plugins/agent/turn.go:373` |
+| `agent` | `tools` | calls | `plugins/agent/turn.go` |
+| `agent` | `model-context` | calls | `plugins/agent/turn.go` |
+| `tools` | Tool Provider | calls | `plugins/tools/main.go` |
+| `sandbox` | `tools.call` | consumes | `plugins/sandbox/plugin.json` |
+| `subagent` | `agent` | calls | `plugins/subagent/main.go` |
 | `llm-openai` | `agent` | emits event | `plugins/llm-openai/main.go:60` |
 | `agent` | `session` | stream update | `plugins/agent/stream.go:155` |
 | `session` | `WebUI` | UI Push | `plugins/session/ui_state.go:292` |
 | `WebUI` | `Host` | Browser Call | `internal/webui/bridge.go:75` |
 
-## 9. 未核实项
-
-`tools` 插件不在当前最小组合。Agent 将 `tools.list` 和 `tools.call` 视为可选能力。
+## 10. 未核实项
 
 上游 API 的实际鉴权和模型行为由部署配置决定。本文只覆盖 `llm-openai` 的本地请求链路。

@@ -1,0 +1,12 @@
+{
+  "name": "shell-tools",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "shell-tools",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["shell"],
+  "requires": ["tools"],
+  "depends_on": ["tools"],
+  "description": "Synchronous process execution with process-tree cancellation"
+}

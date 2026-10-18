@@ -1,0 +1,12 @@
+{
+  "name": "file-tools",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "file-tools",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["file"],
+  "requires": ["tools"],
+  "depends_on": ["tools"],
+  "description": "Workspace-scoped file read, write, list, stat, search and glob tools"
+}

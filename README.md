@@ -6,7 +6,7 @@ Host 与 Plugin 是两个独立层次。项目整体文档只定义平台契约�
 
 ## 当前状态
 
-当前代码具备 Host、pluginsdk、Frame 协议和 Manifest 发现。`plugins/` 下的目录是独立插件源码或原型。它们用于验证扩展模型，不属于 Host 必需能力。
+当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 提供可发布的 Agent、Session、LLM、Model Context、Tools、Sandbox、File、Shell、Web 和 Subagent 组合。
 
 WebUI 平台契约已形成文档。具体插件的 UI 和通信契约只写在对应插件目录。
 
@@ -26,8 +26,8 @@ go build ./cmd/liteagent-server
 
 构建可分发的 dist 布局（增量构建，支持 `--clean`、`--verify`、`--only`）：
 
-```bash
-bash scripts/build.sh
+```powershell
+powershell -File scripts/build.ps1 -Verify
 ```
 
 Host 启动时按以下顺序查找插件目录：

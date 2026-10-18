@@ -147,7 +147,7 @@ Manifest 的目标 Schema 见 [manifest.md](manifest.md)。
 | 类型 | 字段或职责 |
 |---|---|
 | `Plugin` | handler 表、pending、stdio |
-| `Request` | 入站 id、context_id、capability、method、payload |
+| `Request` | 入站 id、from、context_id、capability、method、payload |
 | `Event` | 归因 id、context_id、主题、payload |
 | `Handler` | handler 函数和描述 |
 | `Registration` | 已注册路由键 |

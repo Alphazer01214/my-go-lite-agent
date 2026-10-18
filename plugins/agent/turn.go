@@ -107,7 +107,7 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 	sessionID := in.SessionID
 	var err error
 	if sessionID == "" {
-		sessionID, err = p.createSession(ctx, in.Workspace)
+		sessionID, err = p.createSession(ctx, in)
 		if err != nil {
 			return turnOut{}, err
 		}
@@ -128,11 +128,15 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 	}()
 
 	return p.runTurn(st, turnIn{
-		Input:        in.Input,
-		SessionID:    sessionID,
-		Workspace:    in.Workspace,
-		MaxSteps:     maxSteps,
-		AllowedTools: in.AllowedTools,
+		Input:           in.Input,
+		SessionID:       sessionID,
+		Workspace:       in.Workspace,
+		MaxSteps:        maxSteps,
+		AllowedTools:    in.AllowedTools,
+		DeniedTools:     in.DeniedTools,
+		ParentSessionID: in.ParentSessionID,
+		Origin:          in.Origin,
+		DelegationDepth: in.DelegationDepth,
 	}, scheme, maxSteps)
 }
 
@@ -165,8 +169,11 @@ func (p *plugin) cancel(ctx context.Context, in cancelIn) (cancelOut, error) {
 	return cancelOut{SessionID: in.SessionID, Cancelled: true}, nil
 }
 
-func (p *plugin) createSession(ctx context.Context, workspace string) (string, error) {
-	raw, err := p.sdk.Call(ctx, "session", "create", mustJSON(sessionCreateIn{Workspace: workspace}))
+func (p *plugin) createSession(ctx context.Context, in turnIn) (string, error) {
+	raw, err := p.sdk.Call(ctx, "session", "create", mustJSON(sessionCreateIn{
+		Workspace: in.Workspace, ParentSessionID: in.ParentSessionID,
+		Origin: in.Origin, DelegationDepth: in.DelegationDepth,
+	}))
 	if err != nil {
 		return "", err
 	}
@@ -199,7 +206,30 @@ func (p *plugin) assembleMessages(ctx context.Context, sessionID string) ([]chat
 	return out.Messages, nil
 }
 
-func (p *plugin) collectTools(ctx context.Context, scheme string, allowed []string) ([]toolSpec, []toolDefinition, error) {
+func (p *plugin) buildModelContext(ctx context.Context, in turnIn, scheme, turnID, stepID string) (modelContextOut, error) {
+	payload := mustJSON(modelContextIn{
+		SessionID: in.SessionID, TurnID: turnID, StepID: stepID, Scheme: scheme,
+		Workspace: in.Workspace, AllowedTools: in.AllowedTools, DeniedTools: in.DeniedTools,
+	})
+	raw, err := p.sdk.Call(ctx, "model-context", "build", payload)
+	if err == nil {
+		var out modelContextOut
+		if decodeErr := json.Unmarshal(raw, &out); decodeErr == nil {
+			return out, nil
+		}
+	}
+	messages, err := p.assembleMessages(ctx, in.SessionID)
+	if err != nil {
+		return modelContextOut{}, err
+	}
+	_, tools, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
+	if toolErr != nil {
+		return modelContextOut{}, toolErr
+	}
+	return modelContextOut{Messages: messages, Tools: tools}, nil
+}
+
+func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denied []string) ([]toolSpec, []toolDefinition, error) {
 	if len(allowed) == 0 && scheme == schemeChat {
 		return nil, nil, nil
 	}
@@ -214,20 +244,37 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed []stri
 		return nil, nil, nil
 	}
 	filtered := filterTools(listed.Tools, scheme, allowed)
+	if len(denied) > 0 {
+		blocked := make(map[string]bool, len(denied))
+		for _, name := range denied {
+			blocked[name] = true
+		}
+		kept := filtered[:0]
+		for _, tool := range filtered {
+			if !blocked[tool.Name] {
+				kept = append(kept, tool)
+			}
+		}
+		filtered = kept
+	}
 	if len(filtered) == 0 {
 		return nil, nil, nil
 	}
 	tools := make([]toolDefinition, 0, len(filtered))
 	for _, t := range filtered {
-		params := t.Parameters
-		if len(t.Parameters) == 0 {
+		params := t.InputSchema
+		if len(t.InputSchema) == 0 {
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		description := t.Description
+		if t.Risk != "" {
+			description += "\nRisk: " + t.Risk + "."
 		}
 		tools = append(tools, toolDefinition{
 			Type: "function",
 			Function: toolFunction{
 				Name:        t.Name,
-				Description: t.Description,
+				Description: description,
 				Parameters:  params,
 			},
 		})
@@ -235,7 +282,7 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed []stri
 	return filtered, tools, nil
 }
 
-func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callID string) (string, error) {
+func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callID string) (toolResult, error) {
 	args := json.RawMessage(arguments)
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
@@ -247,13 +294,13 @@ func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callI
 		"call_id":   callID,
 	}))
 	if err != nil {
-		return "", err
+		return toolResult{}, err
 	}
-	var out struct {
-		Content string `json:"content"`
+	var out toolResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return toolResult{}, errHandler("bad tools.call result: " + err.Error())
 	}
-	_ = json.Unmarshal(raw, &out)
-	return out.Content, nil
+	return out, nil
 }
 
 func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) (out turnOut, retErr error) {
@@ -305,11 +352,6 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 	seqs = append(seqs, s...)
 
-	_, tools, err := p.collectTools(st.ctx, scheme, in.AllowedTools)
-	if err != nil {
-		return out, err
-	}
-
 	for step := 1; step <= maxSteps; step++ {
 		if st.isCancelled() {
 			out.Cancelled = true
@@ -319,14 +361,18 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		stepID := fmt.Sprintf("%s-s%d", turnID, step)
 		st.setStepID(stepID)
 
-		msgs, err := p.assembleMessages(st.ctx, in.SessionID)
-		if err != nil {
-			return out, err
+		contextOut, contextErr := p.buildModelContext(st.ctx, in, scheme, turnID, stepID)
+		if contextErr != nil {
+			return out, contextErr
 		}
+		msgs, tools := contextOut.Messages, contextOut.Tools
 
 		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{
 			{"type": "step_start", "role": "host", "meta": appendMeta(stepID, map[string]any{"step": step})},
-			{"type": "request_header", "role": "host", "meta": appendMeta(stepID, map[string]any{"step": step})},
+			{"type": "request_header", "role": "host", "meta": appendMeta(stepID, map[string]any{
+				"step": step, "model_context_id": contextOut.ModelContextID,
+				"token_estimate": contextOut.TokenEstimate,
+			})},
 		})
 		if err != nil {
 			return out, err
@@ -476,13 +522,23 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 				out.Cancelled = true
 				break
 			}
-			content, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.Workspace, tc.ID)
+			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.Workspace, tc.ID)
+			content := result.Content
+			toolMeta := map[string]any{
+				"tool_name": tc.Function.Name, "is_error": result.IsError,
+				"truncated": result.Truncated,
+			}
+			if result.Meta != nil {
+				toolMeta["tool_meta"] = result.Meta
+			}
 			if callErr != nil {
 				content = "tool error: " + callErr.Error()
+				toolMeta["is_error"] = true
+				toolMeta["wire_error"] = callErr.Error()
 			}
 			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 				"type": "message", "role": "tool", "content": content, "tool_call_id": tc.ID,
-				"meta": appendMeta(stepID, map[string]any{"tool_name": tc.Function.Name}),
+				"meta": appendMeta(stepID, toolMeta),
 			}})
 			if err != nil {
 				return out, err

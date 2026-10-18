@@ -199,12 +199,21 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 			continue
 		}
 		key := hd.Capability + "." + hd.Method
+		manifest := current.discovery.Manifest
 		if owner, ok := h.routes[key]; ok && owner != pluginName {
-			manifest := current.discovery.Manifest
 			if !consumesMethod(manifest, hd.Capability, hd.Method) {
 				rejected = append(rejected, routeKey{hd.Capability, hd.Method})
 				continue
 			}
+			// A Consumer joins the pipeline but never steals the Provider route.
+			accepted = append(accepted, routeKey{hd.Capability, hd.Method})
+			continue
+		}
+		if !providesCapability(manifest, hd.Capability) && consumesMethod(manifest, hd.Capability, hd.Method) {
+			// Consumer-first startup is legal. Keep the route empty until the
+			// actual Provider registers the same key.
+			accepted = append(accepted, routeKey{hd.Capability, hd.Method})
+			continue
 		}
 		h.routes[key] = pluginName
 		accepted = append(accepted, routeKey{hd.Capability, hd.Method})

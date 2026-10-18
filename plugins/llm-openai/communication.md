@@ -29,7 +29,7 @@
     {
       "type": "function",
       "function": {
-        "name": "read_file",
+        "name": "file_read",
         "description": "Read a file",
         "parameters": {
           "type": "object",
@@ -70,7 +70,7 @@
       "id": "call-1",
       "type": "function",
       "function": {
-        "name": "read_file",
+        "name": "file_read",
         "arguments": "{\"path\":\"README.md\"}"
       }
     }

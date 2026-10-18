@@ -1,0 +1,12 @@
+{
+  "name": "subagent",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "subagent",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["subagent"],
+  "requires": ["agent", "session", "tools"],
+  "depends_on": ["agent", "session", "tools"],
+  "description": "Synchronous child Agent turns with depth and concurrency limits"
+}

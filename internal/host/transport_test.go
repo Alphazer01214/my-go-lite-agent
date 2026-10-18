@@ -135,6 +135,35 @@ func TestHostRegisterAcceptsAndRejectsConflict(t *testing.T) {
 	}
 }
 
+func TestConsumerRegistrationDoesNotClaimProviderRoute(t *testing.T) {
+	h := newTestHost("sandbox", "web-tools")
+	h.plugins["sandbox"].discovery.Manifest.Consumes = []plugin.ConsumesMethod{{
+		Capability: "web", Method: "fetch",
+	}}
+	h.plugins["web-tools"].discovery.Manifest.Provides = []string{"web"}
+
+	register := func(instance string, id string) {
+		t.Helper()
+		if err := h.handleRequest(instance, &Frame{
+			ID: id, Type: FrameRequest, Capability: HostCapability, Method: HostMethodRegister,
+			Payload: mustJSON(map[string]any{"handlers": []map[string]string{{
+				"capability": "web", "method": "fetch",
+			}}}),
+		}); err != nil {
+			t.Fatalf("register %s: %v", instance, err)
+		}
+	}
+
+	register("sandbox", "sandbox-reg")
+	if owner := h.routeOwner("web", "fetch"); owner != "" {
+		t.Fatalf("consumer claimed route owner %q", owner)
+	}
+	register("web-tools", "web-reg")
+	if owner := h.routeOwner("web", "fetch"); owner != "web-tools" {
+		t.Fatalf("route owner = %q, want web-tools", owner)
+	}
+}
+
 func TestHostRegisterSamePluginLastWins(t *testing.T) {
 	h := newTestHost("a")
 	req := &Frame{

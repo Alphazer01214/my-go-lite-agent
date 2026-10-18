@@ -82,11 +82,15 @@ type streamSnapshot struct {
 }
 
 type turnIn struct {
-	Input        string   `json:"input"`
-	SessionID    string   `json:"session_id,omitempty"`
-	Workspace    string   `json:"workspace,omitempty"`
-	MaxSteps     int      `json:"max_steps,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
+	Input           string   `json:"input"`
+	SessionID       string   `json:"session_id,omitempty"`
+	Workspace       string   `json:"workspace,omitempty"`
+	MaxSteps        int      `json:"max_steps,omitempty"`
+	AllowedTools    []string `json:"allowed_tools,omitempty"`
+	DeniedTools     []string `json:"denied_tools,omitempty"`
+	ParentSessionID string   `json:"parent_session_id,omitempty"`
+	Origin          string   `json:"origin,omitempty"`
+	DelegationDepth int      `json:"delegation_depth,omitempty"`
 }
 
 type turnOut struct {
@@ -116,8 +120,8 @@ func addUsage(dst *usage, src usage) {
 type toolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-	Severity    string          `json:"severity,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+	Risk        string          `json:"risk,omitempty"`
 }
 
 type config struct {
@@ -137,9 +141,12 @@ type configSetIn struct {
 
 // session payloads (subset)
 type sessionCreateIn struct {
-	SessionID string `json:"session_id,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
-	Name      string `json:"name,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	Workspace       string `json:"workspace,omitempty"`
+	Name            string `json:"name,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	Origin          string `json:"origin,omitempty"`
+	DelegationDepth int    `json:"delegation_depth,omitempty"`
 }
 
 type sessionCreateOut struct {
@@ -157,6 +164,31 @@ type sessionAppendOut struct {
 
 type messagesOut struct {
 	Messages []chatMessage `json:"messages"`
+}
+
+type modelContextIn struct {
+	SessionID    string   `json:"session_id"`
+	TurnID       string   `json:"turn_id,omitempty"`
+	StepID       string   `json:"step_id,omitempty"`
+	Scheme       string   `json:"scheme,omitempty"`
+	Workspace    string   `json:"workspace,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	DeniedTools  []string `json:"denied_tools,omitempty"`
+}
+
+type modelContextOut struct {
+	ModelContextID string           `json:"model_context_id"`
+	Messages       []chatMessage    `json:"messages"`
+	Tools          []toolDefinition `json:"tools"`
+	TokenEstimate  int              `json:"token_estimate"`
+	Warnings       []string         `json:"warnings,omitempty"`
+}
+
+type toolResult struct {
+	Content   string         `json:"content"`
+	IsError   bool           `json:"is_error"`
+	Truncated bool           `json:"truncated"`
+	Meta      map[string]any `json:"meta"`
 }
 
 const (

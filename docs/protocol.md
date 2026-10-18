@@ -190,6 +190,8 @@ Host 为跨插件 Request 分配内部 `fwd-N` id。Response 返回调用方时�
 
 `host.register` 是路由表的唯一写入口。同一插件重复注册同键时采用最后一次。跨插件冲突会进入 `rejected`。
 
+Consumer 注册参与流水线，但不会抢占 Route Owner。Consumer 先于 Provider 启动时，路由归属保持为空；真正的 Provider 注册后成为 Owner。Route Owner 必须来自包含该 Capability 的 `provides` 声明。
+
 `host.plugins` 按插件名返回分组快照。每项包含 `name`、可选 `version`、`state`、`selected_instance_id`、`instances`、`enabled`、可选 `provides` 和可选 `depends_on`。
 
 Provider `state` 只使用 `inactive`、`loading`、`active`、`stopping` 或 `failed`。`instances[]` 保存每个 Plugin Instance 的标识、Generation、Config Revision、注册项和失败信息。缺失的 `depends_on` 目标使用 `missing: true`。快照不返回本地路径。

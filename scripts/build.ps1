@@ -424,7 +424,12 @@ try {
     $permCfg = Join-Path $dist "config\permissions.json"
     if (-not (Test-Path $permCfg)) {
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaultAction`": `"allow`",`n  `"rules`": []`n}`n", $utf8NoBom)
+        $permExample = Join-Path $root "config\permissions.example.json"
+        if (Test-Path $permExample) {
+            Copy-Item $permExample $permCfg -Force
+        } else {
+            [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaults`": {`"low`": `"allow`", `"medium`": `"allow`", `"high`": `"deny`"},`n  `"rules`": []`n}`n", $utf8NoBom)
+        }
     }
     Copy-DistAsset "README.md" $dist
     Copy-DistAsset "CONTEXT.md" $dist
