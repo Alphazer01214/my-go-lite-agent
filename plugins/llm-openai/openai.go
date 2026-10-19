@@ -70,8 +70,10 @@ type upstreamDelta struct {
 type emitFunc func(payload json.RawMessage) error
 
 func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (completeOut, error) {
+	// The SDK always hands dispatch a live context; a nil one would panic
+	// inside the upstream request rather than fail with a clear error.
 	if ctx == nil {
-		ctx = context.Background()
+		return completeOut{}, errBadArguments("context is required")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -210,12 +212,11 @@ func (p *plugin) completeStream(ctx context.Context, cfg config, req upstreamReq
 				_ = emitJSON(emit, chunkText{Channel: chunkReasoning, Delta: choice.Delta.ReasoningContent})
 			}
 			for _, tc := range choice.Delta.ToolCalls {
-				cur, ok := toolsByIndex[tc.Index]
-				if !ok {
-					cur = &toolCall{ID: tc.ID, Type: tc.Type}
-					cur.Function.Name = tc.Function.Name
-					toolsByIndex[tc.Index] = cur
-				}
+cur, ok := toolsByIndex[tc.Index]
+			if !ok {
+				cur = &toolCall{ID: tc.ID, Type: tc.Type}
+				toolsByIndex[tc.Index] = cur
+			}
 				if tc.ID != "" {
 					cur.ID = tc.ID
 				}

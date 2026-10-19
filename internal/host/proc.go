@@ -9,15 +9,10 @@ import (
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
 )
 
-// launch the plugin by add a proc.
-// entry 相对 discovery.Dir 解析；无扩展名时补试 .exe（源码 manifest 与构建产物命名兼容）。
-// cmd.Dir 必须是插件目录：插件按 CWD 读 config.json，session 写 ./sessions。
-func (h *Host) launch(discovery plugin.Discovery) error {
-	return h.launchInstance(discovery.Manifest.Name, discovery, "")
-}
-
 // launchInstance starts one process activation. The default activation uses the
 // plugin name as instance id, preserving the existing single-instance behavior.
+// entry 相对 discovery.Dir 解析；无扩展名时补试 .exe（源码 manifest 与构建产物命名兼容）。
+// cmd.Dir 必须是插件目录：插件按 CWD 读 config.json，session 写 ./sessions。
 func (h *Host) launchInstance(instanceID string, discovery plugin.Discovery, configRevision string) error {
 	manifest := discovery.Manifest
 	if instanceID == "" {

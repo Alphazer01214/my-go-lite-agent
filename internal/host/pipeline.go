@@ -85,6 +85,7 @@ func (h *Host) selectPipelineCandidate(state *pipelineState) (pipelineCandidate,
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	key := state.capability + "." + state.method
+	requireConsumer := state.hops == 0 && h.declaresConsumedMethodLocked(state.capability, state.method)
 	var best pipelineCandidate
 	found := false
 	conflict := false
@@ -98,6 +99,9 @@ func (h *Host) selectPipelineCandidate(state *pipelineState) (pipelineCandidate,
 			manifest = p.discovery.Manifest
 		}
 		if !hasRegistration(p, state.capability, state.method) && !consumesMethod(manifest, state.capability, state.method) {
+			continue
+		}
+		if requireConsumer && !consumesMethod(manifest, state.capability, state.method) {
 			continue
 		}
 		if state.visited[p.instanceID] {
@@ -131,6 +135,15 @@ func (h *Host) selectPipelineCandidate(state *pipelineState) (pipelineCandidate,
 	state.hops++
 	state.nextPriority = best.priority - 1
 	return best, nil
+}
+
+func (h *Host) declaresConsumedMethodLocked(capability, method string) bool {
+	for _, discovery := range h.discoveries.Plugins {
+		if consumesMethod(discovery.Manifest, capability, method) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Host) hostProceed(from string, frame *Frame) error {
@@ -172,11 +185,26 @@ func (h *Host) hostProceed(from string, frame *Frame) error {
 	state.proceeded[in.CallID] = true
 	state.mu.Unlock()
 
+	frameCopy := *frame
+	go h.finishProceed(from, &frameCopy, state, contextID, capability, method, payload)
+	return nil
+}
+
+// finishProceed runs the remainder of a Proceed outside the Host read loop.
+// A Consumer's downstream call can enter the pipeline again, so blocking here
+// would prevent the nested request from being routed.
+func (h *Host) finishProceed(
+	from string,
+	frame *Frame,
+	state *pipelineState,
+	contextID, capability, method string,
+	payload json.RawMessage,
+) {
 	candidate, err := h.selectPipelineCandidate(state)
 	if err != nil {
 		code := ErrorCode(err, CodeRouteFailed)
 		h.replyError(from, frame.ID, capability, method, code, err.Error())
-		return err
+		return
 	}
 
 	h.mu.Lock()
@@ -221,14 +249,18 @@ func (h *Host) hostProceed(from string, frame *Frame) error {
 		delete(h.pending, nextID)
 		h.mu.Unlock()
 		h.replyError(from, frame.ID, capability, method, CodeRouteFailed, err.Error())
-		return err
+		return
 	}
 
-	result := <-resCh
+	result, ok := <-resCh
+	if !ok || result == nil {
+		// fail()/Close() empty the waiter without a res; nothing else can arrive.
+		h.replyError(from, frame.ID, capability, method, CodeServerClosed, "host closed")
+		return
+	}
 	if result.ErrorCode != "" {
 		h.replyError(from, frame.ID, capability, method, result.ErrorCode, result.ErrorMsg)
-		return fmt.Errorf("proceed %s.%s: %s", capability, method, result.ErrorMsg)
+		return
 	}
 	h.replyOK(from, frame.ID, capability, method, result.Payload)
-	return nil
 }

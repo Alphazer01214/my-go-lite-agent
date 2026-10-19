@@ -90,6 +90,16 @@ func (t *turnState) nextUpdateID() int {
 
 type emitFunc func(payload json.RawMessage) error
 
+// turnFinalizeTimeout bounds the terminal writes that must survive the handler
+// context being canceled. It is short because these writes are local calls.
+const turnFinalizeTimeout = 2 * time.Second
+
+// finalizeContext detaches terminal bookkeeping from the caller's cancellation.
+// A canceled inbound call must still be able to persist turn_end.
+func finalizeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), turnFinalizeTimeout)
+}
+
 func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 	if in.Input == "" {
 		return turnOut{}, errBadArguments("input is required")
@@ -112,6 +122,18 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 			return turnOut{}, err
 		}
 	}
+	workspaceID, workspace, workspaceErr := p.sessionWorkspace(ctx, sessionID)
+	if workspaceErr != nil {
+		return turnOut{}, workspaceErr
+	}
+	if in.Workspace != "" && !sameWorkspacePath(in.Workspace, workspace) {
+		return turnOut{}, errBadArguments("workspace does not match the session workspace")
+	}
+	if workspace == "" {
+		return turnOut{}, errBadArguments("session workspace is required")
+	}
+	in.WorkspaceID = workspaceID
+	in.Workspace = workspace
 
 	slot := p.slotFor(sessionID)
 	slot.turnMu.Lock()
@@ -130,6 +152,7 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 	return p.runTurn(st, turnIn{
 		Input:           in.Input,
 		SessionID:       sessionID,
+		WorkspaceID:     in.WorkspaceID,
 		Workspace:       in.Workspace,
 		MaxSteps:        maxSteps,
 		AllowedTools:    in.AllowedTools,
@@ -171,7 +194,7 @@ func (p *plugin) cancel(ctx context.Context, in cancelIn) (cancelOut, error) {
 
 func (p *plugin) createSession(ctx context.Context, in turnIn) (string, error) {
 	raw, err := p.sdk.Call(ctx, "session", "create", mustJSON(sessionCreateIn{
-		Workspace: in.Workspace, ParentSessionID: in.ParentSessionID,
+		WorkspaceID: in.WorkspaceID, Workspace: in.Workspace, ParentSessionID: in.ParentSessionID,
 		Origin: in.Origin, DelegationDepth: in.DelegationDepth,
 	}))
 	if err != nil {
@@ -182,6 +205,18 @@ func (p *plugin) createSession(ctx context.Context, in turnIn) (string, error) {
 		return "", errHandler("bad session.create response")
 	}
 	return out.SessionID, nil
+}
+
+func (p *plugin) sessionWorkspace(ctx context.Context, sessionID string) (string, string, error) {
+	raw, err := p.sdk.Call(ctx, "session", "info", mustJSON(map[string]string{"session_id": sessionID}))
+	if err != nil {
+		return "", "", err
+	}
+	var out sessionInfoOut
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", "", errHandler("bad session.info response")
+	}
+	return out.WorkspaceID, out.Workspace, nil
 }
 
 func (p *plugin) appendFacts(ctx context.Context, sessionID string, facts []map[string]any) ([]int, error) {
@@ -206,42 +241,61 @@ func (p *plugin) assembleMessages(ctx context.Context, sessionID string) ([]chat
 	return out.Messages, nil
 }
 
+// buildModelContext asks model-context for the prompt. A missing or failing
+// capability degrades to session.derive + tools.list: the turn still runs, but
+// the caller is told so it does not report a token estimate that was never made.
 func (p *plugin) buildModelContext(ctx context.Context, in turnIn, scheme, turnID, stepID string) (modelContextOut, error) {
 	payload := mustJSON(modelContextIn{
 		SessionID: in.SessionID, TurnID: turnID, StepID: stepID, Scheme: scheme,
-		Workspace: in.Workspace, AllowedTools: in.AllowedTools, DeniedTools: in.DeniedTools,
+		WorkspaceID: in.WorkspaceID, Workspace: in.Workspace,
+		AllowedTools: in.AllowedTools, DeniedTools: in.DeniedTools,
 	})
 	raw, err := p.sdk.Call(ctx, "model-context", "build", payload)
+	degraded := ""
 	if err == nil {
 		var out modelContextOut
-		if decodeErr := json.Unmarshal(raw, &out); decodeErr == nil {
+		decodeErr := json.Unmarshal(raw, &out)
+		if decodeErr == nil {
 			return out, nil
 		}
+		degraded = "bad model-context response: " + decodeErr.Error()
+	} else {
+		degraded = "model-context unavailable: " + err.Error()
 	}
 	messages, err := p.assembleMessages(ctx, in.SessionID)
 	if err != nil {
 		return modelContextOut{}, err
 	}
-	_, tools, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
+	_, tools, toolsDegraded, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
 	if toolErr != nil {
 		return modelContextOut{}, toolErr
 	}
-	return modelContextOut{Messages: messages, Tools: tools}, nil
+	if toolsDegraded != "" {
+		if degraded != "" {
+			degraded += "; "
+		}
+		degraded += toolsDegraded
+	}
+	return modelContextOut{Messages: messages, Tools: tools, Degraded: degraded}, nil
 }
 
-func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denied []string) ([]toolSpec, []toolDefinition, error) {
+// collectTools resolves the tool list for this scheme. tools.list is optional,
+// so a failure degrades to "no tools" — never to a failed turn — and the reason
+// is reported through degraded so the caller can log it.
+func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denied []string) ([]toolSpec, []toolDefinition, string, error) {
+	degraded := ""
 	if len(allowed) == 0 && scheme == schemeChat {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	raw, err := p.sdk.Call(ctx, "tools", "list", mustJSON(map[string]any{}))
 	if err != nil {
-		return nil, nil, nil // tools optional
+		return nil, nil, "tools unavailable: " + err.Error(), nil
 	}
 	var listed struct {
 		Tools []toolSpec `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &listed); err != nil {
-		return nil, nil, nil
+		return nil, nil, "bad tools.list response: " + err.Error(), nil
 	}
 	filtered := filterTools(listed.Tools, scheme, allowed)
 	if len(denied) > 0 {
@@ -258,7 +312,7 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denie
 		filtered = kept
 	}
 	if len(filtered) == 0 {
-		return nil, nil, nil
+		return nil, nil, degraded, nil
 	}
 	tools := make([]toolDefinition, 0, len(filtered))
 	for _, t := range filtered {
@@ -279,19 +333,20 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denie
 			},
 		})
 	}
-	return filtered, tools, nil
+	return filtered, tools, degraded, nil
 }
 
-func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callID string) (toolResult, error) {
+func (p *plugin) callTool(ctx context.Context, name, arguments, sessionID, workspace, callID string) (toolResult, error) {
 	args := json.RawMessage(arguments)
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
 	raw, err := p.sdk.Call(ctx, "tools", "call", mustJSON(map[string]any{
-		"name":      name,
-		"arguments": args,
-		"workspace": workspace,
-		"call_id":   callID,
+		"name":       name,
+		"arguments":  args,
+		"session_id": sessionID,
+		"workspace":  workspace,
+		"call_id":    callID,
 	}))
 	if err != nil {
 		return toolResult{}, err
@@ -306,7 +361,7 @@ func (p *plugin) callTool(ctx context.Context, name, arguments, workspace, callI
 func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) (out turnOut, retErr error) {
 	out = turnOut{SessionID: in.SessionID}
 	seqs := make([]int, 0, 16)
-	turnID := fmt.Sprintf("t-%d", time.Now().UnixNano())
+	turnID := fmt.Sprintf("t-%d-%d", time.Now().UnixNano(), p.turnSeq.Add(1))
 	st.setTurnID(turnID)
 
 	appendMeta := func(stepID string, extra map[string]any) map[string]any {
@@ -321,22 +376,48 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 
 	turnStarted := false
+	turnEnded := false
+	writeTurnEnd := func(ctx context.Context, reason string, extra map[string]any) error {
+		if turnEnded {
+			return nil
+		}
+		meta := appendMeta("", map[string]any{"reason": reason})
+		for key, value := range extra {
+			meta[key] = value
+		}
+		s, err := p.appendFacts(ctx, in.SessionID, []map[string]any{{
+			"type": "turn_end", "role": "host", "meta": meta,
+		}})
+		if err != nil {
+			return err
+		}
+		turnEnded = true
+		seqs = append(seqs, s...)
+		out.Seqs = seqs
+		return nil
+	}
+
 	defer func() {
-		if retErr == nil || !turnStarted {
+		if retErr == nil || !turnStarted || turnEnded {
 			return
 		}
-		s, appendErr := p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-			"type": "turn_end", "role": "host",
-			"meta": appendMeta("", map[string]any{"reason": "error", "error": retErr.Error()}),
-		}})
-		if appendErr == nil {
-			seqs = append(seqs, s...)
+		reason := "error"
+		extra := map[string]any{"error": retErr.Error()}
+		if st.isCancelled() || st.ctx.Err() != nil {
+			reason = "cancelled"
+			extra = nil
+			out.Cancelled = true
 		}
+		ctx, cancel := finalizeContext(st.ctx)
+		defer cancel()
+		_ = writeTurnEnd(ctx, reason, extra)
 		out.Seqs = seqs
 	}()
 
 	s, err := p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-		"type": "turn_start", "role": "host", "meta": appendMeta("", map[string]any{"workspace": in.Workspace}),
+		"type": "turn_start", "role": "host", "meta": appendMeta("", map[string]any{
+			"workspace_id": in.WorkspaceID, "workspace": in.Workspace,
+		}),
 	}})
 	if err != nil {
 		return out, err
@@ -352,8 +433,14 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	}
 	seqs = append(seqs, s...)
 
+	// A turn that exits because the step budget ran out must not be recorded as
+	// "completed"; one that finished its last step normally is.
+	lastStepHadToolCalls := false
 	for step := 1; step <= maxSteps; step++ {
-		if st.isCancelled() {
+		if st.isCancelled() || st.ctx.Err() != nil {
+			if st.ctx.Err() != nil {
+				st.markCancelled()
+			}
 			out.Cancelled = true
 			break
 		}
@@ -367,12 +454,16 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}
 		msgs, tools := contextOut.Messages, contextOut.Tools
 
+		headerMeta := map[string]any{
+			"step": step, "model_context_id": contextOut.ModelContextID,
+			"token_estimate": contextOut.TokenEstimate,
+		}
+		if contextOut.Degraded != "" {
+			headerMeta["degraded"] = contextOut.Degraded
+		}
 		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{
 			{"type": "step_start", "role": "host", "meta": appendMeta(stepID, map[string]any{"step": step})},
-			{"type": "request_header", "role": "host", "meta": appendMeta(stepID, map[string]any{
-				"step": step, "model_context_id": contextOut.ModelContextID,
-				"token_estimate": contextOut.TokenEstimate,
-			})},
+			{"type": "request_header", "role": "host", "meta": appendMeta(stepID, headerMeta)},
 		})
 		if err != nil {
 			return out, err
@@ -431,36 +522,53 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 				return
 			}
 			var cout llmCompleteOut
-			_ = json.Unmarshal(raw, &cout)
+			if decodeErr := json.Unmarshal(raw, &cout); decodeErr != nil {
+				result <- llmRes{err: errHandler("bad llm.complete response: " + decodeErr.Error())}
+				return
+			}
 			result <- llmRes{out: cout}
 		}()
 
 		var llmOut llmCompleteOut
-		select {
-		case <-st.done:
+		cancelWait := func() {
 			out.Cancelled = true
 			close(stopStream)
 			<-streamDone
+		}
+		select {
+		case <-st.done:
+			cancelWait()
+		case <-st.ctx.Done():
+			st.markCancelled()
+			cancelWait()
 		case r := <-result:
 			if r.err != nil {
 				<-streamDone
-				return out, r.err
+				if st.ctx.Err() == nil && !st.isCancelled() {
+					return out, r.err
+				}
+				if st.ctx.Err() != nil {
+					st.markCancelled()
+				}
+				out.Cancelled = true
+				break
 			}
 			llmOut = r.out
 			<-streamDone
 		}
 		if out.Cancelled {
+			finCtx, finCancel := finalizeContext(st.ctx)
 			partial := acc.message()
 			out.Reply = partial.Content
 			if partial.Content != "" || partial.Reasoning != "" || len(partial.ToolCalls) > 0 {
-				_ = p.updateStream(st.ctx, st.withNextUpdate(streamSnapshot{
+				_ = p.updateStream(finCtx, st.withNextUpdate(streamSnapshot{
 					SessionID: in.SessionID,
 					TurnID:    turnID,
 					StepID:    stepID,
 					Message:   partial,
 					Status:    "cancelled",
 				}))
-				s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
+				s, err = p.appendFacts(finCtx, in.SessionID, []map[string]any{{
 					"type": "message", "role": "assistant", "content": partial.Content,
 					"meta": appendMeta(stepID, map[string]any{"reasoning": partial.Reasoning}),
 				}})
@@ -468,11 +576,10 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 					seqs = append(seqs, s...)
 				}
 			}
-			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-				"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "cancelled"}),
-			}})
-			if err == nil {
-				seqs = append(seqs, s...)
+			err = writeTurnEnd(finCtx, "cancelled", nil)
+			finCancel()
+			if err != nil {
+				return out, err
 			}
 			out.Seqs = seqs
 			return out, nil
@@ -517,12 +624,17 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			break
 		}
 
+		cancelledMidTools := false
 		for _, tc := range llmOut.ToolCalls {
-			if st.isCancelled() {
+			if st.isCancelled() || st.ctx.Err() != nil {
+				if st.ctx.Err() != nil {
+					st.markCancelled()
+				}
 				out.Cancelled = true
+				cancelledMidTools = true
 				break
 			}
-			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.Workspace, tc.ID)
+			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.SessionID, in.Workspace, tc.ID)
 			content := result.Content
 			toolMeta := map[string]any{
 				"tool_name": tc.Function.Name, "is_error": result.IsError,
@@ -545,6 +657,22 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			}
 			seqs = append(seqs, s...)
 		}
+		if cancelledMidTools {
+			// The assistant fact above already lists every tool_call of this step,
+			// but only the ones executed got a tool result. Closing the step as
+			// "tool_calls" would leave dangling tool_call_ids in the transcript,
+			// so the step is closed as cancelled and the turn ends here.
+			finCtx, finCancel := finalizeContext(st.ctx)
+			s, err = p.appendFacts(finCtx, in.SessionID, []map[string]any{{
+				"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{"reason": "cancelled", "step": step}),
+			}})
+			finCancel()
+			if err != nil {
+				return out, err
+			}
+			seqs = append(seqs, s...)
+			break
+		}
 
 		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
 			"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{"reason": "tool_calls", "step": step}),
@@ -553,40 +681,29 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			return out, err
 		}
 		seqs = append(seqs, s...)
-
-		if step == maxSteps {
-			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-				"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "max_steps"}),
-			}})
-			if err != nil {
-				return out, err
-			}
-			seqs = append(seqs, s...)
-			out.Seqs = seqs
-			return out, nil
-		}
+		lastStepHadToolCalls = true
 	}
 
 	if out.Cancelled {
-		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-			"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": "cancelled"}),
-		}})
+		finCtx, finCancel := finalizeContext(st.ctx)
+		err = writeTurnEnd(finCtx, "cancelled", nil)
+		finCancel()
 		if err != nil {
 			return out, err
 		}
-		seqs = append(seqs, s...)
 	} else {
 		reason := "completed"
-		if out.Steps >= maxSteps {
+		if out.Steps >= maxSteps && lastStepHadToolCalls {
+			// Only a step that still wanted more work is capped; a step that
+			// finished on its own is "completed" even on the last allowed step.
 			reason = "max_steps"
 		}
-		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-			"type": "turn_end", "role": "host", "meta": appendMeta("", map[string]any{"reason": reason}),
-		}})
+		finCtx, finCancel := finalizeContext(st.ctx)
+		err = writeTurnEnd(finCtx, reason, nil)
+		finCancel()
 		if err != nil {
 			return out, err
 		}
-		seqs = append(seqs, s...)
 	}
 	out.Seqs = seqs
 	return out, nil

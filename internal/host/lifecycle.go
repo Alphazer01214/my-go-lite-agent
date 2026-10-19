@@ -83,10 +83,12 @@ func (h *Host) StartPlugin(name string) error {
 	if current != nil {
 		h.removeProcess(name, current)
 	}
+	// Routes are dropped up front so the replacement process can re-register the
+	// same keys. launchInstance only spawns the process; the route table is
+	// written later by hostRegister, so a failed start leaves nothing behind.
 	h.unregisterPlugin(name)
 
 	if err := h.launchInstance(name, discovery, ""); err != nil {
-		h.unregisterPlugin(name)
 		return err
 	}
 	h.hlog(fmt.Sprintf("plugin started plugin=%s", name))

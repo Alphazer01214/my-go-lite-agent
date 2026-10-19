@@ -42,12 +42,14 @@ flowchart LR
 | 模块 | 主要职责 | 关键入口 |
 |---|---|---|
 | `cmd/liteagent-server` | 组装 Host 与 WebUI，管理 HTTP 生命周期 | `run()` |
-| `internal/host` | Plugin Instance、执行上下文、路由、pending 闭环 | `host.Run()` |
+| `internal/host` | Plugin Instance、执行上下文、路由、pending 闭环 | `host.New()` + `(*Host).Start()` |
 | `internal/plugin` | Manifest 发现和 autostart 排序 | `ScanRoot()` |
 | `internal/webui` | Browser Bridge、UI Push 和静态资源 | `NewServer()` |
 | `protocol` | Frame 编解码和稳定错误码 | `Frame` |
 | `pluginsdk` | 插件注册、Call、Event | `Plugin` |
-| `utils` | 平台小工具 | 路径和系统判断 |
+
+`host.New` 只构造 Host，不启动任何进程；调用方在此期间接好 UI Publisher 和 trace 回调，再调用
+`Host.Start` 按 autostart 闭包挂载插件。顺序反了会让插件启动期的 `ui.state` 拿到 `ui_not_mounted`。
 
 ### 2.2 Host 内部
 
@@ -281,13 +283,23 @@ WebUI 是可重启的交互端。业务执行和状态真源都在后端。浏�
 ### 6.4 浏览器传输
 
 ```text
+GET  /bridge/bootstrap
 POST /bridge/call
 GET  /bridge/ui
+POST /bridge/plugins/rescan
+POST /bridge/plugins/{plugin}/start
+POST /bridge/plugins/{plugin}/stop
 ```
 
+`GET /bridge/bootstrap` 返回插件快照、Mount 列表和 Diagnostic 快照，是 Shell 的启动入口。
 `POST /bridge/call` 返回 NDJSON Event 和最终 Response。`GET /bridge/ui` 接收 State、Command 和 Diagnostic。
+三个管理接口返回最新 Bootstrap，供 Shell 更新插件快照和 Mount 列表。
 
-浏览器断开后，HTTP Request Context 会取消后端 Call。Host 为原 Request 保留唯一终态。未发送的 Event 和 Response 被丢弃。
+所有 `POST` 端点校验 `Origin` 同源；跨源返回 403，不带 `Origin` 的请求放行。
+
+浏览器断开后，Host 停止写回，但不取消后端 Call。后端继续执行，未发送的 Event 和 Response 被丢弃。
+
+UI 流建立后 Host 先发送 hello。重连后的 hello 触发 Shell resync，重新读取 Bootstrap 和插件状态。Host 不重放断线期间的事件。
 
 Browser Envelope 见 [webui.md](webui.md)。
 

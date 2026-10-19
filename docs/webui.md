@@ -59,6 +59,8 @@ connectedCallback()
 disconnectedCallback()
 ```
 
+可选实现 `resync()`。UI 连接重连后，Shell 调用已挂载组件的 `resync()` 重新读取状态；组件未实现时，Shell 重新挂载组件，由 `connectedCallback` 重新取数。
+
 State 决定 Component 当前是什么。Command 决定 Component 此刻做什么。两类 payload 都由插件定义。
 
 Component 在 `connectedCallback` 中通过 Capability Call 获取初始数据。Plugin Runtime 后续使用 `SetState` 更新。Component 不实现独立的业务 API。
@@ -87,7 +89,10 @@ Host Shell 只决定布局位置。Host 不解释 Component 的业务内容。v1
 
 `mount_id` 只定位实例，不参与业务路由。插件继续使用自己的业务 id 关联记录。
 
-Loader 按 `entry` 去重加载。单个 entry 导入失败或标签定义超时，只跳过对应 Mount。失败会写入本地 Diagnostic，其他 Mount 继续加载。失败 Mount 不自动重试，刷新页面后重新加载。
+Loader 按 `entry` 去重加载。单个 entry 导入失败或标签定义超时，只跳过对应 Mount。失败会写入本地 Diagnostic，其他 Mount 继续加载。
+失败的 entry 不会被缓存，下次 `load()`（即下一次 bootstrap 或 rescan）会重新尝试，不需要刷新页面。
+
+`load()` 是对齐而不是追加：不在新 Mount 列表里的元素会被移除，Slot 不会残留已经下线的 Mount。
 
 ## 5. pluginsdk WebUI
 
@@ -151,6 +156,7 @@ v1 使用 HTTP 和 NDJSON 流：
 
 ```text
 GET  /                    Host Shell
+GET  /platform/...        Host Shell 自身的 JS/CSS
 GET  /plugins/...         插件 UI 资源目录
 GET  /bridge/bootstrap    Plugin、Mount、Slot 和 Diagnostic
 POST /bridge/call         Capability Call
@@ -161,6 +167,9 @@ POST /bridge/plugins/{plugin}/stop
 ```
 
 服务默认监听 `127.0.0.1:2333`。`LITEAGENT_HTTP_ADDR` 可以覆盖监听地址。启动后输出实际 URL，不自动打开浏览器。监听失败时启动退出。
+
+所有 `POST` 端点都要求同源：带 `Origin` 且 host 与请求不一致时返回 403。
+不带 `Origin` 的请求（curl、测试）放行。这是为了让启停插件这类无 body、无自定义 content type 的接口不会被跨站表单触发。
 
 ### Bootstrap
 
@@ -239,9 +248,9 @@ Bootstrap 返回插件状态、静态 Mount 和当前 Diagnostic 快照，不返
 
 `POST /bridge/call` 返回 NDJSON。零到多个归因 Event 后必须有一条 Response。
 
-浏览器断开会取消该 Browser Call 的 Go Context。Host 继续等待后端唯一终态，并丢弃无法写入的 Event 和 Response。Host 不缓存结果，也不支持按 Call ID 重放。
+浏览器断开只停止写回，不取消后端 Call。Host 继续等待后端唯一终态，并丢弃无法写入的 Event 和 Response。Host 不缓存结果，也不支持按 Call ID 重放。
 
-断开连接会取消这次 Browser Call。插件定义的业务取消方法仍可用于取消其他业务状态。
+取消业务必须调用插件显式定义的取消方法（例如 `loop.cancel`）；刷新或关闭页面不会隐式取消。
 
 ### Diagnostic Push
 
@@ -302,33 +311,43 @@ Diagnostic 与 UI Push 共用 `/bridge/ui` 连接和有界队列。它不要求 
 
 `LiteAgent.call` 返回 Promise。成功时 resolve 最终 Response 的 `payload`。失败时 reject 带 `code` 的 Error。`onEvent` 接收归因 Event Frame。
 
-`onUI` 接收 State 和 Command Push。`onDiagnostic` 接收 Diagnostic。断线后 SDK 自动重连 `/bridge/ui`。
+`onUI` 接收 State 和 Command Push。`onDiagnostic` 接收 Diagnostic。`onStatus` 接收 `connecting`、`connected` 和 `reconnecting`。断线后 SDK 按指数退避自动重连 `/bridge/ui`。
 
-`onEvicted` 接收 Evicted Frame。收到后 SDK 停止重连，本页不再接收推送。刷新页面可重新接管。
+`onResync` 在已连接过一次后重新收到 hello 时触发。Shell 据此重新读取 Bootstrap 和插件状态。
 
-### Evicted
+### Hello
+
+每条 `/bridge/ui` 连接建立后，Host 先发送一条 hello Frame。
 
 ```json
 {
   "version": 1,
-  "id": "ui-push-20",
-  "type": "evicted"
+  "id": "ui-push-1",
+  "type": "hello"
 }
 ```
 
-v1 只保留一个活动 UI 连接。新连接建立时，Host 向旧连接发送 Evicted，然后关闭它。旧页面因此不会重连，两个页面不会反复互相抢占连接。
+第一条 hello 表示首次连接。之后的 hello 表示断线重连，SDK 触发 `onResync`。
+
+### 多连接
+
+Host 允许多个页面同时连接 `/bridge/ui`。每个连接有独立队列，State、Command 和 Diagnostic 广播给所有连接。新连接不会关闭旧连接，旧页面不会冻结。
 
 ## 8. 顺序与恢复
 
 UI Push 使用每个活动连接的有界 FIFO 队列。Publisher 入队后立即返回，不等待浏览器回执。
 
-同一 Mount 的推送保持入队顺序。两个 HTTP 流之间不保证全局顺序。State 使用插件定义的 `revision` 丢弃旧值。Command 需要顺序时，由插件 payload 中的序号处理。
+同一 Mount 的推送保持入队顺序。两个 HTTP 流之间不保证全局顺序。State 使用插件定义的 `revision` 丢弃旧值。插件必须保证 revision 跨进程重启仍递增，否则重连后的新状态会被当成旧值丢弃。Command 需要顺序时，由插件 payload 中的序号处理。
 
-浏览器离线或队列已满时，本次 Push 被丢弃。该结果不影响插件业务。Host 不缓存业务 State，也不重放 Command。Diagnostic 快照单独保存在内存中。
+某个连接离线或队列已满时，该连接丢弃本次 Push，其他连接不受影响。Host 不会缓存业务 State，也不会重放 Command。
+当没有任何连接接受推送时，`host.ui.state` / `host.ui.command` 返回 `ui_not_mounted`，由插件决定重试还是降级。
+Diagnostic 快照单独保存在内存中，上限 256 条，超出后丢弃最旧的。
 
-v1 只保留一个活动 UI 连接。新连接建立后替换旧连接，向旧连接发送 Evicted 并丢弃旧连接队列。旧页面收到 Evicted 后停止重连。浏览器关闭和重启不影响后端 Call。
+Host 向所有活动 UI 连接广播推送。连接建立和关闭互不影响。浏览器关闭和重启不影响后端 Call。
 
 刷新或重启后不重放事件。Component 重新调用插件读取方法，Plugin Runtime 重建 State。Shell 重新读取 Bootstrap，恢复当前 Diagnostic 快照。
+
+断线重连后，SDK 触发 resync。Shell 重新读取 Bootstrap，组件通过 `resync()` 或重新挂载重新读取状态。Host 不重放断线期间的 Push。
 
 悬浮窗关闭只影响当前浏览器显示。Host 不删除对应诊断。
 
@@ -375,11 +394,12 @@ Host Shell 的顶栏提供统一的 `插件中心` 入口。中心包含三个�
 
 点击插件节点后，右侧显示 Capability、硬依赖、被依赖方和 UI Mount。节点高亮当前插件及其一跳关系。
 
-管理接口返回最新 Bootstrap。成功后 Shell 更新插件快照和新增 Mount。面板关闭只影响当前浏览器显示，不改变插件状态。
+管理接口返回最新 Bootstrap。成功后 Shell 更新插件快照并按新列表对齐 Mount：新增的 Mount 被装载，Bootstrap 中已消失的 Mount 被卸载。面板关闭只影响当前浏览器显示，不改变插件状态。
 
 ## 12. 安全约束
 
 - 默认只监听 `127.0.0.1:2333`；
+- 所有 `POST` 端点校验 `Origin` 同源，跨源请求返回 403；不带 `Origin` 的请求放行；
 - UI 资源目录全部允许，不做 allowlist 或 MIME 白名单；
 - 浏览器不能调用 Host 平台管理方法；
 - 浏览器不能伪造 `from`；

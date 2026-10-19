@@ -84,6 +84,7 @@ type streamSnapshot struct {
 type turnIn struct {
 	Input           string   `json:"input"`
 	SessionID       string   `json:"session_id,omitempty"`
+	WorkspaceID     string   `json:"workspace_id,omitempty"`
 	Workspace       string   `json:"workspace,omitempty"`
 	MaxSteps        int      `json:"max_steps,omitempty"`
 	AllowedTools    []string `json:"allowed_tools,omitempty"`
@@ -142,6 +143,7 @@ type configSetIn struct {
 // session payloads (subset)
 type sessionCreateIn struct {
 	SessionID       string `json:"session_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
 	Name            string `json:"name,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
@@ -151,6 +153,11 @@ type sessionCreateIn struct {
 
 type sessionCreateOut struct {
 	SessionID string `json:"session_id"`
+}
+
+type sessionInfoOut struct {
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Workspace   string `json:"workspace,omitempty"`
 }
 
 type sessionAppendIn struct {
@@ -171,6 +178,7 @@ type modelContextIn struct {
 	TurnID       string   `json:"turn_id,omitempty"`
 	StepID       string   `json:"step_id,omitempty"`
 	Scheme       string   `json:"scheme,omitempty"`
+	WorkspaceID  string   `json:"workspace_id,omitempty"`
 	Workspace    string   `json:"workspace,omitempty"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 	DeniedTools  []string `json:"denied_tools,omitempty"`
@@ -182,6 +190,10 @@ type modelContextOut struct {
 	Tools          []toolDefinition `json:"tools"`
 	TokenEstimate  int              `json:"token_estimate"`
 	Warnings       []string         `json:"warnings,omitempty"`
+	// Degraded is set when the context had to be rebuilt locally because
+	// model-context or tools could not answer. It is surfaced in the
+	// request_header fact so a silent quality drop is visible in the log.
+	Degraded string `json:"degraded,omitempty"`
 }
 
 type toolResult struct {
@@ -196,5 +208,4 @@ const (
 
 	schemeChat        = "chat"
 	schemeToolCalling = "tool_calling"
-	schemeCoding      = "coding"
 )

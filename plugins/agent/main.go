@@ -77,7 +77,7 @@ func main() {
 			return nil, err
 		}
 		return p.configSet(in)
-	})).WithInfo("config.set", "update config (deferred while working)"))
+	})).WithInfo("config.set", "update agent config (applies immediately; running turns keep their snapshot)"))
 
 	s.Register("agent", "settings.get", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		return p.settingsGet(), nil

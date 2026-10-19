@@ -5,7 +5,7 @@
   "entry": "agent",
   "provides": ["loop", "agent"],
   "requires": ["session", "llm", "tools", "model-context"],
-  "depends_on": ["session", "llm-openai", "tools", "model-context"],
+  "depends_on": ["session", "llm-openai"],
   "autostart": true,
   "settings": {
     "get": { "capability": "agent", "method": "settings.get" },

@@ -39,7 +39,14 @@ function harness(overrides = {}) {
 	};
 	const document = {
 		createElement(tag) {
-			const element = { tag, dataset: {} };
+			const element = {
+				tag,
+				dataset: {},
+				removed: false,
+				remove() {
+					this.removed = true;
+				},
+			};
 			elements.push(element);
 			return element;
 		},
@@ -54,6 +61,7 @@ function harness(overrides = {}) {
 		slots,
 		onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 		whenDefinedTimeoutMs: overrides.whenDefinedTimeoutMs ?? 20,
+		resyncRetryDelaysMs: overrides.resyncRetryDelaysMs ?? [0],
 		...overrides,
 	});
 	return { customElements, diagnostics, elements, imports, loader, slots };
@@ -91,6 +99,19 @@ test("mounts a key only once", async () => {
 	assert.equal(h.slots.get("center").children.length, 1);
 });
 
+test("reloading keeps unchanged mounted elements", async () => {
+	const h = harness({ definedTags: ["demo-chat"] });
+	const mount = { mount: { plugin: "demo", id: "chat" }, tag: "demo-chat", slot: "center", entry: "/plugins/demo/ui/main.js" };
+
+	await h.loader.load([mount]);
+	const first = h.loader.get("demo:chat");
+	await h.loader.load([mount]);
+
+	assert.equal(h.elements.length, 1);
+	assert.equal(h.loader.get("demo:chat"), first);
+	assert.equal(first.removed, false);
+});
+
 test("isolates entry import failure", async () => {
 	const h = harness({
 		definedTags: ["demo-ok"],
@@ -124,6 +145,66 @@ test("isolates custom element definition timeout", async () => {
 	assert.equal(h.slots.get("center").children.length, 1);
 	assert.equal(h.diagnostics.length, 1);
 	assert.match(h.diagnostics[0].message, /timed out/i);
+});
+
+test("resync asks mounted components to refresh", async () => {
+	const h = harness({ definedTags: ["demo-chat"] });
+	const mount = { mount: { plugin: "demo", id: "chat" }, tag: "demo-chat", slot: "center", entry: "/plugins/demo/ui/main.js" };
+	await h.loader.load([mount]);
+
+	let refreshed = 0;
+	h.elements[0].resync = async () => {
+		refreshed += 1;
+	};
+	await h.loader.resync([mount]);
+
+	assert.equal(refreshed, 1);
+	assert.equal(h.elements.length, 1);
+	assert.equal(h.loader.has("demo:chat"), true);
+});
+
+test("resync remounts components without resync", async () => {
+	const h = harness({ definedTags: ["demo-chat"] });
+	const mount = { mount: { plugin: "demo", id: "chat" }, tag: "demo-chat", slot: "center", entry: "/plugins/demo/ui/main.js" };
+	await h.loader.load([mount]);
+	const first = h.elements[0];
+
+	await h.loader.resync([mount]);
+
+	assert.equal(first.removed, true);
+	assert.equal(h.elements.length, 2);
+	assert.notEqual(h.loader.get("demo:chat"), first);
+});
+
+test("resync keeps the mount when component resync fails", async () => {
+	const h = harness({ definedTags: ["demo-chat"] });
+	const mount = { mount: { plugin: "demo", id: "chat" }, tag: "demo-chat", slot: "center", entry: "/plugins/demo/ui/main.js" };
+	await h.loader.load([mount]);
+
+	h.elements[0].resync = async () => {
+		throw new Error("resync failed");
+	};
+	await h.loader.resync([mount]);
+
+	assert.equal(h.loader.has("demo:chat"), true);
+	assert.equal(h.diagnostics.length, 1);
+	assert.equal(h.diagnostics[0].code, "ui_resync_failed");
+});
+
+test("resync retries transient component failure", async () => {
+	const h = harness({ definedTags: ["demo-chat"], resyncRetryDelaysMs: [0, 0, 0] });
+	const mount = { mount: { plugin: "demo", id: "chat" }, tag: "demo-chat", slot: "center", entry: "/plugins/demo/ui/main.js" };
+	await h.loader.load([mount]);
+
+	let calls = 0;
+	h.elements[0].resync = async () => {
+		calls += 1;
+		if (calls < 3) throw new Error("plugin not ready");
+	};
+	await h.loader.resync([mount]);
+
+	assert.equal(calls, 3);
+	assert.equal(h.diagnostics.length, 0);
 });
 
 

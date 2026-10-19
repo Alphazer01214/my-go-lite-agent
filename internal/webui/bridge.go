@@ -41,7 +41,11 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 	}
 
 	if request.Capability == protocol.HostCapability {
-		writeBrowserResponse(w, request.ID, callErrorResponse(request, host.ErrMethodNotFound))
+		rejected, err := browserFrame(callErrorResponse(request, host.ErrMethodNotFound), request.ID)
+		if err != nil {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(rejected)
 		return
 	}
 
@@ -49,6 +53,9 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 	defer close(done)
 	queue := make(chan *protocol.Frame, 64)
 
+	// Frames are normalized to browser shape exactly once, here. sendEvent drops
+	// under backpressure so a slow browser cannot stall the plugin's read loop:
+	// an evt is a progress signal and the final res is what the caller waits for.
 	sendEvent := func(frame *protocol.Frame) {
 		out, err := browserFrame(frame, request.ID)
 		if err != nil {
@@ -60,10 +67,16 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 		default:
 		}
 	}
+	// sendFinal must not drop: it is the only res this request ever gets, so it
+	// blocks until the writer takes it or the browser goes away. A frame that
+	// cannot be represented becomes a synthetic error res rather than silence.
 	sendFinal := func(frame *protocol.Frame) {
 		out, err := browserFrame(frame, request.ID)
 		if err != nil {
-			out = callErrorResponse(request, err)
+			out, err = browserFrame(callErrorResponse(request, err), request.ID)
+			if err != nil {
+				return
+			}
 		}
 		select {
 		case queue <- out:
@@ -71,9 +84,13 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 		}
 	}
 
+	// The browser is only an observer. A refresh or tab close aborts this HTTP
+	// response, but the business call must keep running so a reload can recover
+	// from persistent state. Host.Close cancels pending calls on shutdown.
+	callCtx := context.WithoutCancel(r.Context())
 	go func() {
 		frame, callErr := backend.CallWithEvents(
-			r.Context(),
+			callCtx,
 			"webui",
 			request.Capability,
 			request.Method,
@@ -90,7 +107,10 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 	for {
 		select {
 		case frame := <-queue:
-			if !writeBrowserResponse(w, request.ID, frame) {
+			if err := json.NewEncoder(w).Encode(frame); err != nil {
+				return
+			}
+			if err := http.NewResponseController(w).Flush(); err != nil {
 				return
 			}
 			if frame.Type == protocol.FrameResponse {
@@ -100,18 +120,6 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 			return
 		}
 	}
-}
-
-func writeBrowserResponse(w http.ResponseWriter, requestID string, frame *protocol.Frame) bool {
-	out, err := browserFrame(frame, requestID)
-	if err != nil {
-		http.Error(w, "failed to encode browser response", http.StatusInternalServerError)
-		return false
-	}
-	if err := json.NewEncoder(w).Encode(out); err != nil {
-		return false
-	}
-	return http.NewResponseController(w).Flush() == nil
 }
 
 func callErrorResponse(request browserCall, err error) *protocol.Frame {

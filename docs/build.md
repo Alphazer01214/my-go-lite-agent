@@ -57,7 +57,7 @@ powershell -File scripts\build.ps1 -List
 | `plugin:session` | 插件可执行 | `dist/plugins/session/session` |
 | `plugin:llm-openai` | 插件可执行 | `dist/plugins/llm-openai/llm-openai` |
 
-清单分两组：`core` 是 autostart 根插件，`tools` 由 Agent Scheme 的 `dependsPlugins` 拉入。没有 `plugin.json` 的目录不是可挂载插件，脚本跳过并汇总告警，不会进入 dist。
+清单分两组：`core` 是 autostart 根插件；`tools` 供后续加入非 autostart 的 Tool Provider，当前为空。没有 `plugin.json` 的目录不是可挂载插件，脚本跳过并汇总告警，不会进入 dist。
 
 ## 4. 产物布局
 
@@ -66,8 +66,6 @@ dist/
 ├── liteagent-server            Host 可执行（静态嵌入 WebUI）
 ├── README.md                   平台说明
 ├── CONTEXT.md                  平台术语
-├── config/
-│   └── permissions.json        权限种子（预留给 sandbox 插件）
 ├── plugins/
 │   ├── README.md               插件目录总览
 │   ├── agent/
@@ -81,7 +79,7 @@ dist/
 │       ├── session             插件可执行
 │       ├── plugin.json
 │       ├── ui/main.js          插件静态资源
-│       ├── sessions/           运行期会话数据
+│       ├── sessions/           运行期会话和 Workspace Registry
 │       └── README.md
 └── .build-cache/               增量哈希印记，不参与运行
 ```
@@ -124,9 +122,11 @@ flowchart LR
 | llm-openai 配置（含 API Key） | `dist/plugins/llm-openai/config.json` |
 | agent 配置（scheme 选择） | `dist/plugins/agent/config.json` |
 | 会话记录 | `dist/plugins/session/sessions/` |
-| 权限规则 | `dist/config/permissions.json` |
+| Workspace Registry | `dist/plugins/session/sessions/workspaces.json` |
 
 非 `--clean` 构建不会清空 dist，保留逻辑是空操作。不再发布的插件目录仍会被裁剪。
+
+旧版本的 `dist/plugins/workspace/workspaces.json` 会在裁剪前迁移到 `dist/plugins/session/sessions/workspaces.json`。`--clean` 同样会暂存并恢复该文件。
 
 ## 7. 配置种子规则
 
@@ -167,7 +167,7 @@ node --test internal/webui/*.test.mjs   # 无 node 时告警跳过
 1. 在 `plugins/<name>/` 提供 `plugin.json` 和 `main.go`；
 2. 在 `scripts/shipped-plugins.conf` 的 `core` 或 `tools` 组追加名字；
 3. 执行 `bash scripts/build.sh`，确认产物出现在 `dist/plugins/<name>/`；
-4. 同步 `plugins/README.md` 第 5 节的清单。
+4. 同步 `plugins/README.md` 第 7 节的清单。
 
 脚本不生成 Manifest，也不推断插件列表。清单、源码和文档三处保持一致。
 

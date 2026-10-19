@@ -23,6 +23,7 @@
 {
   "input": "分析这个项目",
   "session_id": "s-123",
+  "workspace_id": "ws-123",
   "workspace": "E:/project",
   "max_steps": 32,
   "allowed_tools": ["file_read"],
@@ -37,7 +38,8 @@
 |---|---|---|
 | `input` | 是 | 用户输入 |
 | `session_id` | 否 | 为空时创建 Session |
-| `workspace` | 否 | 工具工作目录 |
+| `workspace_id` | 否 | 创建 Session 时绑定的 Workspace |
+| `workspace` | 否 | Workspace 路径一致性校验 |
 | `max_steps` | 否 | 覆盖配置值 |
 | `allowed_tools` | 否 | 非空时只保留交集工具 |
 | `denied_tools` | 否 | 从交集或全集中移除工具 |
@@ -108,6 +110,7 @@
 ```
 
 当前实现中，空字符串和非正数不覆盖原值。每次 Turn 在开始时捕获配置快照。配置修改不影响运行中的 Turn，并从下一次 Turn 开始生效。
+新值同时写入插件目录下的 `config.json`；写盘失败时返回 `handler_error`，此时内存里的新值已经生效但没有持久化。
 
 ## 5. 下游调用
 
@@ -117,12 +120,20 @@ flowchart LR
     A -->|session.append| S
     A -->|session.derive| S
     A -->|session.stream.update| S
-    A -->|model-context.build| M[model-context]
+    A -.->|model-context.build| M[model-context]
     A -->|llm.complete/cancel| L[llm-openai]
     A -.->|tools.list/call| T[tools]
 ```
 
-`model-context` 缺失时 Agent 回退到 `session.derive` 和 `tools.list`。`tools` 缺失时跳过工具阶段。
+`model-context` 和 `tools` 是弱依赖：能力缺失时回退到 `session.derive`，或跳过工具阶段。
+回退不是静默的：`request_header` 的 `meta` 会带上 `degraded`，内容是降级原因
+（`model-context unavailable: …` 或 `tools unavailable: …`）。这样调用方能从 Session 日志里看到本轮降级过。
+
+Agent 每次 Turn 都调用 `session.info` 读取 Session 已绑定的 `workspace_id` 和规范路径。
+
+`workspace` 为空时直接使用 Session 值。显式给出时必须与 Session 值指向同一目录，否则返回 `bad_arguments`。Session 没有 Workspace 时同样返回 `bad_arguments`（消息为 `session workspace is required`）。
+
+Agent 在 `tools.call` 中传递 `session_id`、规范 `workspace` 和模型提供的 `call_id`。Provider 应以 `session_id` 重新解析 Workspace，不信任调用路径。
 
 ## 6. Session Fact 序列
 
@@ -141,6 +152,27 @@ turn_end
 ```
 
 `turn_id`、`step_id` 和 `plugin` 写入对应 Fact 的 `meta`。
+
+`request_header` 的 `meta` 字段：
+
+| 字段 | 含义 |
+|---|---|
+| `step` | 当前步序号 |
+| `model_context_id` | `model-context.build` 返回的上下文标识；回退时为空 |
+| `token_estimate` | `model-context.build` 的估算；回退时为 0 |
+| `degraded` | 仅在回退时出现，说明降级原因 |
+
+`step_end` 的 `meta.reason` 取值：
+
+| 值 | 含义 |
+|---|---|
+| `completed` | 本步没有工具调用，Turn 正常收束 |
+| `tool_calls` | 本步有工具调用且全部执行完毕，继续下一步 |
+| `cancelled` | 工具执行途中被取消，本步在此收口并结束 Turn |
+
+工具循环中途取消时，assistant Fact 已经记下了本步的全部 `tool_calls`，但只有执行到的那几个有了结果。
+因此此时写 `step_end(cancelled)` 并结束 Turn，不再写 `step_end(tool_calls)`——
+否则 Session 里会留下没有对应结果的 `tool_call_id`，下游按 id 配对时会错。
 
 当前实现补充：
 
@@ -205,8 +237,9 @@ Agent 没有顶层 Component。Agent 不直接调用 `setData` 或 `runCommand`�
 | Session 创建或写入失败 | 返回错误 |
 | LLM 调用失败 | 返回 `llm_upstream` 或下游错误 |
 | 工具失败 | 写 tool error 和 `is_error`，继续 Turn |
-| 达到 `max_steps` | 写 `turn_end(max_steps)` |
-| 取消 | 中止 LLM Call，并写 `turn_end(cancelled)` |
+| 达到 `max_steps` | 最后一步仍有工具调用时写 `turn_end(max_steps)`；最后一步正常收束时写 `turn_end(completed)` |
+| 取消 | 中止 LLM Call；工具执行途中取消时先写 `step_end(cancelled)`，再写 `turn_end(cancelled)` |
+| `config.set` / `settings.save` 写盘失败 | 返回 `handler_error`，内存值已生效但未持久化 |
 | 插件退出 | Host 合成 `plugin_down`；Session 可补写 `turn_end(error)` |
 
 ## 10. 结构体索引

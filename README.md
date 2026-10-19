@@ -6,7 +6,11 @@ Host 与 Plugin 是两个独立层次。项目整体文档只定义平台契约�
 
 ## 当前状态
 
-当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 提供可发布的 Agent、Session、LLM、Model Context、Tools、Sandbox、File、Shell、Web 和 Subagent 组合。
+当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 当前发布 `agent`、`llm-openai` 和 `session` 三个插件。
+
+Workspace Registry 由 Session 插件拥有。Session 创建后绑定 Workspace；历史列表按 Workspace 过滤，多会话标签按 Workspace 恢复。Agent 从 Session 解析规范 Workspace，拒绝调用方传入的不一致路径。
+
+Tools、Model Context、Sandbox 和文件、Shell、Web、Subagent 插件已从当前源码移除，代码保留在 git 历史。
 
 WebUI 平台契约已形成文档。具体插件的 UI 和通信契约只写在对应插件目录。
 

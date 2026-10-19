@@ -1,8 +1,0 @@
-{
-  "defaults": {
-    "low": "allow",
-    "medium": "allow",
-    "high": "deny"
-  },
-  "rules": []
-}

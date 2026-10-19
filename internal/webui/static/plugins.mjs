@@ -4,6 +4,7 @@ const stateLabels = Object.freeze({
 	active: "运行中",
 	stopping: "停止中",
 	failed: "失败",
+	missing: "缺失",
 });
 
 function selectedProviderInstance(plugin, handlers) {
@@ -142,12 +143,6 @@ export function renderPluginList(document, list, plugins, handlers = {}) {
 		state.className = `state-badge state-${stateName.replace(/[^a-z0-9_-]/g, "-") || "unknown"}`;
 		state.textContent = stateLabels[stateName] || stateName || "未知";
 		status.append(state);
-		if (plugin.missing) {
-			const missing = document.createElement("span");
-			missing.className = "plugin-missing state-badge state-missing";
-			missing.textContent = "缺失";
-			status.append(missing);
-		}
 		const selector = instanceSelector(document, plugin, selectedInstance, handlers);
 		if (selector) status.append(selector);
 		const enabled = document.createElement("span");
@@ -514,8 +509,10 @@ export function renderDependencyDetails(document, root, model, selectedId) {
 	);
 }
 
-export function renderDependencyEdgeList(document, root, plugins) {
-	const model = relationshipGraphModel(plugins);
+// renderDependencyEdgeList reuses the model renderDependencyGraph already built
+// for the same plugin set, instead of resolving cycles and laying out twice.
+export function renderDependencyEdgeList(document, root, pluginsOrModel) {
+	const model = Array.isArray(pluginsOrModel?.nodes) ? pluginsOrModel : relationshipGraphModel(pluginsOrModel);
 	root.replaceChildren();
 	if (model.edges.length === 0) {
 		const item = document.createElement("li");

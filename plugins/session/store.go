@@ -27,15 +27,18 @@ type sdkCaller interface {
 }
 
 type plugin struct {
-	dir        string
-	sdk        sdkCaller
-	cfg        config
-	mu         sync.RWMutex
-	reg        map[string]*store
-	streams    map[string]streamSnapshot
-	ui         uiPublisher
-	uiRevision uint64
-	selected   string
+	dir                 string
+	workspaces          *workspaceStore
+	sdk                 sdkCaller
+	cfg                 config
+	mu                  sync.RWMutex
+	reg                 map[string]*store
+	streams             map[string]streamSnapshot
+	ui                  uiPublisher
+	uiRevision          uint64
+	selected            string
+	open                []string
+	selectedByWorkspace map[string]string
 }
 
 const defaultDir = "./sessions"
@@ -54,7 +57,18 @@ func newPlugin(dir string) *plugin {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		panic(err)
 	}
-	return &plugin{dir: dir, reg: make(map[string]*store), streams: make(map[string]streamSnapshot), cfg: loadConfig()}
+	workspaces, err := newWorkspaceStore(workspaceDataFile(dir), legacyWorkspaceDataFile(dir))
+	if err != nil {
+		panic(err)
+	}
+	return &plugin{
+		dir: dir, workspaces: workspaces, reg: make(map[string]*store), streams: make(map[string]streamSnapshot),
+		cfg: loadConfig(), selectedByWorkspace: make(map[string]string),
+		// Revisions must stay monotonic across process restarts. A browser that
+		// reconnects to a restarted plugin would otherwise discard the fresh
+		// state as stale because the counter reset to zero.
+		uiRevision: uint64(time.Now().UnixMicro()),
+	}
 }
 
 func loadConfig() config {
@@ -93,12 +107,24 @@ func (p *plugin) close() {
 	}
 }
 
-func (p *plugin) sessionPath(id string) string {
-	return filepath.Join(p.dir, id+".jsonl")
+// sessionPath maps a session id to its fact log. The id is rejected when it is
+// not a plain name, so a caller cannot make the plugin write outside p.dir.
+func (p *plugin) sessionPath(id string) (string, error) {
+	if err := validSessionID(id); err != nil {
+		return "", err
+	}
+	return filepath.Join(p.dir, id+".jsonl"), nil
 }
 
-func jsonUnmarshal(data []byte, v any) error {
-	return json.Unmarshal(data, v)
+// validSessionID rejects anything that is not a single safe path segment.
+func validSessionID(id string) error {
+	if id == "" {
+		return errBadArguments("session_id is required")
+	}
+	if id == "." || id == ".." || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return errBadArguments("session_id must not contain a path separator")
+	}
+	return nil
 }
 
 // loadAll scans *.jsonl into reg. Corrupt lines are skipped with a warning.
@@ -126,8 +152,11 @@ func (p *plugin) loadAll() {
 }
 
 func (p *plugin) recover(id string) (*store, error) {
-	path := p.sessionPath(id)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	path, err := p.sessionPath(id)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +210,16 @@ func (p *plugin) recover(id string) (*store, error) {
 				st.meta = meta
 			}
 		}
+		if fact.Type == TypeSessionMeta && len(fact.Meta) > 0 {
+			var meta Meta
+			if err := json.Unmarshal(fact.Meta, &meta); err == nil {
+				st.meta = meta
+			}
+		}
 	}
+	st.nextSeq = maxSeq + 1
+	st.factCount = count
+	st.lastTS = lastTS
 	if len(openTurns) > 0 {
 		turnIDs := make([]string, 0, len(openTurns))
 		for turnID := range openTurns {
@@ -204,9 +242,6 @@ func (p *plugin) recover(id string) (*store, error) {
 			return nil, err
 		}
 	}
-	st.nextSeq = maxSeq + 1
-	st.factCount = count
-	st.lastTS = lastTS
 	if st.meta.SessionID == "" {
 		st.meta.SessionID = id
 	}
@@ -233,6 +268,26 @@ func (p *plugin) get(id string) (*store, error) {
 	return st, nil
 }
 
+func (s *store) snapshotMeta() Meta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
+}
+
+func (s *store) updateMeta(meta Meta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, _, err := s.appendLocked([]factIn{{
+		Type: TypeSessionMeta,
+		Role: RoleHost,
+		Meta: mustJSON(meta),
+	}}); err != nil {
+		return err
+	}
+	s.meta = meta
+	return nil
+}
+
 func errBadArguments(msg string) error {
 	return errCoded("bad_arguments", msg)
 }
@@ -250,23 +305,43 @@ func (p *plugin) create(ctx context.Context, in createIn) (createOut, error) {
 	id := in.SessionID
 	if id == "" {
 		id = fmt.Sprintf("s-%d", time.Now().UnixNano())
+	} else if err := validSessionID(id); err != nil {
+		return createOut{}, err
+	}
+	p.mu.RLock()
+	existing := p.reg[id]
+	p.mu.RUnlock()
+	if existing != nil {
+		meta := existing.snapshotMeta()
+		return createOut{SessionID: existing.id, CreatedTimestamp: meta.CreatedTimestamp}, nil
+	}
+	workspaceID, workspacePath, err := p.resolveWorkspaceBinding(in.WorkspaceID, in.Workspace)
+	if err != nil {
+		return createOut{}, err
 	}
 	p.mu.Lock()
 	if st, ok := p.reg[id]; ok {
 		p.mu.Unlock()
-		return createOut{SessionID: st.id, CreatedTimestamp: st.meta.CreatedTimestamp}, nil
+		meta := st.snapshotMeta()
+		return createOut{SessionID: st.id, CreatedTimestamp: meta.CreatedTimestamp}, nil
 	}
 
 	meta := Meta{
 		SessionID:        id,
 		Name:             in.Name,
-		Workspace:        in.Workspace,
+		WorkspaceID:      workspaceID,
+		Workspace:        workspacePath,
 		ParentSessionID:  in.ParentSessionID,
 		Origin:           in.Origin,
 		DelegationDepth:  in.DelegationDepth,
 		CreatedTimestamp: nowMS(),
 	}
-	f, err := os.OpenFile(p.sessionPath(id), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
+	path, err := p.sessionPath(id)
+	if err != nil {
+		p.mu.Unlock()
+		return createOut{}, err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		p.mu.Unlock()
 		return createOut{}, errHandler(err.Error())
@@ -327,14 +402,14 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 
 func (s *store) appendLocked(ins []factIn) ([]int, int, error) {
 	ts := nowMS()
+	// The sequence is only consumed once the bytes are on the log: a failed
+	// write must not leave a permanent gap that recover() would read back.
+	firstSeq := s.nextSeq
 	seqs := make([]int, 0, len(ins))
 	facts := make([]Fact, 0, len(ins))
-	for _, in := range ins {
-		seq := s.nextSeq
-		s.nextSeq++
-		seqs = append(seqs, seq)
+	for i, in := range ins {
 		facts = append(facts, Fact{
-			Seq:        seq,
+			Seq:        firstSeq + i,
 			Type:       in.Type,
 			Role:       in.Role,
 			Content:    in.Content,
@@ -356,6 +431,10 @@ func (s *store) appendLocked(ins []factIn) ([]int, int, error) {
 	if _, err := s.f.WriteString(b.String()); err != nil {
 		return nil, s.nextSeq, errHandler(err.Error())
 	}
+	for _, f := range facts {
+		seqs = append(seqs, f.Seq)
+	}
+	s.nextSeq = firstSeq + len(facts)
 	s.factCount += len(ins)
 	s.lastTS = ts
 	return seqs, s.nextSeq, nil
@@ -367,6 +446,14 @@ func (s *store) counts() (int, int64) {
 	return s.factCount, s.lastTS
 }
 
+// nextSequence reads the sequence the next append will use, under the lock that
+// appendLocked writes it with.
+func (s *store) nextSequence() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextSeq
+}
+
 func (p *plugin) query(in queryIn) (queryOut, error) {
 	st, err := p.get(in.SessionID)
 	if err != nil {
@@ -376,7 +463,7 @@ func (p *plugin) query(in queryIn) (queryOut, error) {
 	if err != nil {
 		return queryOut{}, err
 	}
-	out := queryOut{NextSeq: st.nextSeq, Total: total}
+	out := queryOut{NextSeq: st.nextSequence(), Total: total}
 	typeSet := map[string]bool{}
 	for _, t := range in.Types {
 		typeSet[t] = true
@@ -401,7 +488,11 @@ func (p *plugin) query(in queryIn) (queryOut, error) {
 
 // readFacts scans the jsonl file (soft-skips corrupt lines).
 func (p *plugin) readFacts(id string) ([]Fact, int, error) {
-	data, err := os.ReadFile(p.sessionPath(id))
+	path, err := p.sessionPath(id)
+	if err != nil {
+		return nil, 0, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, errHandler(err.Error())
 	}
@@ -437,7 +528,7 @@ func (p *plugin) derive(in deriveIn) (deriveOut, error) {
 	return projectMessages(facts, full), nil
 }
 
-func (p *plugin) list() (listOut, error) {
+func (p *plugin) list(workspaceID string) (listOut, error) {
 	p.mu.RLock()
 	ids := make([]string, 0, len(p.reg))
 	for id := range p.reg {
@@ -451,13 +542,18 @@ func (p *plugin) list() (listOut, error) {
 		if err != nil {
 			continue
 		}
+		meta := st.snapshotMeta()
+		if workspaceID != "" && meta.WorkspaceID != workspaceID {
+			continue
+		}
 		count, lastTS := st.counts()
 		out.Sessions = append(out.Sessions, sessionSummary{
 			SessionID:        st.id,
-			Name:             st.meta.Name,
-			Workspace:        st.meta.Workspace,
+			Name:             meta.Name,
+			WorkspaceID:      meta.WorkspaceID,
+			Workspace:        meta.Workspace,
 			FactCount:        count,
-			CreatedTimestamp: st.meta.CreatedTimestamp,
+			CreatedTimestamp: meta.CreatedTimestamp,
 			LastTimestamp:    lastTS,
 		})
 	}
@@ -484,15 +580,17 @@ func (p *plugin) info(in infoIn) (infoOut, error) {
 	if err != nil {
 		return infoOut{}, err
 	}
+	meta := st.snapshotMeta()
 	return infoOut{
 		SessionID:        st.id,
-		Name:             st.meta.Name,
-		Workspace:        st.meta.Workspace,
-		ParentSessionID:  st.meta.ParentSessionID,
-		Origin:           st.meta.Origin,
-		DelegationDepth:  st.meta.DelegationDepth,
-		CreatedTimestamp: st.meta.CreatedTimestamp,
+		Name:             meta.Name,
+		WorkspaceID:      meta.WorkspaceID,
+		Workspace:        meta.Workspace,
+		ParentSessionID:  meta.ParentSessionID,
+		Origin:           meta.Origin,
+		DelegationDepth:  meta.DelegationDepth,
+		CreatedTimestamp: meta.CreatedTimestamp,
 		FactCount:        total,
-		NextSeq:          st.nextSeq,
+		NextSeq:          st.nextSequence(),
 	}, nil
 }

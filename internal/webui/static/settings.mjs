@@ -79,8 +79,10 @@ function createInput(document, pluginName, field) {
 	return input;
 }
 
+// renderSettingsList renders the plugins it is given. Filtering by schema is the
+// caller's job so the summary count and the list cannot drift apart.
 export function renderSettingsList(document, root, plugins, handlers = {}) {
-	const entries = (Array.isArray(plugins) ? plugins : []).filter((plugin) => plugin?.settings?.schema?.length);
+	const entries = Array.isArray(plugins) ? plugins : [];
 	root.replaceChildren();
 
 	if (entries.length === 0) {

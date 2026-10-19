@@ -102,6 +102,52 @@ test("LiteAgent.call rejects error and malformed streams", async () => {
 	await assert.rejects(malformedAgent.call("demo", "run", {}), /unexpected Browser Call id/);
 });
 
+test("LiteAgent reports connection status and resyncs after reconnect", async () => {
+	let calls = 0;
+	let resyncs = 0;
+	const statuses = [];
+	let resolveResync;
+	const resynced = new Promise((resolve) => {
+		resolveResync = resolve;
+	});
+	const agent = createLiteAgent({
+		reconnectDelayMs: 1,
+		maxReconnectDelayMs: 1,
+		fetchImpl: async () => {
+			calls += 1;
+			if (calls === 1) {
+				return ndjsonResponse([
+					{ version: 1, id: "hello-1", type: "hello" },
+				]);
+			}
+			return ndjsonResponse([
+				{ version: 1, id: "hello-2", type: "hello" },
+				{
+					version: 1,
+					id: "ui-push-1",
+					type: "ui",
+					mount: { plugin: "demo", id: "main" },
+					kind: "state",
+					payload: {},
+				},
+			]);
+		},
+	});
+	agent.onStatus((status) => statuses.push(status));
+	agent.onResync(() => {
+		resyncs += 1;
+		resolveResync();
+		agent.closeUI();
+	});
+
+	await resynced;
+	assert.equal(resyncs, 1);
+	assert.ok(statuses.includes("connecting"));
+	assert.ok(statuses.includes("connected"));
+	assert.ok(statuses.includes("reconnecting"));
+	assert.ok(calls >= 2);
+});
+
 test("LiteAgent dispatches UI and diagnostic pushes", async () => {
 	const seen = new Promise((resolve) => {
 		const uiFrames = [];

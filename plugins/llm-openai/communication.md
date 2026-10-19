@@ -100,7 +100,11 @@
 { "call_id": "t-1-s1", "cancelled": true }
 ```
 
-`call_id` 由 Agent 传入 `llm.complete`。取消会中止对应上游 HTTP 请求。未注册的 `call_id` 仍返回 `cancelled: true`，用于覆盖调用启动竞态。
+`call_id` 由 Agent 传入 `llm.complete`。取消会中止对应上游 HTTP 请求。
+
+`cancelled` 表示"此刻确实有一个在途 completion 被中止了"。`call_id` 不在飞行中时返回 `cancelled: false`——
+即使它随后才注册，取消仍会生效：`llm.cancel` 会把这个 id 记进一个有界缓冲（上限 256 条），
+`llm.complete` 注册时发现它已被标记就立即中止自己。这样既覆盖了调用启动竞态，又不会因为大量无效取消而无限增长。
 
 ## 4. llm.chunk Event
 
@@ -197,6 +201,12 @@ Accept: text/event-stream
 
 当前实现中，空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。Settings 空 secret 表示不修改。清除 secret 需要显式动作。
 
+`base_url` 在三条输入路径（`config.json`、环境变量、`llm.config.set`）上都会去掉首尾空白和末尾 `/`，
+因此不会拼出 `…/v1//chat/completions`。
+
+新值会写入插件目录下的 `config.json`，但 `api_key` 落盘前被清空：密钥只留在内存和环境变量里。
+写盘失败时返回 `handler_error`，此时内存里的新值已经生效但没有持久化。
+
 ## 7. 调用关系
 
 ```mermaid
@@ -223,6 +233,7 @@ sequenceDiagram
 | HTTP 建连或上游失败 | `llm_upstream` |
 | 上游非 2xx | `llm_upstream` |
 | JSON marshal 失败 | `handler_error` |
+| `llm.config.set` 写 `config.json` 失败 | `handler_error` |
 
 Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 

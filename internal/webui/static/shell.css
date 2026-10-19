@@ -146,11 +146,6 @@ select:focus-visible {
   background: #e6f5f0;
 }
 
-.host-status[data-state="evicted"] {
-  color: var(--warning);
-  background: var(--warning-surface);
-}
-
 .host-status[data-state="error"] {
   color: #8c2929;
   background: #fbecec;
@@ -612,7 +607,7 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-.settings-header,
+.settings-plugin-header,
 .settings-summary {
   display: flex;
   align-items: center;
@@ -621,7 +616,7 @@ select:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
-.settings-header {
+.settings-plugin-header {
   position: sticky;
   z-index: 1;
   top: 0;
@@ -876,26 +871,6 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.legend-node {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  margin-right: 5px;
-  border-radius: 50%;
-}
-
-.legend-mounted {
-  background: #4f9f87;
-}
-
-.legend-available {
-  background: #8090a0;
-}
-
-.legend-degraded {
-  background: #c58a3c;
-}
-
 .graph-toolbar {
   display: flex;
   align-items: center;
@@ -924,8 +899,10 @@ select:focus-visible {
 }
 
 .legend-node {
+  display: inline-block;
   width: 11px;
   height: 11px;
+  margin-right: 5px;
   border: 1px solid var(--border);
   border-radius: 3px;
   background: var(--surface);
@@ -1042,21 +1019,26 @@ select:focus-visible {
   stroke: #52739c;
 }
 
-.graph-mounted {
+.graph-active {
   fill: #e6f5f0;
   stroke: #4f9f87;
 }
 
-.graph-available {
+.graph-inactive {
   fill: #edf3f7;
   stroke: #8090a0;
 }
 
-.graph-degraded,
 .graph-missing,
-.graph-disabled {
+.graph-failed {
   fill: var(--warning-surface);
   stroke: #c58a3c;
+}
+
+.graph-loading,
+.graph-stopping {
+  fill: var(--surface-muted);
+  stroke: #8090a0;
 }
 
 .graph-node-group {

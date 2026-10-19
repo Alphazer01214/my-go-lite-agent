@@ -177,10 +177,10 @@ Host 为跨插件 Request 分配内部 `fwd-N` id。Response 返回调用方时�
 
 | 方法 | 输入 | 输出 |
 |---|---|---|
-| `host.register` | `handlers[]` | `accepted[]`、`rejected[]` |
+| `host.register` | `handlers[]`（每项含 `capability`、`method`，可选 `name`、`description`） | `accepted[]`、`rejected[]` |
 | `host.plugins` | 无 | `plugins[]` 状态快照 |
-| `host.ui.state` | `mount_id`、`state` | `{}` |
-| `host.ui.command` | `mount_id`、`command`、`payload` | `{}` |
+| `host.ui.state` | `mount_id`、`state` | `{}`；无浏览器连接或队列已满时返回 `ui_not_mounted` |
+| `host.ui.command` | `mount_id`、`command`、`payload` | `{}`；无浏览器连接或队列已满时返回 `ui_not_mounted` |
 | `host.context.create` | `parent_id`、`bindings` | `context` |
 | `host.context.bind` | `context_id`、`capability`、`instance_id` | `{bound:true}` |
 | `host.context.close` | `context_id` | `{closed:true}` |
@@ -189,8 +189,11 @@ Host 为跨插件 Request 分配内部 `fwd-N` id。Response 返回调用方时�
 | `host.instance.restart` | `instance_id` | `instance` |
 
 `host.register` 是路由表的唯一写入口。同一插件重复注册同键时采用最后一次。跨插件冲突会进入 `rejected`。
+`name` 和 `description` 只用于展示和诊断，不参与路由；Host 只把 `(capability, method)` 写进路由表。
 
 Consumer 注册参与流水线，但不会抢占 Route Owner。Consumer 先于 Provider 启动时，路由归属保持为空；真正的 Provider 注册后成为 Owner。Route Owner 必须来自包含该 Capability 的 `provides` 声明。
+
+如果某个 `(capability, method)` 已被 Manifest 声明为 Consumer 方法，但当前没有可用的 Consumer，Host 不会直接降级到 Provider。调用返回 `route_failed`，避免绕过 Sandbox 等策略 Consumer。
 
 `host.plugins` 按插件名返回分组快照。每项包含 `name`、可选 `version`、`state`、`selected_instance_id`、`instances`、`enabled`、可选 `provides` 和可选 `depends_on`。
 
@@ -254,7 +257,11 @@ Response 到达后，Host 恢复调用方 id 并删除 pending。Cancel 保留 p
 | `bad_arguments` | 插件 | 参数不合法 |
 | `frame_too_large` | 传输 | Frame 超过上限 |
 | `capability_conflict` | Host | 能力属主冲突 |
-| `ui_not_mounted` | Host/WebUI | Mount 不存在 |
+| `consume_priority_conflict` | Host | 同一 `(capability, method)` 上有多个同优先级 Consumer |
+| `flow_already_proceeded` | SDK/Host | 同一次 Call 重复 `host.proceed` |
+| `pipeline_loop` | Host | 流水线绕回已访问的插件实例 |
+| `pipeline_hops_exceeded` | Host | 流水线跳数超过上限 |
+| `ui_not_mounted` | Host/WebUI | Mount 不存在，或当前没有浏览器连接、推送队列已满 |
 | `ui_owner_mismatch` | Host/WebUI | Mount 属主不匹配 |
 | `instance_not_found` | Host | Plugin Instance 不存在 |
 | `instance_exists` | Host | Plugin Instance 标识已存在 |

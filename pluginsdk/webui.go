@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
@@ -19,11 +20,15 @@ func (p *Plugin) WebUI() *WebUI {
 	return &WebUI{p: p}
 }
 
+// uiPublishTimeout bounds one ui.state / ui.command round trip to Host. The
+// publish is fire-and-forget from the plugin's side, so without a bound a Host
+// that never replies would hang the publishing goroutine forever.
+const uiPublishTimeout = 10 * time.Second
+
 // SetState publishes a rebuildable UI state to the current plugin's mount.
+// It uses a fresh bounded context: a UI publish outlives the handler that
+// triggered it, so it must not inherit that handler's cancellation.
 func (u *WebUI) SetState(mountID string, state json.RawMessage) error {
-	if u == nil || u.p == nil {
-		return ErrCode(protocol.CodeServerClosed, "plugin is not initialized")
-	}
 	if mountID == "" {
 		return ErrCode(protocol.CodeBadArguments, "mount_id is required")
 	}
@@ -38,15 +43,15 @@ func (u *WebUI) SetState(mountID string, state json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("encode ui state: %w", err)
 	}
-	_, err = u.p.Call(context.Background(), protocol.HostCapability, "ui.state", payload)
+	ctx, cancel := context.WithTimeout(context.Background(), uiPublishTimeout)
+	defer cancel()
+	_, err = u.p.Call(ctx, protocol.HostCapability, "ui.state", payload)
 	return err
 }
 
 // SendCommand publishes a transient UI command to the current plugin's mount.
+// Like SetState it publishes on its own bounded context.
 func (u *WebUI) SendCommand(mountID string, command string, payload json.RawMessage) error {
-	if u == nil || u.p == nil {
-		return ErrCode(protocol.CodeServerClosed, "plugin is not initialized")
-	}
 	if mountID == "" {
 		return ErrCode(protocol.CodeBadArguments, "mount_id is required")
 	}
@@ -65,6 +70,8 @@ func (u *WebUI) SendCommand(mountID string, command string, payload json.RawMess
 	if err != nil {
 		return fmt.Errorf("encode ui command: %w", err)
 	}
-	_, err = u.p.Call(context.Background(), protocol.HostCapability, "ui.command", body)
+	ctx, cancel := context.WithTimeout(context.Background(), uiPublishTimeout)
+	defer cancel()
+	_, err = u.p.Call(ctx, protocol.HostCapability, "ui.command", body)
 	return err
 }

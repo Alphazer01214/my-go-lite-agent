@@ -4,7 +4,7 @@
 #   bash scripts/build.sh                 # incremental (skip unchanged binaries)
 #   bash scripts/build.sh --clean         # wipe dist and rebuild everything
 #   bash scripts/build.sh --verify        # go vet + go test (+node) before building
-#   bash scripts/build.sh --only sandbox,agent
+#   bash scripts/build.sh --only agent,session
 #   bash scripts/build.sh --list
 #
 # Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum,
@@ -73,7 +73,7 @@ should_build() {
   local target="$1"
   [[ -z "$ONLY" ]] && return 0
   [[ ",$ONLY," == *",$target,"* ]] && return 0
-  # Accept short names: "sandbox" matches "plugin:sandbox".
+  # Accept short names: "agent" matches "plugin:agent".
   if [[ "$target" == plugin:* ]]; then
     local short="${target#plugin:}"
     [[ ",$ONLY," == *",$short,"* ]] && return 0
@@ -121,11 +121,12 @@ STASH="$(mktemp -d)"
 LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
 AGENT_DIST_CFG="$DIST/plugins/agent/config.json"
 SESS_DIST_DIR="$DIST/plugins/session/sessions"
-SANDBOX_PERM="$DIST/config/permissions.json"
+SESSION_WORKSPACE_FILE="$SESS_DIST_DIR/workspaces.json"
+LEGACY_WORKSPACE_FILE="$DIST/plugins/workspace/workspaces.json"
 [[ -f "$LLM_DIST_CFG" ]] && cp "$LLM_DIST_CFG" "$STASH/llm-config.json"
 [[ -f "$AGENT_DIST_CFG" ]] && cp "$AGENT_DIST_CFG" "$STASH/agent-config.json"
 [[ -d "$SESS_DIST_DIR" ]] && cp -R "$SESS_DIST_DIR" "$STASH/sessions"
-[[ -f "$SANDBOX_PERM" ]] && cp "$SANDBOX_PERM" "$STASH/permissions.json"
+[[ -f "$LEGACY_WORKSPACE_FILE" ]] && cp "$LEGACY_WORKSPACE_FILE" "$STASH/legacy-workspaces.json"
 
 if [[ $CLEAN -eq 1 && -d "$DIST" ]]; then
   echo "removing previous dist/ (configs + sessions stashed)"
@@ -302,6 +303,14 @@ for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
   install_plugin_dir "$name"
 done
 
+# Workspace Registry moved into session. Preserve an existing legacy file
+# before pruning the old standalone plugin directory.
+if [[ -f "$LEGACY_WORKSPACE_FILE" && ! -f "$SESSION_WORKSPACE_FILE" ]]; then
+  mkdir -p "$SESS_DIST_DIR"
+  cp "$LEGACY_WORKSPACE_FILE" "$SESSION_WORKSPACE_FILE"
+  echo "workspace registry: migrated dist/plugins/workspace into session"
+fi
+
 # Prune plugin dirs that are no longer shipped (keep user-data names).
 if [[ -d "$DIST/plugins" ]]; then
   for dir in "$DIST/plugins"/*; do
@@ -330,15 +339,15 @@ if [[ -f "$STASH/agent-config.json" && ! -f "$AGENT_DIST_CFG" ]]; then
   cp "$STASH/agent-config.json" "$AGENT_DIST_CFG"
   echo "agent config: preserved dist config.json (schemes survive rebuilds)"
 fi
-if [[ -d "$STASH/sessions" && ! -d "$SESS_DIST_DIR" ]]; then
+if [[ -d "$STASH/sessions" ]]; then
   mkdir -p "$DIST/plugins/session"
-  cp -R "$STASH/sessions" "$DIST/plugins/session/"
+  cp -R "$STASH/sessions/." "$SESS_DIST_DIR/"
   echo "sessions: preserved $(find "$DIST/plugins/session/sessions" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') file(s)"
 fi
-if [[ -f "$STASH/permissions.json" && ! -f "$SANDBOX_PERM" ]]; then
-  mkdir -p "$(dirname "$SANDBOX_PERM")"
-  cp "$STASH/permissions.json" "$SANDBOX_PERM"
-  echo "sandbox permissions: preserved dist config/permissions.json"
+if [[ -f "$STASH/legacy-workspaces.json" && ! -f "$SESSION_WORKSPACE_FILE" ]]; then
+  mkdir -p "$SESS_DIST_DIR"
+  cp "$STASH/legacy-workspaces.json" "$SESSION_WORKSPACE_FILE"
+  echo "workspace registry: restored legacy data into session"
 fi
 rm -rf "$STASH"
 
@@ -364,20 +373,7 @@ seed_dist_config() {
 seed_dist_config "llm-openai" "$LLM_DIST_CFG"
 seed_dist_config "agent" "$AGENT_DIST_CFG"
 
-# ── examples & docs ─────────────────────────────────────────────────────────
-mkdir -p "$DIST/config"
-if [[ ! -f "$DIST/config/permissions.json" ]]; then
-  if [[ -f "$ROOT/config/permissions.example.json" ]]; then
-    cp "$ROOT/config/permissions.example.json" "$DIST/config/permissions.json"
-  else
-    cat > "$DIST/config/permissions.json" <<'EOF'
-{
-  "defaults": {"low": "allow", "medium": "allow", "high": "deny"},
-  "rules": []
-}
-EOF
-  fi
-fi
+# ── docs ─────────────────────────────────────────────────────────────────────
 copy_dist_asset "README.md" "$DIST/"
 copy_dist_asset "CONTEXT.md" "$DIST/"
 copy_dist_asset "plugins/README.md" "$DIST/plugins/README.md"

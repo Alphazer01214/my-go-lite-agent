@@ -36,10 +36,19 @@ func TestLoadAllRecoversInterruptedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(got) < 4 {
+		t.Fatalf("recovered facts = %#v, want original facts plus terminal", got)
+	}
+	if got[0].Type != TypeSessionStart || got[1].Type != TypeTurnStart {
+		t.Fatalf("recovery rewrote the beginning of the log: %#v", got[:2])
+	}
 	found := false
 	for _, fact := range got {
 		if fact.Type != TypeTurnEnd {
 			continue
+		}
+		if fact.Seq != 4 {
+			t.Fatalf("recovered turn_end seq = %d, want 4", fact.Seq)
 		}
 		var meta map[string]any
 		_ = json.Unmarshal(fact.Meta, &meta)
@@ -66,10 +75,10 @@ func (f fakeHostStateSDK) Call(_ context.Context, capability, method string, pay
 func TestChatStateRecoversWhenTurnOwnerIsDown(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
-	p.sdk = fakeHostStateSDK{state: "degraded"}
-	if _, err := p.create(context.Background(), createIn{SessionID: "s1"}); err != nil {
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1", Workspace: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
+	p.sdk = fakeHostStateSDK{state: "failed"}
 	if _, err := p.append(context.Background(), appendIn{SessionID: "s1", Facts: []factIn{{
 		Type: TypeTurnStart,
 		Role: RoleHost,
@@ -97,5 +106,36 @@ func TestChatStateRecoversWhenTurnOwnerIsDown(t *testing.T) {
 	_ = json.Unmarshal(last.Meta, &meta)
 	if meta["reason"] != "error" {
 		t.Fatalf("recovery meta = %#v", meta)
+	}
+}
+
+func TestChatStateKeepsActiveTurnRunning(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	if _, err := p.create(context.Background(), createIn{SessionID: "s1", Workspace: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	p.sdk = fakeHostStateSDK{state: "active"}
+	if _, err := p.append(context.Background(), appendIn{SessionID: "s1", Facts: []factIn{{
+		Type: TypeTurnStart,
+		Role: RoleHost,
+		Meta: mustJSON(map[string]any{"turn_id": "t1", "plugin": "agent"}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := p.chatState(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Turn.Status != "running" {
+		t.Fatalf("chat state = %+v", state)
+	}
+	facts, _, err := p.readFacts("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 2 || facts[len(facts)-1].Type != TypeTurnStart {
+		t.Fatalf("active turn was modified: %#v", facts)
 	}
 }

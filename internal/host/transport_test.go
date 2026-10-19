@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -161,6 +162,32 @@ func TestConsumerRegistrationDoesNotClaimProviderRoute(t *testing.T) {
 	register("web-tools", "web-reg")
 	if owner := h.routeOwner("web", "fetch"); owner != "web-tools" {
 		t.Fatalf("route owner = %q, want web-tools", owner)
+	}
+}
+
+func TestInactiveDeclaredConsumerFailsClosed(t *testing.T) {
+	h := newTestHost("provider")
+	h.plugins["provider"].discovery.Manifest.Provides = []string{"web"}
+	h.SetDiscoveries(plugin.Discoveries{Plugins: []plugin.Discovery{
+		{Dir: "provider", Manifest: plugin.Manifest{Name: "provider", Provides: []string{"web"}}},
+		{Dir: "sandbox", Manifest: plugin.Manifest{Name: "sandbox", Consumes: []plugin.ConsumesMethod{{
+			Capability: "web", Method: "fetch",
+		}}}},
+	}})
+	if err := h.handleRequest("provider", &Frame{
+		ID: "reg", Type: FrameRequest, Capability: HostCapability, Method: HostMethodRegister,
+		Payload: mustJSON(map[string]any{"handlers": []map[string]string{{
+			"capability": "web", "method": "fetch",
+		}}}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := h.handleRequest("provider", &Frame{
+		ID: "call", Type: FrameRequest, Capability: "web", Method: "fetch",
+		Payload: json.RawMessage(`{}`),
+	})
+	if !errors.Is(err, ErrRouteFailed) {
+		t.Fatalf("error = %v, want route_failed", err)
 	}
 }
 

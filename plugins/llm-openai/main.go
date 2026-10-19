@@ -20,23 +20,6 @@ func errHandler(msg string) error {
 	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, msg)
 }
 
-func handle(fn func(ctx context.Context, req *pluginsdk.Request) (any, error)) pluginsdk.HandleFunc {
-	return func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
-		out, err := fn(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		if out == nil {
-			return json.RawMessage("null"), nil
-		}
-		b, err := json.Marshal(out)
-		if err != nil {
-			return nil, errHandler(err.Error())
-		}
-		return b, nil
-	}
-}
-
 func decode[T any](req *pluginsdk.Request, dst *T) error {
 	if len(req.Payload) == 0 {
 		return errBadArguments("payload is required")
@@ -87,7 +70,7 @@ func main() {
 			return nil, err
 		}
 		return json.Marshal(out)
-	}).WithInfo("config.set", "update config (deferred while working)"))
+	}).WithInfo("config.set", "update model config (applies immediately; running calls keep their snapshot)"))
 
 	s.Register("llm", "settings.get", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.settingsGet())

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	urlpath "path"
 	"strings"
@@ -21,15 +22,17 @@ import (
 var staticFiles embed.FS
 
 type Server struct {
-	registryMu   sync.RWMutex
-	registry     *Registry
-	backend      CallBackend
-	pluginStates PluginStateProvider
-	lifecycle    PluginLifecycle
-	mu           sync.Mutex
-	connection   *uiConnection
-	diagnostics  []plugin.Diagnostic
-	sequence     atomic.Uint64
+	registryMu    sync.RWMutex
+	registry      *Registry
+	backend       CallBackend
+	pluginStates  PluginStateProvider
+	lifecycle     PluginLifecycle
+	mu            sync.Mutex
+	connections   map[*uiConnection]struct{}
+	logger        func(string, ...any)
+	diagnostics   []plugin.Diagnostic
+	sequence      atomic.Uint64
+	connectionSeq atomic.Uint64
 }
 
 // NewServer creates the WebUI transport around one Host call backend.
@@ -42,7 +45,24 @@ func NewServer(registry *Registry, backend CallBackend) *Server {
 	return &Server{
 		registry:    registry,
 		backend:     backend,
+		connections: make(map[*uiConnection]struct{}),
 		diagnostics: append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...),
+	}
+}
+
+// SetLogFunc sets the optional connection/diagnostic logger.
+func (s *Server) SetLogFunc(fn func(string, ...any)) {
+	s.mu.Lock()
+	s.logger = fn
+	s.mu.Unlock()
+}
+
+func (s *Server) log(format string, args ...any) {
+	s.mu.Lock()
+	fn := s.logger
+	s.mu.Unlock()
+	if fn != nil {
+		fn(format, args...)
 	}
 }
 
@@ -59,16 +79,22 @@ func (s *Server) SetPluginManager(manager PluginLifecycle) {
 	s.mu.Unlock()
 }
 
+// currentRegistry borrows the active Registry. A Registry is immutable after
+// NewRegistry, so callers may keep using the pointer after the lock is dropped.
 func (s *Server) currentRegistry() *Registry {
 	s.registryMu.RLock()
 	defer s.registryMu.RUnlock()
 	return s.registry
 }
 
+// replaceRegistry publishes a freshly built Registry. Readers that already hold
+// the previous pointer finish against it; new readers see the new one.
 func (s *Server) replaceRegistry(discoveries plugin.Discoveries) []plugin.Diagnostic {
+	next, diagnostics := NewRegistry(discoveries)
 	s.registryMu.Lock()
-	defer s.registryMu.Unlock()
-	return s.registry.Replace(discoveries)
+	s.registry = next
+	s.registryMu.Unlock()
+	return diagnostics
 }
 
 func (s *Server) Handler() http.Handler {
@@ -83,13 +109,13 @@ func (s *Server) Handler() http.Handler {
 		serveEmbeddedAsset(w, r, platformRoot, r.PathValue("path"))
 	})
 	mux.HandleFunc("GET /bridge/bootstrap", s.serveBootstrap)
-	mux.HandleFunc("POST /bridge/plugins/rescan", s.servePluginRescan)
-	mux.HandleFunc("POST /bridge/plugins/{plugin}/start", s.servePluginStart)
-	mux.HandleFunc("POST /bridge/plugins/{plugin}/stop", s.servePluginStop)
+	mux.HandleFunc("POST /bridge/plugins/rescan", managementHandler(s.servePluginRescan))
+	mux.HandleFunc("POST /bridge/plugins/{plugin}/start", managementHandler(s.servePluginStart))
+	mux.HandleFunc("POST /bridge/plugins/{plugin}/stop", managementHandler(s.servePluginStop))
 	mux.HandleFunc("GET /bridge/ui", s.serveUI)
-	mux.HandleFunc("POST /bridge/call", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /bridge/call", managementHandler(func(w http.ResponseWriter, r *http.Request) {
 		serveBrowserCall(w, r, s.backend)
-	})
+	}))
 	mux.HandleFunc("GET /plugins/{plugin}/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		servePluginResource(w, r, s.currentRegistry(), r.PathValue("plugin"), r.PathValue("path"))
 	})
@@ -109,6 +135,33 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// managementHandler wraps the management endpoints, which start, stop and rescan
+// plugins. They take no body and no custom content type, so a cross-origin form
+// post would otherwise reach them: require a same-origin request first.
+func managementHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			http.Error(w, "cross-origin plugin management is not allowed", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameOrigin accepts requests that carry no browser-supplied origin marker
+// (curl, tests) and rejects cross-origin browser posts.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 func (s *Server) Bootstrap() Bootstrap {

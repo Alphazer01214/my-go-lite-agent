@@ -36,7 +36,11 @@
 | `OPENAI_API_KEY` | `api_key` |
 | `OPENAI_MODEL` | `model` |
 
-真实 API Key 不进入 Git。`config.json` 使用 `0600` 权限保存。`config.get` 返回部分脱敏 key。`llm.settings.get` 只返回是否已配置。
+真实 API Key 不进入 Git，也不进入 `config.json`：`llm.config.set` 落盘前会把 `api_key` 清空，
+密钥只保留在进程内存和环境变量里，进程重启后需要重新提供。`config.json` 以 `0644` 写入，
+所以它只应该放非敏感配置。`config.get` 返回部分脱敏 key。`llm.settings.get` 只返回是否已配置。
+
+`base_url` 在文件、环境变量和 `config.set` 三条路径上都会归一化（去首尾空白和末尾 `/`）。
 
 ## 3. 前端交互
 

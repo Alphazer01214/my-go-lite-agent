@@ -13,9 +13,10 @@ import (
 )
 
 type blockingCallBackend struct {
-	started chan struct{}
-	release chan struct{}
-	done    chan struct{}
+	started   chan struct{}
+	release   chan struct{}
+	completed chan struct{}
+	canceled  chan struct{}
 }
 
 func (b *blockingCallBackend) CallWithEvents(
@@ -29,10 +30,10 @@ func (b *blockingCallBackend) CallWithEvents(
 	close(b.started)
 	select {
 	case <-ctx.Done():
-		close(b.done)
+		close(b.canceled)
 		return nil, ctx.Err()
 	case <-b.release:
-		close(b.done)
+		close(b.completed)
 	}
 	return &protocol.Frame{
 		Version: protocol.FrameVersion, ID: "host-1", Type: protocol.FrameResponse,
@@ -40,14 +41,24 @@ func (b *blockingCallBackend) CallWithEvents(
 	}, nil
 }
 
-func TestBrowserCallDisconnectCancelsBackend(t *testing.T) {
+func TestBrowserCallDisconnectLeavesBackendRunning(t *testing.T) {
 	backend := &blockingCallBackend{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-		done:    make(chan struct{}),
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		completed: make(chan struct{}),
+		canceled:  make(chan struct{}),
 	}
 	server := httptest.NewServer(NewServer(nil, backend).Handler())
 	defer server.Close()
+
+	release := func() {
+		select {
+		case <-backend.release:
+		default:
+			close(backend.release)
+		}
+	}
+	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -71,10 +82,15 @@ func TestBrowserCallDisconnectCancelsBackend(t *testing.T) {
 	_ = response.Body.Close()
 
 	select {
-	case <-backend.done:
-	case <-time.After(time.Second):
-		t.Fatal("backend call was not canceled by disconnect")
+	case <-backend.canceled:
+		t.Fatal("backend call was canceled by browser disconnect")
+	case <-time.After(200 * time.Millisecond):
 	}
 
-	close(backend.release)
+	release()
+	select {
+	case <-backend.completed:
+	case <-time.After(time.Second):
+		t.Fatal("backend call did not complete after release")
+	}
 }

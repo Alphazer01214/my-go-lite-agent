@@ -204,10 +204,9 @@ func (h *Host) alive(name string) error {
 	return nil
 }
 
-// Run mounts the autostart+depends_on closure of discoveries.
-// 挂载软失败：单个插件注册冲突或启动失败只记日志并跳过，Host 不退出（protocol §6）。
-// logFunc 为 nil 时日志走 stderr（stdout 留给对话）。
-func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
+// New builds a Host over discoveries without starting anything. Callers wire
+// the UI publisher and trace callback here, then call Start.
+func New(discoveries plugin.Discoveries, logFunc func(string)) *Host {
 	h := &Host{
 		plugins:     make(map[string]*proc),
 		pending:     make(map[string]*wait),
@@ -223,19 +222,35 @@ func Run(discoveries plugin.Discoveries, logFunc func(string)) (*Host, error) {
 	if logFunc != nil {
 		h.hlog = logFunc
 	}
+	return h
+}
 
-	ordered, warns := plugin.AutostartClosure(discoveries)
+// Start mounts the autostart+depends_on closure of discoveries.
+// 挂载软失败：单个插件注册冲突或启动失败只记日志并跳过，Host 不退出（protocol §6）。
+// logFunc 为 nil 时日志走 stderr（stdout 留给对话）。
+func (h *Host) Start() {
+	ordered, warns := plugin.AutostartClosure(h.discoveries)
 	for _, w := range warns {
 		h.hlog("mount warn: " + w)
 	}
-
 	for _, d := range ordered {
 		if err := h.launchInstance(d.Manifest.Name, d, ""); err != nil {
 			h.hlog(fmt.Sprintf("mount %s: %v", d.Manifest.Name, err))
 			continue
 		}
 	}
-	return h, nil
+}
+
+// unregisterPlugin removes stale discovery-owned routes so a stopped or
+// replaced plugin can be started again without route conflicts.
+func (h *Host) unregisterPlugin(pluginName string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key, owner := range h.routes {
+		if owner == pluginName {
+			delete(h.routes, key)
+		}
+	}
 }
 
 // Close shuts the host down: marks closed, closes every plugin stdin (EOF makes
@@ -271,20 +286,18 @@ func (h *Host) Close() {
 	h.mu.Unlock()
 
 	for _, wt := range waits {
-		if wt.kind == WaitHost && wt.resCh != nil {
-			select {
-			case wt.resCh <- &Frame{
+		if wt.kind == WaitHost {
+			h.signalWaitResult(wt, &Frame{
 				Version:    FrameVersion,
 				ID:         wt.frameID,
 				Type:       FrameResponse,
 				Capability: wt.capability,
 				Method:     wt.method,
+				ContextID:  wt.contextID,
 				From:       FromHost,
 				ErrorCode:  CodeServerClosed,
 				ErrorMsg:   "host closed",
-			}:
-			default:
-			}
+			})
 			continue
 		}
 		h.replyError(wt.caller, wt.frameID, wt.capability, wt.method,

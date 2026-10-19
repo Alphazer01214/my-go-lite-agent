@@ -48,6 +48,9 @@ func decode[T any](req *pluginsdk.Request, dst *T) error {
 func main() {
 	p := newPlugin(dataDir())
 	p.loadAll()
+	// One-time write pass: bind sessions logged before the workspace registry
+	// existed. Read handlers must not mutate the log or the registry.
+	p.backfillWorkspaces()
 
 	s := pluginsdk.NewPlugin("session")
 	p.sdk = s
@@ -86,7 +89,13 @@ func main() {
 	})).WithInfo("derive", "project Model Context messages from the log"))
 
 	s.Register("session", "list", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
-		return p.list()
+		var in listIn
+		if len(req.Payload) > 0 {
+			if err := decode(req, &in); err != nil {
+				return nil, err
+			}
+		}
+		return p.list(in.WorkspaceID)
 	})).WithInfo("list", "list sessions"))
 
 	s.Register("session", "info", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
@@ -112,6 +121,86 @@ func main() {
 		}
 		return p.selectSession(ctx, in)
 	})).WithInfo("select", "select the session shown by the UI mounts"))
+
+	s.Register("session", "close", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in closeIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.closeSession(ctx, in)
+	})).WithInfo("close", "close one open session pane"))
+
+	s.Register("session", "refresh", pluginsdk.NewHandler(handle(func(ctx context.Context, _ *pluginsdk.Request) (any, error) {
+		// Republishes whatever is currently selected; it takes no input and
+		// changes no selection of its own.
+		p.publishForSelection(ctx)
+		return map[string]bool{"published": true}, nil
+	})).WithInfo("refresh", "republish UI state after workspace selection"))
+
+	s.Register("session", "workspace.list", pluginsdk.NewHandler(handle(func(context.Context, *pluginsdk.Request) (any, error) {
+		records, selected := p.workspaces.list()
+		return workspaceListOut{Workspaces: records, SelectedID: selected}, nil
+	})).WithInfo("workspace.list", "list workspaces owned by the session plugin"))
+
+	s.Register("session", "workspace.create", pluginsdk.NewHandler(handle(func(_ context.Context, req *pluginsdk.Request) (any, error) {
+		var in workspaceCreateIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		record, created, err := p.workspaces.ensure(in.Path, in.Name, true)
+		if err != nil {
+			return nil, errCoded("workspace_invalid", err.Error())
+		}
+		return workspaceCreateOut{Workspace: record, Created: created}, nil
+	})).WithInfo("workspace.create", "register and select an existing directory"))
+
+	s.Register("session", "workspace.select", pluginsdk.NewHandler(handle(func(_ context.Context, req *pluginsdk.Request) (any, error) {
+		var in workspaceSelectIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		if err := p.selectWorkspace(in.WorkspaceID); err != nil {
+			return nil, errCoded("workspace_not_found", err.Error())
+		}
+		return workspaceSelectOut{WorkspaceID: in.WorkspaceID}, nil
+	})).WithInfo("workspace.select", "select one workspace"))
+
+	s.Register("session", "workspace.current", pluginsdk.NewHandler(handle(func(context.Context, *pluginsdk.Request) (any, error) {
+		record, _ := p.selectedWorkspace()
+		return workspaceCurrentOut{Workspace: record}, nil
+	})).WithInfo("workspace.current", "read the selected workspace"))
+
+	s.Register("session", "workspace.rename", pluginsdk.NewHandler(handle(func(_ context.Context, req *pluginsdk.Request) (any, error) {
+		var in workspaceRenameIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		record, err := p.workspaces.rename(in.WorkspaceID, in.Name)
+		if err != nil {
+			return nil, errBadArguments(err.Error())
+		}
+		return workspaceRenameOut{Workspace: record}, nil
+	})).WithInfo("workspace.rename", "rename one workspace"))
+
+	s.Register("session", "workspace.remove", pluginsdk.NewHandler(handle(func(_ context.Context, req *pluginsdk.Request) (any, error) {
+		var in workspaceRemoveIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		removed, selected, err := p.workspaces.remove(in.WorkspaceID)
+		if err != nil {
+			return nil, errHandler(err.Error())
+		}
+		return workspaceRemoveOut{WorkspaceID: in.WorkspaceID, Removed: removed, SelectedID: selected}, nil
+	})).WithInfo("workspace.remove", "remove one workspace registration"))
+
+	s.Register("session", "update", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in updateIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.updateSession(ctx, in)
+	})).WithInfo("update", "update session name"))
 
 	s.Register("session", "stream.update", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in streamUpdateIn

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const configFile = "config.json"
@@ -19,12 +22,12 @@ type plugin struct {
 	cfg      config
 	sessions map[string]*sessionSlot
 	sdk      sdkCaller
+	turnSeq  atomic.Int64
 }
 
 type sdkCaller interface {
 	Call(ctx context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error)
 	CallWithCallback(ctx context.Context, capability, method string, payload json.RawMessage, cb func(*event)) (json.RawMessage, error)
-	EmitWithID(id string, capability string, method string, payload json.RawMessage) error
 }
 
 type sessionSlot struct {
@@ -76,7 +79,9 @@ func (p *plugin) getConfig() configGetOut {
 func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.applyLocked(in)
+	if err := p.applyLocked(in); err != nil {
+		return configGetOut{}, errHandler(err.Error())
+	}
 	return p.getConfigLocked(), nil
 }
 
@@ -84,14 +89,16 @@ func (p *plugin) getConfigLocked() configGetOut {
 	return configGetOut{DefaultScheme: p.cfg.DefaultScheme, MaxSteps: p.cfg.MaxSteps}
 }
 
-func (p *plugin) applyLocked(in configSetIn) {
+func (p *plugin) applyLocked(in configSetIn) error {
 	if in.DefaultScheme != "" {
 		p.cfg.DefaultScheme = in.DefaultScheme
 	}
 	if in.MaxSteps > 0 {
 		p.cfg.MaxSteps = in.MaxSteps
 	}
-	_ = os.WriteFile(configFile, mustJSON(p.cfg), 0o644)
+	// A failed write must not be reported as a save: the caller would believe
+	// the new values survived a restart when they did not.
+	return os.WriteFile(configFile, mustJSON(p.cfg), 0o644)
 }
 
 func mustJSON(v any) json.RawMessage {
@@ -102,6 +109,9 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
+// slotFor returns the per-session turn lock, creating it on first use. Slots are
+// kept for the process lifetime: one per session id the agent has ever served,
+// which is bounded by the number of live sessions.
 func (p *plugin) slotFor(id string) *sessionSlot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -140,4 +150,24 @@ func maskScheme(s string) string {
 		return schemeToolCalling
 	}
 	return s
+}
+
+func sameWorkspacePath(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(leftAbs); err == nil {
+		leftAbs = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(rightAbs); err == nil {
+		rightAbs = resolved
+	}
+	leftAbs = filepath.Clean(leftAbs)
+	rightAbs = filepath.Clean(rightAbs)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(leftAbs, rightAbs)
+	}
+	return leftAbs == rightAbs
 }

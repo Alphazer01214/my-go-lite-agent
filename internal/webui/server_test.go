@@ -26,7 +26,7 @@ func TestHandlerServesShellBootstrapAndPlatformAssets(t *testing.T) {
 		{"/platform/plugins.mjs", "text/javascript", "renderPluginList"},
 		{"/platform/settings.mjs", "text/javascript", "renderSettingsList"},
 		{"/platform/loader.mjs", "text/javascript", "createMountLoader"},
-		{"/platform/lite-agent.js", "text/javascript", "mountKey"},
+		{"/platform/lite-agent.js", "text/javascript", "createLiteAgent"},
 		{"/bridge/bootstrap", "application/json", "\"version\":1"},
 	} {
 		req := httptest.NewRequest(http.MethodGet, test.path, nil)

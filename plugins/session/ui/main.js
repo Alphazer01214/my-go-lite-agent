@@ -58,6 +58,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .item .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item.active .name { color: var(--session-accent-strong, #0c604c); }
 .item .meta { display: block; margin-top: 2px; color: var(--session-muted-text, #5c6875); font-size: 12px; }
+.item .open-badge { float: right; margin-left: 6px; color: var(--session-accent, #147d64); font-size: 11px; }
 
 .toolbar { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 8px; }
 .toolbar textarea {
@@ -97,6 +98,116 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border: 1px solid var(--session-border, #d5dbe1);
   border-radius: 6px;
   background: var(--session-surface, #ffffff);
+}
+.workspace-picker {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.workspace-picker select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 6px;
+  background: var(--session-surface, #ffffff);
+}
+.workspace-create-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.workspace-create-row[hidden] { display: none; }
+.workspace-create-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 6px;
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.chat-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-height: 36px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--session-border, #d5dbe1);
+}
+.chat-tabs:empty { display: none; }
+.chat-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 3px 2px 9px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 6px;
+  background: var(--session-surface, #ffffff);
+}
+.chat-tab.active {
+  border-color: var(--session-accent, #147d64);
+  background: #e6f5f0;
+}
+.chat-tab .tab-select {
+  max-width: 190px;
+  overflow: hidden;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-tab .tab-close {
+  min-width: 24px;
+  padding: 2px 5px;
+  border: 0;
+  background: transparent;
+  color: var(--session-muted-text, #5c6875);
+}
+.chat-tab .tab-running {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--session-accent, #147d64);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.workspace-row {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.workspace-row label {
+  flex: 0 0 auto;
+  color: var(--session-muted-text, #5c6875);
+  font-size: 12px;
+}
+.workspace-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--session-muted-text, #5c6875);
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-warning {
+  margin-bottom: 8px;
+  color: var(--session-warning, #a45b12);
+}
+.no-pane {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--session-muted-text, #5c6875);
+  font-size: 13px;
 }
 .chat-stage {
   position: relative;
@@ -327,6 +438,7 @@ const factTypeLabels = Object.freeze({
 	llm_usage: "Token 用量",
 	message: "消息",
 	context_summary: "上下文摘要",
+	session_meta: "会话信息",
 });
 
 const TERMINAL_TURN_STATUS = Object.freeze(["completed", "cancelled", "max_steps", "error"]);
@@ -345,6 +457,12 @@ function call(method, payload) {
 
 function describeError(error) {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function sessionLabel(session) {
+	if (session?.name) return session.name;
+	const id = String(session?.session_id || "");
+	return id.length > 14 ? `${id.slice(0, 14)}…` : id;
 }
 
 async function copyText(text) {
@@ -470,6 +588,15 @@ class SessionHistory extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.innerHTML = `
         <style>${styles}</style>
+        <div class="workspace-picker">
+          <select class="workspace-select" aria-label="当前工作区"></select>
+          <button type="button" class="workspace-add" title="添加工作区">添加</button>
+        </div>
+        <div class="workspace-create-row" hidden>
+          <input class="workspace-create-input" type="text" placeholder="输入已存在的绝对目录">
+          <button type="button" class="workspace-open">打开</button>
+          <button type="button" class="workspace-cancel">取消</button>
+        </div>
         <div class="history-head">
           <span class="hint grow"></span>
           <button type="button" class="create">新建会话</button>
@@ -479,6 +606,12 @@ class SessionHistory extends HTMLElement {
         <div class="error" aria-live="polite"></div>
       `;
 		this.head = this.shadowRoot.querySelector(".hint");
+		this.workspaceSelect = this.shadowRoot.querySelector(".workspace-select");
+		this.workspaceAdd = this.shadowRoot.querySelector(".workspace-add");
+		this.workspaceCreateRow = this.shadowRoot.querySelector(".workspace-create-row");
+		this.workspaceCreateInput = this.shadowRoot.querySelector(".workspace-create-input");
+		this.workspaceOpen = this.shadowRoot.querySelector(".workspace-open");
+		this.workspaceCancel = this.shadowRoot.querySelector(".workspace-cancel");
 		this.searchInput = this.shadowRoot.querySelector(".history-search");
 		this.createButton = this.shadowRoot.querySelector(".create");
 		this.list = this.shadowRoot.querySelector(".list");
@@ -486,6 +619,17 @@ class SessionHistory extends HTMLElement {
 		this.state = { sessions: [], revision: 0 };
 		this.query = "";
 		this.creating = false;
+		this.workspaceBusy = false;
+		this.workspaceSelect.addEventListener("change", () => this.selectWorkspace(this.workspaceSelect.value));
+		this.workspaceAdd.addEventListener("click", () => this.showWorkspaceCreate());
+		this.workspaceCancel.addEventListener("click", () => this.hideWorkspaceCreate());
+		this.workspaceOpen.addEventListener("click", () => this.createWorkspace());
+		this.workspaceCreateInput.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" && !event.isComposing) {
+				event.preventDefault();
+				this.createWorkspace();
+			}
+		});
 		this.createButton.addEventListener("click", () => this.createSession());
 		this.searchInput.addEventListener("input", () => {
 			this.query = this.searchInput.value.trim().toLowerCase();
@@ -504,18 +648,74 @@ class SessionHistory extends HTMLElement {
 		}
 	}
 
+	async resync() {
+		const state = await call("state", {});
+		this.setData(state.history);
+	}
+
 	async createSession() {
-		if (this.creating) return;
+		const workspaceId = this.state.workspace_id;
+		if (this.creating || this.workspaceBusy || !workspaceId) return;
 		this.creating = true;
 		this.error.textContent = "";
 		this.render();
 		try {
-			const created = await call("create", {});
+			const created = await call("create", { workspace_id: workspaceId });
 			await call("select", { session_id: created.session_id });
 		} catch (error) {
 			this.error.textContent = describeError(error);
 		} finally {
 			this.creating = false;
+			this.render();
+		}
+	}
+
+	async selectWorkspace(workspaceId) {
+		const current = this.state.selected_workspace_id || this.state.workspace_id;
+		if (!workspaceId || workspaceId === current) return;
+		this.workspaceBusy = true;
+		this.error.textContent = "";
+		this.render();
+		try {
+			await call("workspace.select", { workspace_id: workspaceId });
+			await call("refresh", {});
+			await this.refresh();
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		} finally {
+			this.workspaceBusy = false;
+			this.render();
+		}
+	}
+
+	showWorkspaceCreate() {
+		this.workspaceCreateRow.hidden = false;
+		this.workspaceCreateInput.focus();
+	}
+
+	hideWorkspaceCreate() {
+		this.workspaceCreateRow.hidden = true;
+		this.workspaceCreateInput.value = "";
+	}
+
+	async createWorkspace() {
+		const path = this.workspaceCreateInput.value.trim();
+		if (!path) {
+			this.workspaceCreateInput.focus();
+			return;
+		}
+		this.workspaceBusy = true;
+		this.error.textContent = "";
+		this.render();
+		try {
+			await call("workspace.create", { path });
+			this.hideWorkspaceCreate();
+			await call("refresh", {});
+			await this.refresh();
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		} finally {
+			this.workspaceBusy = false;
 			this.render();
 		}
 	}
@@ -552,9 +752,11 @@ class SessionHistory extends HTMLElement {
 	render() {
 		if (!this.list) return;
 		const sessions = this.filteredSessions();
+		this.renderWorkspaces();
 		this.head.textContent = sessions.length > 0 ? `${sessions.length} 个会话` : "";
-		this.createButton.disabled = this.creating;
+		this.createButton.disabled = this.creating || this.workspaceBusy || !this.state.workspace_id;
 		this.createButton.textContent = this.creating ? "创建中…" : "新建会话";
+		this.createButton.title = this.state.workspace_id ? "" : "请先选择工作区";
 		this.list.replaceChildren();
 		if (sessions.length === 0) {
 			this.list.append(el("li", "empty", this.query ? "没有匹配的会话" : "暂无会话，点上方按钮新建"));
@@ -562,15 +764,52 @@ class SessionHistory extends HTMLElement {
 		}
 		for (const session of sessions) {
 			const active = session.session_id === this.state.selected_id;
+			const open = (this.state.open_ids || []).includes(session.session_id);
 			const button = el("button", active ? "item active" : "item");
 			button.type = "button";
 			button.title = session.workspace ? `${session.session_id}\n${session.workspace}` : session.session_id;
+			if (open) button.append(el("span", "open-badge", active ? "当前" : "已打开"));
 			button.append(el("strong", "name", session.name || session.session_id));
 			const meta = `${session.fact_count || 0} 条记录 · ${formatTime(session.last_ts || session.created_ts)}`;
 			button.append(el("span", "meta", meta));
 			button.addEventListener("click", () => this.select(session.session_id));
 			this.list.append(button);
 		}
+	}
+
+	renderWorkspaces() {
+		const workspaces = this.state.workspaces || [];
+		// The selector highlights the registry's current workspace, which is not
+		// necessarily the workspace of the session on screen: after switching
+		// workspaces the pane keeps showing its old session until one is picked.
+		const current = this.state.selected_workspace_id || this.state.workspace_id || "";
+		const addDisabled = this.creating || this.workspaceBusy;
+		const selectDisabled = workspaces.length === 0 || this.workspaceBusy;
+		// Rebuilding the <select> closes its dropdown mid-interaction, so only
+		// rebuild when the option set or the enabled state actually changed.
+		const signature = JSON.stringify([
+			workspaces.map((workspace) => [workspace.workspace_id, workspace.name || workspace.path]),
+			current, addDisabled, selectDisabled,
+		]);
+		if (signature === this.workspaceSignature) return;
+		this.workspaceSignature = signature;
+		const options = workspaces.map((workspace) => {
+			const option = document.createElement("option");
+			option.value = workspace.workspace_id;
+			option.textContent = workspace.name || workspace.path;
+			option.title = workspace.path;
+			return option;
+		});
+		if (options.length === 0) {
+			const option = document.createElement("option");
+			option.value = "";
+			option.textContent = "尚未添加工作区";
+			options.push(option);
+		}
+		this.workspaceSelect.replaceChildren(...options);
+		this.workspaceSelect.value = current;
+		this.workspaceAdd.disabled = addDisabled;
+		this.workspaceSelect.disabled = selectDisabled;
 	}
 }
 
@@ -579,6 +818,12 @@ class SessionChat extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.innerHTML = `
         <style>${styles}</style>
+        <div class="chat-tabs" role="tablist" aria-label="打开的对话"></div>
+        <div class="workspace-row">
+          <label for="workspace">工作区</label>
+          <code class="workspace-path"></code>
+        </div>
+        <div class="workspace-warning hint"></div>
         <div class="status" hidden></div>
         <div class="chat-stage">
           <div class="messages" role="log" aria-live="polite"></div>
@@ -591,6 +836,9 @@ class SessionChat extends HTMLElement {
         </div>
         <div class="error" aria-live="polite"></div>
       `;
+		this.tabs = this.shadowRoot.querySelector(".chat-tabs");
+		this.workspacePath = this.shadowRoot.querySelector(".workspace-path");
+		this.workspaceWarning = this.shadowRoot.querySelector(".workspace-warning");
 		this.input = this.shadowRoot.querySelector("textarea");
 		this.sendButton = this.shadowRoot.querySelector(".send");
 		this.cancelButton = this.shadowRoot.querySelector(".cancel");
@@ -598,9 +846,11 @@ class SessionChat extends HTMLElement {
 		this.scrollLatest = this.shadowRoot.querySelector(".scroll-latest");
 		this.status = this.shadowRoot.querySelector(".status");
 		this.error = this.shadowRoot.querySelector(".error");
-		this.state = { messages: [], turn: {}, revision: 0 };
-		this.draft = null;
-		this.busy = false;
+		this.state = { selected_id: "", panes: [], revision: 0 };
+		this.panes = new Map();
+		this.selectedId = "";
+		this.drafts = new Map();
+		this.busy = new Set();
 		this.emptyNode = null;
 		this.draftNode = null;
 		this.draftBody = null;
@@ -608,6 +858,11 @@ class SessionChat extends HTMLElement {
 		this.draftReasoning = null;
 		this.draftReasoningText = null;
 		this.inputDrafts = new Map();
+		this.messageRows = new Map();
+		this.renderedSessionId = null;
+		this.draftKey = "";
+		this.tabsSignature = "";
+		this.workspaceSignature = "";
 
 		this.sendButton.addEventListener("click", () => this.send());
 		this.cancelButton.addEventListener("click", () => this.cancel());
@@ -632,64 +887,133 @@ class SessionChat extends HTMLElement {
 	async refresh() {
 		try {
 			const state = await call("state", {});
-			if (state.chat) this.setData(state.chat);
+			if (state.history) {
+				this.setData({ selected_id: state.history?.selected_id, panes: state.chats || [] });
+			} else if (state.chat) {
+				this.setData(state.chat);
+			}
 		} catch (error) {
 			this.error.textContent = describeError(error);
 		}
 	}
 
-	sessionId() {
-		return this.state?.session_id || "";
+	async resync() {
+		const state = await call("state", {});
+		if (state.history) {
+			this.setData({ selected_id: state.history?.selected_id, panes: state.chats || [] });
+		} else if (state.chat) {
+			this.setData(state.chat);
+		}
+	}
+
+	activePane() {
+		return this.panes.get(this.selectedId) || null;
+	}
+
+	activeDraft() {
+		const draft = this.drafts.get(this.selectedId);
+		return draft?.session_id === this.selectedId ? draft : null;
 	}
 
 	saveInputDraft() {
-		const id = this.sessionId();
+		const id = this.selectedId;
 		if (id) this.inputDrafts.set(id, this.input.value);
 	}
 
 	restoreInputDraft() {
-		this.input.value = this.inputDrafts.get(this.sessionId()) || "";
+		this.input.value = this.inputDrafts.get(this.selectedId) || "";
 		this.autoGrow();
 	}
 
-	reconcileDraft() {
-		if (!this.draft) return;
-		const messages = this.state.messages || [];
+	reconcileDraft(sessionId) {
+		const draft = this.drafts.get(sessionId);
+		const pane = this.panes.get(sessionId);
+		if (!draft || !pane) return;
+		const messages = pane.messages || [];
 		const landed = messages.some((message) =>
 			message.role === "assistant" &&
-			(!this.draft.turn_id || message.turn_id === this.draft.turn_id) &&
-			(!this.draft.step_id || message.step_id === this.draft.step_id));
-		if (landed || TERMINAL_TURN_STATUS.includes(this.state.turn?.status)) this.draft = null;
+			(!draft.turn_id || message.turn_id === draft.turn_id) &&
+			(!draft.step_id || message.step_id === draft.step_id));
+		if (landed || TERMINAL_TURN_STATUS.includes(pane.turn?.status)) this.drafts.delete(sessionId);
 	}
 
 	setData(state) {
-		const next = state || { messages: [], turn: {}, revision: 0 };
-		if (next.session_id === this.state?.session_id &&
-			Number.isFinite(next.revision) && Number.isFinite(this.state.revision) &&
-			next.revision < this.state.revision) return;
-		const sessionChanged = next.session_id !== this.state?.session_id;
-		if (sessionChanged) this.saveInputDraft();
-		this.state = next;
-		this.reconcileDraft();
-		if (sessionChanged) this.restoreInputDraft();
+		const next = state || {};
+		this.saveInputDraft();
+		if (Array.isArray(next.panes)) {
+			const incoming = new Map();
+			for (const pane of next.panes) {
+				if (!pane?.session_id) continue;
+				const previous = this.panes.get(pane.session_id);
+				if (previous && Number.isFinite(previous.revision) && Number.isFinite(pane.revision) &&
+					pane.revision < previous.revision) {
+					incoming.set(pane.session_id, previous);
+					continue;
+				}
+				incoming.set(pane.session_id, pane);
+			}
+			this.panes = incoming;
+			// A push never yanks the view off a session it still carries: only
+			// an explicit selected_id or a dropped pane moves the selection.
+			this.selectedId = next.selected_id && incoming.has(next.selected_id)
+				? next.selected_id
+				: incoming.has(this.selectedId)
+					? this.selectedId
+					: incoming.keys().next().value || "";
+			this.state = {
+				selected_id: this.selectedId,
+				revision: Number(next.revision) || 0,
+				panes: [...incoming.values()],
+			};
+		} else if (next.session_id) {
+			if (Number.isFinite(next.revision) && Number.isFinite(this.panes.get(next.session_id)?.revision) &&
+				next.revision < this.panes.get(next.session_id).revision) return;
+			this.panes = new Map([[next.session_id, next]]);
+			this.selectedId = next.session_id;
+			this.state = { selected_id: next.session_id, revision: 0, panes: [next] };
+		} else {
+			return;
+		}
+		for (const sessionId of this.panes.keys()) {
+			const pane = this.panes.get(sessionId);
+			if (pane.stream) this.drafts.set(sessionId, pane.stream);
+			this.reconcileDraft(sessionId);
+		}
+		for (const sessionId of this.drafts.keys()) {
+			if (!this.panes.has(sessionId)) this.drafts.delete(sessionId);
+		}
+		this.restoreInputDraft();
 		this.render();
 	}
 
 	runCommand(command, payload) {
 		if (command !== "stream") return;
-		this.draft = payload;
-		this.renderDraft();
+		const sessionId = payload?.session_id;
+		if (!sessionId || !this.panes.has(sessionId)) return;
+		this.drafts.set(sessionId, payload);
+		this.renderTabs();
+		if (sessionId !== this.selectedId) return;
+		// Stream frames only touch the draft. Rebuilding the landed list per
+		// frame would drop text selections and collapse open details.
+		if (payload?.message) this.renderDraft();
+		else this.renderMessages();
 	}
 
 	updateControls() {
-		const running = this.state?.turn?.status === "running";
-		const busy = this.busy || running;
-		const cancelRequested = this.state?.turn?.cancel_requested === true;
-		this.input.disabled = busy;
-		this.sendButton.disabled = busy || this.input.value.trim() === "";
+		const pane = this.activePane();
+		const running = pane?.turn?.status === "running";
+		const busy = !pane || this.busy.has(this.selectedId) || running;
+		const cancelRequested = pane?.turn?.cancel_requested === true;
+		// The composer stays usable while generating: only sending is gated,
+		// so the next message can be drafted during a long turn.
+		this.input.disabled = !pane;
+		this.sendButton.disabled = busy || this.input.value.trim() === "" || !pane?.workspace;
+		this.sendButton.title = !pane?.workspace
+			? "请先设置工作区"
+			: "";
 		this.cancelButton.disabled = !running || cancelRequested;
-		this.status.hidden = !busy;
-		this.status.textContent = !busy ? "" : cancelRequested ? "正在取消…" : "生成中…";
+		this.status.hidden = !pane || !busy;
+		this.status.textContent = !pane || !busy ? "" : cancelRequested ? "正在取消…" : "生成中…";
 	}
 
 	updateScrollButton() {
@@ -708,6 +1032,80 @@ class SessionChat extends HTMLElement {
 	scrollToBottom() {
 		this.messages.scrollTop = this.messages.scrollHeight;
 		this.scrollLatest.hidden = true;
+	}
+
+	async selectSession(sessionId) {
+		if (!sessionId || sessionId === this.selectedId) return;
+		this.saveInputDraft();
+		this.error.textContent = "";
+		try {
+			await call("select", { session_id: sessionId });
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		}
+	}
+
+	async closeSession(sessionId) {
+		if (!sessionId) return;
+		this.error.textContent = "";
+		try {
+			await call("close", { session_id: sessionId });
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		}
+	}
+
+	renderTabs() {
+		if (!this.tabs) return;
+		const isRunning = (pane) => this.busy.has(pane.session_id) || pane.turn?.status === "running" ||
+			pane.stream?.status === "streaming" || pane.stream?.status === "cancel_requested";
+		// Rebuild only when something visible changed: a per-frame rebuild
+		// would close the dropdown and reset hover while the user interacts.
+		const signature = JSON.stringify((this.state.panes || []).map((pane) => [
+			pane.session_id, sessionLabel(pane), pane.session_id === this.selectedId, isRunning(pane),
+		]));
+		if (signature === this.tabsSignature) return;
+		this.tabsSignature = signature;
+		const nodes = [];
+		for (const pane of this.state.panes || []) {
+			const active = pane.session_id === this.selectedId;
+			const running = isRunning(pane);
+			const tab = el("div", active ? "chat-tab active" : "chat-tab");
+			tab.setAttribute("role", "tab");
+			tab.setAttribute("aria-selected", active ? "true" : "false");
+			tab.addEventListener("click", (event) => {
+				if (event.target.closest(".tab-close")) return;
+				this.selectSession(pane.session_id);
+			});
+			if (running) tab.append(el("span", "tab-running", ""));
+			const select = el("button", "tab-select", sessionLabel(pane));
+			select.type = "button";
+			select.title = pane.workspace ? `${pane.session_id}\n${pane.workspace}` : pane.session_id;
+			select.addEventListener("click", () => this.selectSession(pane.session_id));
+			const close = el("button", "tab-close", "×");
+			close.type = "button";
+			close.title = "关闭对话";
+			close.setAttribute("aria-label", `关闭 ${pane.name || pane.session_id}`);
+			close.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.closeSession(pane.session_id);
+			});
+			tab.append(select, close);
+			nodes.push(tab);
+		}
+		this.tabs.replaceChildren(...nodes);
+	}
+
+	renderWorkspace() {
+		const pane = this.activePane();
+		this.workspacePath.textContent = pane?.workspace || "";
+		this.workspacePath.title = pane?.workspace || "";
+		this.workspaceWarning.textContent = !pane
+			? ""
+			: pane.workspace
+				? ""
+				: "会话缺少工作区，工具调用将被拒绝。";
+		this.updateControls();
 	}
 
 	messageNode(message) {
@@ -749,7 +1147,9 @@ class SessionChat extends HTMLElement {
 		if (!this.emptyNode) {
 			this.emptyNode = el("div", "empty", text);
 			this.messages.append(this.emptyNode);
+			return;
 		}
+		this.emptyNode.textContent = text;
 	}
 
 	dropEmpty() {
@@ -758,31 +1158,105 @@ class SessionChat extends HTMLElement {
 		this.emptyNode = null;
 	}
 
-	render() {
-		if (!this.messages) return;
-		const stick = this.nearBottom();
-		this.messages.replaceChildren();
-		this.emptyNode = null;
+	dropDraft() {
+		if (!this.draftNode) {
+			this.draftKey = "";
+			return;
+		}
+		this.draftNode.remove();
 		this.draftNode = null;
 		this.draftBody = null;
 		this.draftText = null;
 		this.draftReasoning = null;
 		this.draftReasoningText = null;
+		this.draftKey = "";
+	}
 
-		const messages = this.state.messages || [];
-		if (messages.length === 0 && !this.draft?.message) this.showEmpty("输入一条消息开始对话");
-		for (const message of messages) this.messages.append(this.messageNode(message));
-		if (this.draft?.message) this.renderDraft();
+	// syncMessageNodes reconciles the landed list in place. Rows are cached by
+	// seq like the trace pane's, and unchanged nodes never move: re-parenting a
+	// node clears any text selection inside it.
+	syncMessageNodes(messages) {
+		const order = [];
+		const wanted = new Set();
+		const live = new Set();
+		for (const message of messages) {
+			live.add(message.seq);
+			let row = this.messageRows.get(message.seq);
+			const json = JSON.stringify(message);
+			if (!row || row.json !== json) {
+				row = { json, node: this.messageNode(message) };
+				this.messageRows.set(message.seq, row);
+			}
+			order.push(row.node);
+			wanted.add(row.node);
+		}
+		for (const seq of [...this.messageRows.keys()]) {
+			if (!live.has(seq)) this.messageRows.delete(seq);
+		}
+		for (let child = this.messages.firstChild; child;) {
+			const next = child.nextSibling;
+			if (!wanted.has(child) && child !== this.draftNode && child !== this.emptyNode) {
+				child.remove();
+			}
+			child = next;
+		}
+		let cursor = this.messages.firstChild;
+		for (const node of order) {
+			if (cursor === node) {
+				cursor = cursor.nextSibling;
+				continue;
+			}
+			this.messages.insertBefore(node, cursor);
+		}
+	}
+
+	render() {
+		if (!this.messages) return;
+		this.renderTabs();
+		this.renderWorkspace();
+		this.renderMessages();
+	}
+
+	renderMessages() {
+		const stick = this.nearBottom();
+		const pane = this.activePane();
+		const draft = this.activeDraft();
+		const messages = pane ? pane.messages || [] : [];
+		if (this.renderedSessionId !== this.selectedId) {
+			// A different session owns the container: cached rows and draft
+			// references leave with the old one.
+			this.renderedSessionId = this.selectedId;
+			this.messageRows.clear();
+			this.messages.replaceChildren();
+			this.emptyNode = null;
+			this.dropDraft();
+		}
+		this.syncMessageNodes(messages);
+		if (draft?.message) this.renderDraft();
+		else this.dropDraft();
+		if (!pane) {
+			this.showEmpty("从左侧打开一个会话");
+		} else if (messages.length === 0 && !draft?.message) {
+			this.showEmpty("输入一条消息开始对话");
+		} else {
+			this.dropEmpty();
+		}
 		if (stick) this.scrollToBottom();
 		this.updateScrollButton();
 		this.updateControls();
 	}
 
 	renderDraft() {
-		if (!this.messages || !this.draft?.message) return;
+		const draft = this.activeDraft();
+		if (!this.messages || !draft?.message) return;
 		const stick = this.nearBottom();
 		this.dropEmpty();
+		// A frame for another turn/step starts a fresh draft block: leftover
+		// reasoning from the previous step must not bleed into it.
+		const key = `${draft.turn_id || ""}/${draft.step_id || ""}`;
+		if (this.draftNode && this.draftKey !== key) this.dropDraft();
 		if (!this.draftNode) {
+			this.draftKey = key;
 			const item = el("div", "message assistant draft");
 			const header = el("div", "message-header");
 			header.append(el("span", "role thinking", "生成中…"));
@@ -792,12 +1266,12 @@ class SessionChat extends HTMLElement {
 			this.messages.append(item);
 			this.draftNode = item;
 		}
-		const content = this.draft.message.content || "";
+		const content = draft.message.content || "";
 		if (content !== this.draftText) {
 			this.draftBody.replaceChildren(renderRichText(content));
 			this.draftText = content;
 		}
-		const reasoning = this.draft.message.reasoning || "";
+		const reasoning = draft.message.reasoning || "";
 		if (reasoning && !this.draftReasoning) {
 			const details = el("details", "reasoning");
 			details.append(el("summary", "", "思考过程"));
@@ -815,33 +1289,45 @@ class SessionChat extends HTMLElement {
 	}
 
 	async send() {
+		const pane = this.activePane();
+		if (!pane) return;
+		if (!pane.workspace) {
+			this.error.textContent = "请先设置会话工作区";
+			return;
+		}
 		const text = this.input.value.trim();
-		if (!text || this.busy) return;
+		const sessionId = pane.session_id;
+		if (!text || this.busy.has(sessionId) || pane.turn?.status === "running") return;
 		this.error.textContent = "";
-		this.busy = true;
+		this.busy.add(sessionId);
 		this.input.value = "";
-		this.inputDrafts.delete(this.sessionId());
+		this.inputDrafts.delete(sessionId);
 		this.autoGrow();
+		this.renderTabs();
 		this.updateControls();
 		try {
 			await window.LiteAgent.call("loop", "turn", {
 				input: text,
-				session_id: this.sessionId() || undefined,
+				session_id: sessionId,
+				workspace: pane.workspace,
 			});
 		} catch (error) {
 			this.error.textContent = describeError(error);
-			this.input.value = text;
-			this.saveInputDraft();
-			this.autoGrow();
+			if (this.selectedId === sessionId) {
+				this.input.value = text;
+				this.saveInputDraft();
+				this.autoGrow();
+			}
 		} finally {
-			this.busy = false;
+			this.busy.delete(sessionId);
+			this.renderTabs();
 			this.updateControls();
-			this.input.focus();
+			if (this.selectedId === sessionId) this.input.focus();
 		}
 	}
 
 	async cancel() {
-		const sessionId = this.sessionId();
+		const sessionId = this.selectedId;
 		if (this.cancelButton.disabled || !sessionId) return;
 		this.cancelButton.disabled = true;
 		try {
@@ -891,6 +1377,11 @@ class SessionTrace extends HTMLElement {
 		} catch (error) {
 			this.list.replaceChildren(el("li", "error", describeError(error)));
 		}
+	}
+
+	async resync() {
+		const state = await call("state", {});
+		if (state.trace) this.setData(state.trace);
 	}
 
 	setData(state) {

@@ -16,7 +16,9 @@
 | Context Call | 已实现 |
 | Cancel Frame | 已实现 |
 | Frame Priority 流水线 | 已实现 |
-| Tool 与 Model Context 插件 | 已实现 |
+| Tool 与 Model Context 插件 | 已移除，设计保留 |
+
+当前源码只发布 `session`、`llm-openai` 和 `agent`。本文的 Tool、Sandbox、File、Shell、Web 和 Subagent 设计是后续切片的输入，不是当前实现。
 
 ### 1.2 概念预算
 

@@ -44,8 +44,9 @@ type Frame struct {
 	Capability string          `json:"capability,omitempty"`
 	Method     string          `json:"method,omitempty"`
 	Payload    json.RawMessage `json:"payload,omitempty"`
-	Reason     string          `json:"reason,omitempty"`
-	Priority   int             `json:"priority,omitempty"`
+	// Reason cancel reason
+	Reason   string `json:"reason,omitempty"`
+	Priority int    `json:"priority,omitempty"`
 	// ErrorCode / ErrorMsg are always present; empty string on success.
 	ErrorCode string `json:"error_code"`
 	ErrorMsg  string `json:"error_msg"`

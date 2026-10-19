@@ -15,7 +15,10 @@ type Fact struct {
 	Timestamp  int64           `json:"ts,omitempty"`
 }
 
-// Fact types (model-visible: message + active context_summary only).
+// Fact types in the append-only log. Some are written by this plugin and some
+// only by the agent plugin (step_end, request_header, llm_usage); they are
+// declared here as the single description of the log vocabulary, so a reader
+// knows the full set even when this plugin never produces a given type.
 const (
 	TypeSessionStart   = "session_start"
 	TypeTurnStart      = "turn_start"
@@ -26,6 +29,7 @@ const (
 	TypeLLMUsage       = "llm_usage"
 	TypeMessage        = "message"
 	TypeContextSummary = "context_summary"
+	TypeSessionMeta    = "session_meta"
 )
 
 const (
@@ -40,6 +44,7 @@ const (
 type Meta struct {
 	SessionID        string `json:"session_id"`
 	Name             string `json:"name,omitempty"`
+	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
@@ -90,6 +95,7 @@ type streamUpdateOut struct {
 type createIn struct {
 	SessionID       string `json:"session_id,omitempty"`
 	Name            string `json:"name,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	Origin          string `json:"origin,omitempty"`
@@ -146,7 +152,9 @@ type deriveOut struct {
 	TruncatedTools    int           `json:"truncated_tools"`
 }
 
-type listIn struct{}
+type listIn struct {
+	WorkspaceID string `json:"workspace_id,omitempty"`
+}
 
 type listOut struct {
 	Sessions []sessionSummary `json:"sessions"`
@@ -155,6 +163,7 @@ type listOut struct {
 type sessionSummary struct {
 	SessionID        string `json:"session_id"`
 	Name             string `json:"name,omitempty"`
+	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
 	FactCount        int    `json:"fact_count"`
 	CreatedTimestamp int64  `json:"created_ts"`
@@ -168,6 +177,7 @@ type infoIn struct {
 type infoOut struct {
 	SessionID        string `json:"session_id"`
 	Name             string `json:"name,omitempty"`
+	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
@@ -175,6 +185,52 @@ type infoOut struct {
 	CreatedTimestamp int64  `json:"created_ts"`
 	FactCount        int    `json:"fact_count"`
 	NextSeq          int    `json:"next_seq"`
+}
+
+type workspaceListOut struct {
+	Workspaces []workspaceRecord `json:"workspaces"`
+	SelectedID string            `json:"selected_id,omitempty"`
+}
+
+type workspaceCreateIn struct {
+	Path string `json:"path"`
+	Name string `json:"name,omitempty"`
+}
+
+type workspaceCreateOut struct {
+	Workspace workspaceRecord `json:"workspace"`
+	Created   bool            `json:"created"`
+}
+
+type workspaceSelectIn struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type workspaceSelectOut struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type workspaceRenameIn struct {
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+}
+
+type workspaceRenameOut struct {
+	Workspace workspaceRecord `json:"workspace"`
+}
+
+type workspaceRemoveIn struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type workspaceRemoveOut struct {
+	WorkspaceID string `json:"workspace_id"`
+	Removed     bool   `json:"removed"`
+	SelectedID  string `json:"selected_id,omitempty"`
+}
+
+type workspaceCurrentOut struct {
+	Workspace *workspaceRecord `json:"workspace,omitempty"`
 }
 
 // plugin config (config.json)

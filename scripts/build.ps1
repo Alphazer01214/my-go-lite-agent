@@ -2,7 +2,7 @@
 # Usage:
 #   powershell -File scripts\build.ps1            # incremental (skip unchanged binaries)
 #   powershell -File scripts\build.ps1 -Clean     # wipe dist and rebuild everything
-#   powershell -File scripts\build.ps1 -Only sandbox,agent
+#   powershell -File scripts\build.ps1 -Only agent,session
 #   powershell -File scripts\build.ps1 -Verify   # go vet + go test (+node) before building
 #   powershell -File scripts\build.ps1 -List
 #
@@ -65,7 +65,7 @@ foreach ($n in $Only) {
 function Should-Build([string]$target) {
     if ($onlySet.Count -eq 0) { return $true }
     if ($onlySet[$target]) { return $true }
-    # Accept short names: "sandbox" matches "plugin:sandbox".
+    # Accept short names: "agent" matches "plugin:agent".
     if ($target.StartsWith("plugin:")) {
         $short = $target.Substring("plugin:".Length)
         if ($onlySet[$short]) { return $true }
@@ -111,12 +111,13 @@ if ($missingPlugins.Count -gt 0) {
 $llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
 $agentDistCfg = Join-Path $dist "plugins\agent\config.json"
 $sessDistDir = Join-Path $dist "plugins\session\sessions"
-$sandboxPerm = Join-Path $dist "config\permissions.json"
+$sessionWorkspaceFile = Join-Path $sessDistDir "workspaces.json"
+$legacyWorkspaceFile = Join-Path $dist "plugins\workspace\workspaces.json"
 $stash = Join-Path ([IO.Path]::GetTempPath()) ("liteagent-stash-" + [guid]::NewGuid().ToString("N"))
 $llmStash = $null
 $sessStash = $null
+$legacyWorkspaceStash = $null
 $agentStash = $null
-$sandboxStash = $null
 if (Test-Path $llmDistCfg) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
     $llmStash = Join-Path $stash "llm-config.json"
@@ -132,10 +133,10 @@ if (Test-Path $sessDistDir) {
     $sessStash = Join-Path $stash "sessions"
     Copy-Item $sessDistDir $sessStash -Recurse -Force
 }
-if (Test-Path $sandboxPerm) {
+if (Test-Path $legacyWorkspaceFile) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $sandboxStash = Join-Path $stash "permissions.json"
-    Copy-Item $sandboxPerm $sandboxStash -Force
+    $legacyWorkspaceStash = Join-Path $stash "legacy-workspaces.json"
+    Copy-Item $legacyWorkspaceFile $legacyWorkspaceStash -Force
 }
 
 if ($Clean -and (Test-Path $dist)) {
@@ -347,6 +348,14 @@ try {
         Install-PluginDir $name
     }
 
+    # Workspace Registry moved into session. Preserve an existing legacy file
+    # before pruning the old standalone plugin directory.
+    if ((Test-Path $legacyWorkspaceFile) -and -not (Test-Path $sessionWorkspaceFile)) {
+        New-Item -ItemType Directory -Path $sessDistDir -Force | Out-Null
+        Copy-Item $legacyWorkspaceFile $sessionWorkspaceFile -Force
+        Write-Host "workspace registry: migrated dist/plugins/workspace into session"
+    }
+
     # Prune plugin dirs that are no longer shipped (keep configs/sessions).
     $keep = @{}
     foreach ($name in $shippedPlugins) { $keep[$name] = $true }
@@ -362,7 +371,7 @@ try {
         }
     }
 
-    # Restore user data (llm config + agent schemes + sandbox rules + sessions),
+    # Restore user data (llm config + agent schemes + sessions),
     # then seed whatever is still missing from the examples.
     if ($null -ne $llmStash -and -not (Test-Path $llmDistCfg)) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
@@ -378,16 +387,17 @@ try {
     }
     if ($null -ne $sessStash) {
         $sessTarget = Join-Path $dist "plugins\session\sessions"
-        if (-not (Test-Path $sessTarget)) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent $sessTarget) -Force | Out-Null
-            Copy-Item $sessStash $sessTarget -Recurse -Force
-            Write-Host "sessions: preserved $( (Get-ChildItem -Path $sessTarget -Filter *.jsonl -ErrorAction SilentlyContinue).Count ) file(s)"
+        New-Item -ItemType Directory -Path $sessTarget -Force | Out-Null
+        $stashedSessions = @(Get-ChildItem -LiteralPath $sessStash -Force -ErrorAction SilentlyContinue)
+        if ($stashedSessions.Count -gt 0) {
+            Copy-Item (Join-Path $sessStash "*") $sessTarget -Recurse -Force
         }
+        Write-Host "sessions: preserved $( (Get-ChildItem -Path $sessTarget -Filter *.jsonl -ErrorAction SilentlyContinue).Count ) file(s)"
     }
-    if ($null -ne $sandboxStash -and -not (Test-Path $sandboxPerm)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxPerm) -Force | Out-Null
-        Copy-Item $sandboxStash $sandboxPerm -Force
-        Write-Host "sandbox permissions: preserved dist config/permissions.json"
+    if ($null -ne $legacyWorkspaceStash -and -not (Test-Path $sessionWorkspaceFile)) {
+        New-Item -ItemType Directory -Path $sessDistDir -Force | Out-Null
+        Copy-Item $legacyWorkspaceStash $sessionWorkspaceFile -Force
+        Write-Host "workspace registry: restored legacy data into session"
     }
     if ($null -ne $stash -and (Test-Path $stash)) {
         Remove-Item $stash -Recurse -Force -ErrorAction SilentlyContinue
@@ -419,18 +429,7 @@ try {
         }
     }
 
-    # ── examples & docs ─────────────────────────────────────────────────────
-    New-Item -ItemType Directory -Path (Join-Path $dist "config") -Force | Out-Null
-    $permCfg = Join-Path $dist "config\permissions.json"
-    if (-not (Test-Path $permCfg)) {
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        $permExample = Join-Path $root "config\permissions.example.json"
-        if (Test-Path $permExample) {
-            Copy-Item $permExample $permCfg -Force
-        } else {
-            [System.IO.File]::WriteAllText($permCfg, "{`n  `"defaults`": {`"low`": `"allow`", `"medium`": `"allow`", `"high`": `"deny`"},`n  `"rules`": []`n}`n", $utf8NoBom)
-        }
-    }
+    # ── docs ────────────────────────────────────────────────────────────────
     Copy-DistAsset "README.md" $dist
     Copy-DistAsset "CONTEXT.md" $dist
     Copy-DistAsset "plugins\README.md" (Join-Path $dist "plugins\README.md")

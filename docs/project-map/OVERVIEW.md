@@ -36,19 +36,22 @@ flowchart LR
 
 ## 3. 启动过程
 
-启动入口先扫描 Manifest，再组装 Host 和 WebUI。
+启动入口先扫描 Manifest，再组装 Host 和 WebUI，最后才挂载插件。
+插件一启动就可能推送 `ui.state`，所以 UI Publisher 必须在挂载之前接好。
 
 ```text
 ScanRoot
 → NewRegistry
-→ Host.Run
+→ TCP Listen
+→ Host.New
+→ SetUIPublisher(NewServer)
+→ Host.Start
 → AutostartClosure
 → register provides
 → launch session
 → launch llm-openai
 → launch agent
-→ NewServer
-→ HTTP Listen
+→ HTTP Serve
 ```
 
 当前自动启动顺序是：

@@ -1,4 +1,4 @@
-import { createMountLoader } from "./loader.mjs";
+import { createMountLoader, mountKeyFor } from "./loader.mjs";
 import { LiteAgent } from "./lite-agent.js";
 import {
 	renderDependencyDetails,
@@ -36,6 +36,7 @@ const elements = {
 };
 
 const localDiagnostics = [];
+const serverDiagnostics = [];
 let mountLoader = null;
 let currentMounts = [];
 let selectedPluginName = "";
@@ -96,9 +97,13 @@ function renderDiagnostics(diagnostics) {
 	elements.diagnosticButton.title = count === 0 ? "诊断：暂无诊断信息" : `诊断：${count} 条诊断信息（Esc 关闭）`;
 }
 
+function combinedDiagnostics() {
+	return [...serverDiagnostics, ...localDiagnostics];
+}
+
 function addLocalDiagnostic(diagnostic) {
 	localDiagnostics.push(diagnostic);
-	renderDiagnostics(localDiagnostics);
+	renderDiagnostics(combinedDiagnostics());
 }
 
 function settingsButton(form) {
@@ -151,7 +156,7 @@ function setPluginActionStatus(message, kind = "info") {
 }
 
 function renderSettings(plugins) {
-	const configurable = plugins.filter((plugin) => plugin.settings?.schema?.length);
+	const configurable = plugins.filter((plugin) => plugin?.settings?.schema?.length);
 	renderSettingsList(document, elements.settingsList, configurable, {
 		onLoad: loadPluginSettings,
 		onSave: savePluginSettings,
@@ -159,19 +164,8 @@ function renderSettings(plugins) {
 	elements.settingsSummary.textContent = `${configurable.length} 个可配置插件`;
 }
 
-function renderPluginGraphView(plugins) {
-	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
-	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
-		selectedId: selectedPluginName,
-		onSelect: (name) => {
-			selectedPluginName = name;
-			renderPluginGraphView(plugins);
-		},
-	});
-	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
-}
-
 function renderPluginCenter(plugins) {
+	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
 	for (const plugin of plugins) {
 		const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
 		const selectedID = selectedPluginInstances.get(plugin?.name);
@@ -189,8 +183,15 @@ function renderPluginCenter(plugins) {
 		onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
 	});
 	renderSettings(plugins);
-	renderDependencyEdgeList(document, elements.pluginEdgeList, plugins);
-	renderPluginGraphView(plugins);
+	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
+		selectedId: selectedPluginName,
+		onSelect: (name) => {
+			selectedPluginName = name;
+			renderPluginCenter(plugins);
+		},
+	});
+	renderDependencyEdgeList(document, elements.pluginEdgeList, graphModel);
+	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
 	elements.pluginCount.textContent = String(plugins.length);
 	elements.pluginSummary.textContent = `${plugins.length} 个插件`;
 }
@@ -207,11 +208,14 @@ async function parseManagementResponse(response) {
 	return payload;
 }
 
-async function applyBootstrap(payload, { loadMounts = true } = {}) {
+async function applyBootstrap(payload, { loadMounts = true, resync = false } = {}) {
 	const plugins = Array.isArray(payload?.plugins) ? payload.plugins : [];
 	currentMounts = Array.isArray(payload?.mounts) ? payload.mounts : [];
 	renderPluginCenter(plugins);
-	if (loadMounts && mountLoader) await mountLoader.load(currentMounts);
+	if (loadMounts && mountLoader) {
+		if (resync) await mountLoader.resync(currentMounts);
+		else await mountLoader.load(currentMounts);
+	}
 }
 
 async function runPluginAction(plugin, action, button) {
@@ -300,16 +304,26 @@ function setHostStatus(state, text) {
 	elements.hostStatus.textContent = text;
 }
 
+async function fetchBootstrap() {
+	const response = await fetch("/bridge/bootstrap", {
+		headers: { Accept: "application/json" },
+	});
+	if (!response.ok) throw new Error(`bootstrap failed with HTTP ${response.status}`);
+	const payload = await response.json();
+	serverDiagnostics.length = 0;
+	serverDiagnostics.push(...(Array.isArray(payload.diagnostics) ? payload.diagnostics : []));
+	renderDiagnostics(combinedDiagnostics());
+	return payload;
+}
+
+async function syncFromServer({ resync = false } = {}) {
+	const payload = await fetchBootstrap();
+	await applyBootstrap(payload, { resync });
+	setHostStatus("ready", "已连接");
+}
+
 async function bootstrap() {
 	try {
-		const response = await fetch("/bridge/bootstrap", {
-			headers: { Accept: "application/json" },
-		});
-		if (!response.ok) throw new Error(`bootstrap failed with HTTP ${response.status}`);
-		const payload = await response.json();
-		localDiagnostics.push(...(Array.isArray(payload.diagnostics) ? payload.diagnostics : []));
-		renderDiagnostics(localDiagnostics);
-
 		mountLoader = createMountLoader({
 			importModule: (entry) => import(entry),
 			customElements,
@@ -319,8 +333,7 @@ async function bootstrap() {
 		});
 		LiteAgent.onUI((frame) => {
 			if (!frame.mount) return;
-			const key = `${frame.mount.plugin}:${frame.mount.id}`;
-			const element = mountLoader?.get(key);
+			const element = mountLoader?.get(mountKeyFor(frame.mount));
 			if (!element) return;
 			if (frame.kind === "state" && typeof element.setData === "function") {
 				element.setData(frame.payload);
@@ -329,17 +342,25 @@ async function bootstrap() {
 			}
 		});
 		LiteAgent.onDiagnostic(addLocalDiagnostic);
-		LiteAgent.onEvicted(() => {
-			setHostStatus("evicted", "已由其他标签页接管");
-			addLocalDiagnostic({
-				plugin: "host",
-				path: "/bridge/ui",
-				code: "ui_connection_evicted",
-				message: "另一个标签页接管了 UI 推送连接，本页不再接收实时更新。刷新本页可重新接管。",
-			});
+		LiteAgent.onStatus((next) => {
+			if (next === "connected") setHostStatus("ready", "已连接");
+			else if (next === "reconnecting") setHostStatus("connecting", "重连中…");
+			else if (next === "connecting") setHostStatus("connecting", "连接中…");
 		});
-		await applyBootstrap(payload);
-		setHostStatus("ready", "已连接");
+		LiteAgent.onResync(async () => {
+			try {
+				await syncFromServer({ resync: true });
+			} catch (error) {
+				setHostStatus("error", "重连失败");
+				addLocalDiagnostic({
+					plugin: "host",
+					path: "/bridge/bootstrap",
+					code: "ui_resync_failed",
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+		});
+		await syncFromServer();
 	} catch (error) {
 		setHostStatus("error", "连接失败");
 		addLocalDiagnostic({
@@ -383,7 +404,7 @@ document.addEventListener("click", (event) => {
 	closePanels();
 });
 
-renderDiagnostics([]);
+renderDiagnostics(combinedDiagnostics());
 renderPluginCenter([]);
 setPluginView("manage");
 bootstrap();

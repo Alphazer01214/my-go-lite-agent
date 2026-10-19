@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 	"sync/atomic"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
@@ -15,8 +14,9 @@ import (
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
-// uiEnvelopeEvicted tells a page that a newer page took the UI connection.
-const uiEnvelopeEvicted = "evicted"
+// maxDiagnostics bounds the runtime diagnostic ring. Diagnostics are replayed in
+// every bootstrap, so an unbounded slice would grow the payload forever.
+const maxDiagnostics = 256
 
 type uiEnvelope struct {
 	Version    int                `json:"version"`
@@ -30,39 +30,39 @@ type uiEnvelope struct {
 }
 
 type uiConnection struct {
-	queue   chan *uiEnvelope
-	done    chan struct{}
-	once    sync.Once
-	evicted atomic.Bool
+	id    string
+	queue chan *uiEnvelope
+	drops atomic.Uint64
 }
 
 func newUIConnection() *uiConnection {
 	return &uiConnection{
 		queue: make(chan *uiEnvelope, 64),
-		done:  make(chan struct{}),
 	}
-}
-
-func (c *uiConnection) stop() {
-	c.once.Do(func() { close(c.done) })
-}
-
-// evict releases the connection to a newer page. The page is told it lost the
-// stream so the SDK stops reconnecting, instead of the two pages taking turns
-// stealing the single v1 UI connection.
-func (c *uiConnection) evict() {
-	c.evicted.Store(true)
-	c.stop()
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	connection := newUIConnection()
-	s.replaceUIConnection(connection)
-	defer s.releaseUIConnection(connection)
+	connection.id = fmt.Sprintf("ui-conn-%d", s.connectionSeq.Add(1))
+	s.addUIConnection(connection)
+	defer s.removeUIConnection(connection)
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return
+	}
+	// hello is per connection and always precedes queued pushes. The SDK uses
+	// every hello after the first one as the signal to resync page state.
+	hello := &uiEnvelope{
+		Version: protocol.FrameVersion,
+		ID:      s.nextUIID(),
+		Type:    "hello",
+	}
+	if err := json.NewEncoder(w).Encode(hello); err != nil {
+		return
+	}
 	if err := http.NewResponseController(w).Flush(); err != nil {
 		return
 	}
@@ -76,56 +76,57 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 			if err := http.NewResponseController(w).Flush(); err != nil {
 				return
 			}
-		case <-connection.done:
-			if connection.evicted.Load() {
-				_ = json.NewEncoder(w).Encode(&uiEnvelope{
-					Version: protocol.FrameVersion,
-					ID:      s.nextUIID(),
-					Type:    uiEnvelopeEvicted,
-				})
-				_ = http.NewResponseController(w).Flush()
-			}
-			return
 		case <-r.Context().Done():
 			return
 		}
 	}
 }
 
-func (s *Server) replaceUIConnection(next *uiConnection) {
+// addUIConnection publishes one more UI stream. Connections are independent:
+// a new page never displaces an existing one.
+func (s *Server) addUIConnection(connection *uiConnection) {
 	s.mu.Lock()
-	previous := s.connection
-	s.connection = next
-	s.mu.Unlock()
-	if previous != nil {
-		previous.evict()
+	if s.connections == nil {
+		s.connections = make(map[*uiConnection]struct{})
 	}
+	s.connections[connection] = struct{}{}
+	total := len(s.connections)
+	s.mu.Unlock()
+	s.log("ui: connection opened id=%s total=%d", connection.id, total)
 }
 
-func (s *Server) releaseUIConnection(connection *uiConnection) {
+func (s *Server) removeUIConnection(connection *uiConnection) {
 	s.mu.Lock()
-	if s.connection == connection {
-		s.connection = nil
-	}
+	delete(s.connections, connection)
+	total := len(s.connections)
 	s.mu.Unlock()
-	connection.stop()
+	s.log("ui: connection closed id=%s total=%d drops=%d",
+		connection.id, total, connection.drops.Load())
 }
 
+// enqueueUI fans one envelope out to every active connection. A slow or dead
+// page only loses its own queue; delivery succeeds when at least one page took
+// the envelope.
 func (s *Server) enqueueUI(envelope *uiEnvelope) bool {
 	s.mu.Lock()
-	connection := s.connection
+	connections := make([]*uiConnection, 0, len(s.connections))
+	for connection := range s.connections {
+		connections = append(connections, connection)
+	}
 	s.mu.Unlock()
-	if connection == nil {
-		return false
+
+	delivered := false
+	for _, connection := range connections {
+		select {
+		case connection.queue <- envelope:
+			delivered = true
+		default:
+			if connection.drops.Add(1) == 1 {
+				s.log("ui: queue full id=%s", connection.id)
+			}
+		}
 	}
-	select {
-	case connection.queue <- envelope:
-		return true
-	case <-connection.done:
-		return false
-	default:
-		return false
-	}
+	return delivered
 }
 
 // PushDiagnostic stores a runtime diagnostic in the snapshot and sends it to
@@ -133,6 +134,9 @@ func (s *Server) enqueueUI(envelope *uiEnvelope) bool {
 func (s *Server) PushDiagnostic(diagnostic plugin.Diagnostic) {
 	s.mu.Lock()
 	s.diagnostics = append(s.diagnostics, diagnostic)
+	if len(s.diagnostics) > maxDiagnostics {
+		s.diagnostics = s.diagnostics[len(s.diagnostics)-maxDiagnostics:]
+	}
 	s.mu.Unlock()
 
 	id := fmt.Sprintf("diag-%d", s.sequence.Add(1))
@@ -161,14 +165,18 @@ func (s *Server) PublishState(from string, payload json.RawMessage) (json.RawMes
 		return nil, err
 	}
 	state := append(json.RawMessage(nil), input.State...)
-	s.enqueueUI(&uiEnvelope{
+	if !s.enqueueUI(&uiEnvelope{
 		Version: protocol.FrameVersion,
 		ID:      s.nextUIID(),
 		Type:    "ui",
 		Mount:   mount,
 		Kind:    "state",
 		Payload: state,
-	})
+	}) {
+		// No browser attached or the queue is saturated. The plugin is told so
+		// instead of being handed a success it cannot observe.
+		return nil, fmt.Errorf("%w: no ui connection for mount %s", protocol.ErrUINotMounted, input.MountID)
+	}
 	return json.RawMessage(`{}`), nil
 }
 
@@ -193,7 +201,7 @@ func (s *Server) PublishCommand(from string, payload json.RawMessage) (json.RawM
 	if len(bytes.TrimSpace(commandPayload)) == 0 || bytes.Equal(bytes.TrimSpace(commandPayload), []byte("null")) {
 		commandPayload = json.RawMessage(`{}`)
 	}
-	s.enqueueUI(&uiEnvelope{
+	if !s.enqueueUI(&uiEnvelope{
 		Version: protocol.FrameVersion,
 		ID:      s.nextUIID(),
 		Type:    "ui",
@@ -201,7 +209,9 @@ func (s *Server) PublishCommand(from string, payload json.RawMessage) (json.RawM
 		Kind:    "command",
 		Command: input.Command,
 		Payload: commandPayload,
-	})
+	}) {
+		return nil, fmt.Errorf("%w: no ui connection for mount %s", protocol.ErrUINotMounted, input.MountID)
+	}
 	return json.RawMessage(`{}`), nil
 }
 

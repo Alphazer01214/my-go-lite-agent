@@ -57,23 +57,6 @@ func (p *streamFlushPolicy) observe(now time.Time) bool {
 	return true
 }
 
-func newStreamSequencer() *streamSequencer {
-	return &streamSequencer{}
-}
-
-type streamSequencer struct {
-	mu   sync.Mutex
-	next int
-}
-
-func (s *streamSequencer) withNext(snapshot streamSnapshot) streamSnapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.next++
-	snapshot.UpdateID = s.next
-	return snapshot
-}
-
 func newStreamAccumulator() *streamAccumulator {
 	return &streamAccumulator{toolCalls: make(map[int]*toolCall)}
 }

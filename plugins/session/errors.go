@@ -12,14 +12,3 @@ type coded struct {
 }
 
 func (e coded) Error() string { return e.msg }
-
-// Code returns the stable error_code carried by err ("" if none).
-func Code(err error) string {
-	if err == nil {
-		return ""
-	}
-	if c, ok := err.(coded); ok {
-		return c.code
-	}
-	return ""
-}

@@ -79,6 +79,10 @@ func (c *outboundCall) cancellationError() error {
 type inboundCall struct {
 	cancel context.CancelFunc
 	reason string
+	// placeholder marks a cancel that arrived before its req was dispatched.
+	// It carries no handler context and is dropped once the req lands or once
+	// the id falls out of the bounded inbound window.
+	placeholder bool
 }
 
 // Handler wraps a HandleFunc with optional human-readable info (not used for routing).
@@ -105,6 +109,11 @@ func (h Handler) Info() (name, description string) {
 	return h.Name, h.Description
 }
 
+// inboundWindowSize bounds how many recent inbound frame ids the SDK remembers.
+// It only exists to pair a cancel with a req that may arrive out of order, so a
+// few hundred entries is far more than any in-flight window needs.
+const inboundWindowSize = 256
+
 // Plugin is the in-process runtime: dispatches inbound req, completes outbound Call.
 // Plugins never address by plugin name — only capability.method.
 type Plugin struct {
@@ -117,8 +126,14 @@ type Plugin struct {
 	pending map[string]*outboundCall
 	// inbound tracks cancellable Handler contexts by request id.
 	inbound map[string]*inboundCall
-	stdin   *os.File
-	stdout  *os.File
+	// inboundWindow remembers the most recent inbound request ids, in arrival
+	// order and bounded in size. A cancel may reach the SDK before the matching
+	// req is dispatched, so handleCancel needs to tell "not started yet" from
+	// "already finished" — without keeping every id forever.
+	inboundRecent    []string
+	inboundRecentSet map[string]bool
+	stdin            *os.File
+	stdout           *os.File
 
 	seq atomic.Int32
 }
@@ -127,12 +142,13 @@ type Plugin struct {
 // name is identity only (logs / id prefix) — never used for routing.
 func NewPlugin(name string) *Plugin {
 	return &Plugin{
-		name:     name,
-		handlers: make(map[string]Handler),
-		pending:  make(map[string]*outboundCall),
-		inbound:  make(map[string]*inboundCall),
-		stdin:    os.Stdin,
-		stdout:   os.Stdout,
+		name:             name,
+		handlers:         make(map[string]Handler),
+		pending:          make(map[string]*outboundCall),
+		inbound:          make(map[string]*inboundCall),
+		inboundRecentSet: make(map[string]bool),
+		stdin:            os.Stdin,
+		stdout:           os.Stdout,
 	}
 }
 
@@ -169,11 +185,17 @@ func (p *Plugin) ListRegistered() []Registration {
 	return out
 }
 
-// Serve reports registered handlers to Host, then runs Listen until stdin closes.
-// Typical main: NewPlugin → Register… →（可选）Call… → Serve().
+// Serve reports the handlers registered so far to Host, then runs Listen until
+// stdin closes. Typical main: NewPlugin → Register… →（可选）Call… → Serve().
+// Handlers registered after Serve() starts are local only: re-announcing a route
+// is Host's business and this runtime does not do it on its own.
 func (p *Plugin) Serve() error {
-	go p.reportRegistered()
-	return p.Listen()
+	// Listen must already be draining before the register Call can complete,
+	// so it runs on its own goroutine and Serve blocks on it instead.
+	listenDone := make(chan error, 1)
+	go func() { listenDone <- p.Listen() }()
+	p.reportRegistered()
+	return <-listenDone
 }
 
 // reportRegistered is best-effort host.register (protocol §5.1).
@@ -182,10 +204,17 @@ func (p *Plugin) reportRegistered() {
 	regs := p.ListRegistered()
 	handlers := make([]map[string]string, 0, len(regs))
 	for _, r := range regs {
-		handlers = append(handlers, map[string]string{
+		entry := map[string]string{
 			"capability": r.Capability,
 			"method":     r.Method,
-		})
+		}
+		if r.Handler.Name != "" {
+			entry["name"] = r.Handler.Name
+		}
+		if r.Handler.Description != "" {
+			entry["description"] = r.Handler.Description
+		}
+		handlers = append(handlers, entry)
 	}
 	payload, _ := json.Marshal(map[string]any{"handlers": handlers})
 	_, _ = p.Call(context.Background(), HostCapability, "register", payload)
@@ -203,6 +232,7 @@ func (p *Plugin) Listen() error {
 		switch frame.Type {
 		case protocol.FrameRequest:
 			// handler may block; do not stall the receive loop
+			p.rememberInbound(frame.ID)
 			go p.dispatch(frame)
 		case protocol.FrameResponse:
 			// ordered with evt so attributed stream stays before its res
@@ -210,6 +240,7 @@ func (p *Plugin) Listen() error {
 		case protocol.FrameEvent:
 			p.deliver(frame)
 		case protocol.FrameCancel:
+			p.rememberInbound(frame.ID)
 			p.handleCancel(frame)
 		default:
 			// unknown types are ignored (forward compatible)
@@ -250,7 +281,13 @@ func (p *Plugin) complete(frame *protocol.Frame) {
 	if !ok {
 		return
 	}
-	call.ch <- frame
+	// Non-blocking: resCh is buffered for exactly this delivery. A full buffer
+	// means the waiter already went away or a res was injected first; dropping
+	// keeps the receive loop free instead of stalling every other frame.
+	select {
+	case call.ch <- frame:
+	default:
+	}
 	close(call.ch)
 }
 
@@ -266,6 +303,7 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 	p.mu.Lock()
 	if existing := p.inbound[frame.ID]; existing != nil {
 		entry = existing
+		entry.placeholder = false
 		if existing.reason != "" {
 			cancel()
 		}
@@ -300,7 +338,7 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 				return nil, ErrCode(CodeBadPayload, marshalErr.Error())
 			}
 			return p.CallWithCallbackInContext(callCtx, frame.ContextID, HostCapability, "proceed", body, func(ev *Event) {
-				_ = p.EmitWithID(frame.ID, ev.Capability, ev.Method, ev.Payload)
+				_ = p.EmitWithIDInContext(frame.ContextID, frame.ID, ev.Capability, ev.Method, ev.Payload)
 			})
 		}
 		out, err := h.handleFunc(ctx, req)
@@ -330,11 +368,14 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 }
 
 // handleCancel cancels one inbound Handler context and never writes a Response.
+// Host forwards cancel and req over the same pipe without ordering guarantees, so
+// a cancel may land first; that case parks the reason on a placeholder which the
+// later dispatch adopts. Placeholders are bounded by inboundWindowSize.
 func (p *Plugin) handleCancel(frame *protocol.Frame) {
 	p.mu.Lock()
 	entry := p.inbound[frame.ID]
 	if entry == nil {
-		entry = &inboundCall{cancel: func() {}}
+		entry = &inboundCall{cancel: func() {}, placeholder: true}
 		p.inbound[frame.ID] = entry
 	}
 	if entry.reason == "" {
@@ -343,6 +384,32 @@ func (p *Plugin) handleCancel(frame *protocol.Frame) {
 	cancel := entry.cancel
 	p.mu.Unlock()
 	cancel()
+}
+
+// rememberInbound opens a slot in the bounded inbound window for one frame id.
+func (p *Plugin) rememberInbound(id string) {
+	p.mu.Lock()
+	p.rememberInboundLocked(id)
+	p.mu.Unlock()
+}
+
+// rememberInboundLocked records one inbound frame id in the bounded window,
+// evicting the oldest entries so neither the set nor the placeholders it backs
+// can grow without limit.
+func (p *Plugin) rememberInboundLocked(id string) {
+	if p.inboundRecentSet[id] {
+		return
+	}
+	p.inboundRecentSet[id] = true
+	p.inboundRecent = append(p.inboundRecent, id)
+	for len(p.inboundRecent) > inboundWindowSize {
+		oldest := p.inboundRecent[0]
+		p.inboundRecent = p.inboundRecent[1:]
+		delete(p.inboundRecentSet, oldest)
+		if entry := p.inbound[oldest]; entry != nil && entry.placeholder {
+			delete(p.inbound, oldest)
+		}
+	}
 }
 
 // deliver routes an attributed evt to the matching pending Call waiter.
@@ -376,43 +443,51 @@ func (p *Plugin) toEvent(frame *protocol.Frame) *Event {
 
 // waitResult drains the waiter until res (or channel close).
 // Attributed evt frames go to callback when non-nil; otherwise they are discarded.
+// Exactly one cancel Frame is written per Call: a watcher goroutine arms it as
+// soon as ctx is done, while the waiter keeps draining until the peer answers.
+// The waiter never selects on ctx.Done() itself — a permanently ready Done
+// channel would spin this loop at full CPU for the rest of the Call.
 func (p *Plugin) waitResult(ctx context.Context, call *outboundCall, capability, method string, callback func(*Event)) (json.RawMessage, error) {
-	for {
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
 		select {
 		case <-ctx.Done():
 			if !p.markOutboundCancel(call, ctx.Err()) {
-				continue
+				return
 			}
-			if err := p.writeCancel(call, ctx.Err()); err != nil {
-				p.mu.Lock()
-				delete(p.pending, call.id)
-				p.mu.Unlock()
-				return nil, contextCallError(ctx.Err())
+			_ = p.writeCancel(call, ctx.Err())
+		case <-watchDone:
+		}
+	}()
+
+	for {
+		frame, ok := <-call.ch
+		if !ok || frame == nil {
+			if canceled := call.cancellationError(); canceled != nil {
+				return nil, canceled
 			}
-		case frame, ok := <-call.ch:
-			if !ok || frame == nil {
-				return nil, fmt.Errorf("call %s.%s: connection closed", capability, method)
+			return nil, fmt.Errorf("call %s.%s: connection closed", capability, method)
+		}
+		switch frame.Type {
+		case protocol.FrameEvent:
+			if callback != nil {
+				callback(p.toEvent(frame))
 			}
-			switch frame.Type {
-			case protocol.FrameEvent:
-				if callback != nil {
-					callback(p.toEvent(frame))
+		case protocol.FrameResponse:
+			if canceled := call.cancellationError(); canceled != nil {
+				return nil, canceled
+			}
+			if frame.ErrorCode != "" || frame.ErrorMsg != "" {
+				code := frame.ErrorCode
+				if code == "" {
+					code = CodeHandlerError
 				}
-			case protocol.FrameResponse:
-				if canceled := call.cancellationError(); canceled != nil {
-					return nil, canceled
-				}
-				if frame.ErrorCode != "" || frame.ErrorMsg != "" {
-					code := frame.ErrorCode
-					if code == "" {
-						code = CodeHandlerError
-					}
-					return nil, ErrCode(code, frame.ErrorMsg)
-				}
-				return frame.Payload, nil
-			default:
-				// ignore unknown
+				return nil, ErrCode(code, frame.ErrorMsg)
 			}
+			return frame.Payload, nil
+		default:
+			// ignore unknown
 		}
 	}
 }

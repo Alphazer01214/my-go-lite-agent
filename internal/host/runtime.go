@@ -31,9 +31,13 @@ type ExecutionContext struct {
 }
 
 // PluginInstanceSnapshot is the runtime view of one plugin process instance.
+// RegistrationSnapshot is one reported (capability, method) route.
+// Name and Description come from the plugin's WithInfo and are display-only.
 type RegistrationSnapshot struct {
-	Capability string `json:"capability"`
-	Method     string `json:"method"`
+	Capability  string `json:"capability"`
+	Method      string `json:"method"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type PluginInstanceSnapshot struct {
@@ -326,7 +330,6 @@ func (h *Host) RestartPluginInstance(instanceID string) (PluginInstanceSnapshot,
 		delete(h.plugins, instanceID)
 	}
 	h.mu.Unlock()
-	failed := 0
 
 	if err := h.launchInstance(instanceID, discovery, configRevision); err != nil {
 		return PluginInstanceSnapshot{}, err
@@ -334,8 +337,8 @@ func (h *Host) RestartPluginInstance(instanceID string) (PluginInstanceSnapshot,
 	h.mu.RLock()
 	snapshot := instanceSnapshot(h.plugins[instanceID])
 	h.mu.RUnlock()
-	h.hlog(fmt.Sprintf("instance restarted instance=%s old_generation=%d generation=%d pending_failed=%d",
-		instanceID, p.gen, snapshot.Generation, failed))
+	h.hlog(fmt.Sprintf("instance restarted instance=%s old_generation=%d generation=%d",
+		instanceID, p.gen, snapshot.Generation))
 	return snapshot, nil
 }
 
@@ -366,7 +369,7 @@ func (h *Host) CreateExecutionContext(owner, parentID string, bindings map[strin
 		if target == nil {
 			return ExecutionContext{}, fmt.Errorf("binding instance %s: %w", instanceID, ErrInstanceNotFound)
 		}
-		if h.hasCapabilityRoute(capability) && !h.ownsCapability(target.pluginName, capability) {
+		if h.hasCapabilityRouteLocked(capability) && !h.ownsCapabilityLocked(target.pluginName, capability) {
 			return ExecutionContext{}, fmt.Errorf("instance %s does not own %s: %w", instanceID, capability, ErrContextBinding)
 		}
 		context.Bindings[capability] = ContextBinding{
@@ -429,7 +432,7 @@ func (h *Host) BindExecutionContext(owner, contextID, capability, instanceID str
 	if target == nil {
 		return fmt.Errorf("instance %s: %w", instanceID, ErrInstanceNotFound)
 	}
-	if h.hasCapabilityRoute(capability) && !h.ownsCapability(target.pluginName, capability) {
+	if h.hasCapabilityRouteLocked(capability) && !h.ownsCapabilityLocked(target.pluginName, capability) {
 		return fmt.Errorf("instance %s does not own %s: %w", instanceID, capability, ErrContextBinding)
 	}
 	context.Bindings[capability] = ContextBinding{
@@ -651,24 +654,62 @@ func (h *Host) pluginNameForInstance(instanceID string) string {
 	return instanceID
 }
 
+// failInstancePending closes every pending that the dead instance takes part in.
+// Waits targeted at it are answered with code/message. Waits it originated are
+// also resolved, but only as a local signal: a WaitHost waiter is parked on
+// resCh in Host's own goroutine and would otherwise block forever, while a
+// WaitPlugin caller is a dead process that can no longer read a written back res.
+// Either way the pending entry is removed so nothing waits on an id that will
+// never be answered again.
 func (h *Host) failInstancePending(instanceID, code, message string) int {
 	h.mu.Lock()
-	var failed []*wait
+	var targeted, orphaned []*wait
 	for id, wt := range h.pending {
 		if wt.target != instanceID && wt.caller != instanceID {
 			continue
 		}
 		delete(h.pending, id)
 		if wt.target == instanceID {
-			failed = append(failed, wt)
+			targeted = append(targeted, wt)
+			continue
+		}
+		if wt.kind == WaitHost {
+			orphaned = append(orphaned, wt)
 		}
 	}
 	h.mu.Unlock()
 
-	for _, wt := range failed {
+	for _, wt := range targeted {
 		h.failWait(wt, code, message)
 	}
-	return len(failed)
+	for _, wt := range orphaned {
+		stopWaitTimer(wt)
+		h.signalWaitResult(wt, &Frame{
+			Version:    FrameVersion,
+			ID:         wt.frameID,
+			Type:       FrameResponse,
+			Capability: wt.capability,
+			Method:     wt.method,
+			ContextID:  wt.contextID,
+			From:       FromHost,
+			ErrorCode:  code,
+			ErrorMsg:   message,
+		})
+	}
+	return len(targeted)
+}
+
+// signalWaitResult delivers one res to a WaitHost waiter. resCh is buffered 1 and
+// every closer writes exactly once, so a full channel means the res already
+// arrived and this one is redundant.
+func (h *Host) signalWaitResult(wt *wait, res *Frame) {
+	if wt == nil || wt.resCh == nil {
+		return
+	}
+	select {
+	case wt.resCh <- res:
+	default:
+	}
 }
 
 func (h *Host) failContextPending(contextID, code, message string) int {
@@ -694,9 +735,8 @@ func (h *Host) failWait(wt *wait, code, message string) {
 		return
 	}
 	stopWaitTimer(wt)
-	if wt.kind == WaitHost && wt.resCh != nil {
-		select {
-		case wt.resCh <- &Frame{
+	if wt.kind == WaitHost {
+		h.signalWaitResult(wt, &Frame{
 			Version:    FrameVersion,
 			ID:         wt.frameID,
 			Type:       FrameResponse,
@@ -706,9 +746,7 @@ func (h *Host) failWait(wt *wait, code, message string) {
 			From:       FromHost,
 			ErrorCode:  code,
 			ErrorMsg:   message,
-		}:
-		default:
-		}
+		})
 		return
 	}
 	h.replyError(wt.caller, wt.frameID, wt.capability, wt.method, code, message)

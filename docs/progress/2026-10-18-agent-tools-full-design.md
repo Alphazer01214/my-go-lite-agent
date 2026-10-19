@@ -6,6 +6,8 @@
 
 第一轮实现已完成，见 [Agent Framework 实现记录](2026-10-18-agent-framework-implementation.md)。本文继续作为目标契约和后续切片参考。
 
+Workspace 锚定已按 [Workspace、Session 与 Sandbox 锚定](2026-10-18-workspace-session-sandbox-anchoring.md) 修订：Tool Call 携带 `session_id`，Sandbox 从 Session 解析规范 Workspace。
+
 ## 1. 设计边界
 
 ### 1.1 目标
@@ -57,7 +59,7 @@
 | D5 | 首批只做同步调用 | 不引入后台任务和任务句柄 | 已采用 |
 | D6 | Tool Target 必须属于注册方 | 防止 `tools` 变成通用 Broker | 已采用 |
 | D7 | 禁止 Target 为 `host` 或 `tools` | 防止权限提升和递归调用 | 已采用 |
-| D8 | Workspace 使用绝对路径 | 插件进程 CWD 是插件目录 | 已采用 |
+| D8 | Workspace 使用 Session 绑定的绝对路径 | 防止调用方切换策略作用域 | 已修订 |
 | D9 | 注册表只保存在内存 | 注册是运行时状态，不进入持久化 | 已采用 |
 | D10 | Sandbox 不信任自报风险 | 风险是提示，策略才是约束 | 已采用 |
 
@@ -161,7 +163,7 @@ Tool Provider 只能注册指向自身方法的 Tool。
 
 ### 2.8 D8 Workspace
 
-Workspace 是绝对目录路径。它不属于 Tool 名称或 Target。
+Workspace 是 Session 绑定的绝对目录路径。它不属于 Tool 名称或 Target。
 
 插件进程的 CWD 是插件目录。相对 Workspace 会产生歧义。File 和 Shell Provider 必须拒绝相对 Workspace。
 
@@ -205,10 +207,11 @@ Tool 列表总大小由 Agent 或 Model Context 的 Token Budget 控制。
 |---|---|
 | `name` | 模型选择的 Tool 名称 |
 | `arguments` | 参数对象 |
+| `session_id` | 发起 Tool Call 的 Session |
 | `workspace` | 可选 Workspace 绝对路径 |
 | `call_id` | Agent 提供的调用关联标识 |
 
-`arguments` 必须是 JSON 对象。模型返回的 arguments 字符串由 Agent 解析。
+`arguments` 必须是 JSON 对象。模型返回的 arguments 字符串由 Agent 解析。`workspace` 只用于一致性校验；Sandbox 使用 `session_id` 解析并覆写规范路径。
 
 ### 3.3 Tool Result
 
@@ -1371,7 +1374,7 @@ go test -race ./...
 5. Tool 名称跨来源唯一。
 6. 注册方只能调用自身 Target。
 7. `host` 和 `tools` 不能作为 Target。
-8. 文件路径不能逃逸 Workspace。
+8. 文件路径不能逃逸 Session Workspace。
 9. Shell 取消能终止子进程组。
 10. Web 请求有超时、大小和地址限制。
 11. 每个 Call 只有一个终态。

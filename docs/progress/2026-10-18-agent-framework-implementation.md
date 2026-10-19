@@ -48,8 +48,8 @@ powershell -File scripts/build.ps1 -Clean -Verify
 
 ## 4. 当前边界
 
-- `web_search`、`web_download` 和 `web_cancel` 尚未实现。
-- Shell 只有同步执行，没有后台任务表。
+- 当时 `web_search`、`web_download` 和 `web_cancel` 尚未实现；前两项已在后续切片完成。
+- 当时 Shell 只有同步执行；后台任务已在后续切片完成。
 - Subagent 只有同步调用。
 - `model-context.inspect` 只覆盖当前进程。
 - Sandbox 没有 UI 确认流程。

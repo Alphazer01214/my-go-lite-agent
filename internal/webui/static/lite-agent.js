@@ -8,6 +8,8 @@ function nextRequestID() {
 	return `ui-call-${Date.now()}-${fallbackID}`;
 }
 
+// readNDJSON consumes one NDJSON response. The reader is always released, also
+// when onFrame throws, so an aborted stream does not leak the connection.
 async function readNDJSON(response, onFrame) {
 	const reader = response.body?.getReader();
 	if (!reader) {
@@ -20,17 +22,22 @@ async function readNDJSON(response, onFrame) {
 
 	const decoder = new TextDecoder();
 	let buffer = "";
-	for (;;) {
-		const { value, done } = await reader.read();
-		buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-		const lines = buffer.split(/\r?\n/);
-		buffer = lines.pop() ?? "";
-		for (const line of lines) {
-			if (line.trim()) onFrame(JSON.parse(line));
+	try {
+		for (;;) {
+			const { value, done } = await reader.read();
+			buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+			const lines = buffer.split(/\r?\n/);
+			buffer = lines.pop() ?? "";
+			for (const line of lines) {
+				if (line.trim()) onFrame(JSON.parse(line));
+			}
+			if (done) break;
 		}
-		if (done) break;
+		if (buffer.trim()) onFrame(JSON.parse(buffer));
+	} finally {
+		reader.cancel().catch(() => {});
+		reader.releaseLock();
 	}
-	if (buffer.trim()) onFrame(JSON.parse(buffer));
 }
 
 function frameError(frame) {
@@ -44,12 +51,23 @@ export function createLiteAgent({
 	fetchImpl = globalThis.fetch?.bind(globalThis),
 	newRequestID = nextRequestID,
 	reconnectDelayMs = 1000,
+	maxReconnectDelayMs = 10_000,
 } = {}) {
 	const uiHandlers = new Set();
 	const diagnosticHandlers = new Set();
-	const evictedHandlers = new Set();
+	const statusHandlers = new Set();
+	const resyncHandlers = new Set();
 	let uiStarted = false;
 	let uiClosed = false;
+	let connectedOnce = false;
+	let reconnectAttempt = 0;
+	let status = "connecting";
+
+	function setStatus(next) {
+		if (status === next) return;
+		status = next;
+		for (const handler of statusHandlers) handler(next);
+	}
 
 	async function call(capability, method, payload = {}, onEvent) {
 		if (!capability || !method) {
@@ -76,6 +94,8 @@ export function createLiteAgent({
 			}),
 		});
 		if (!response.ok) {
+			// Drain and release the body so the connection can be reused.
+			await response.body?.cancel().catch(() => {});
 			throw new Error(`Browser Call failed with HTTP ${response.status}`);
 		}
 
@@ -108,11 +128,14 @@ export function createLiteAgent({
 	}
 
 	function dispatchUI(frame) {
-		if (frame.type === "evicted") {
-			// A newer page took the single v1 UI connection. Stop reconnecting so
-			// the two pages do not take turns stealing the stream.
-			uiClosed = true;
-			for (const handler of evictedHandlers) handler(frame);
+		if (frame.type === "hello") {
+			const reconnected = connectedOnce;
+			connectedOnce = true;
+			reconnectAttempt = 0;
+			setStatus("connected");
+			if (reconnected) {
+				for (const handler of resyncHandlers) handler(frame);
+			}
 			return;
 		}
 		if (frame.type === "ui") {
@@ -126,6 +149,7 @@ export function createLiteAgent({
 
 	async function runUI() {
 		while (!uiClosed) {
+			if (!connectedOnce) setStatus("connecting");
 			try {
 				const response = await fetchImpl("/bridge/ui", {
 					headers: { Accept: "application/x-ndjson" },
@@ -137,51 +161,58 @@ export function createLiteAgent({
 			} catch {
 				// The Shell reconnects after transport failure.
 			}
-			if (!uiClosed) {
-				await new Promise((resolve) => setTimeout(resolve, reconnectDelayMs));
-			}
+			if (uiClosed) return;
+			setStatus(connectedOnce ? "reconnecting" : "connecting");
+			const delay = Math.min(maxReconnectDelayMs, reconnectDelayMs * 2 ** reconnectAttempt);
+			reconnectAttempt += 1;
+			await new Promise((resolve) => setTimeout(resolve, delay));
 		}
 	}
 
 	function onUI(handler) {
 		if (typeof handler !== "function") throw new TypeError("handler must be a function");
 		uiHandlers.add(handler);
-		if (!uiStarted) {
-			uiStarted = true;
-			runUI();
-		}
+		startUI();
 	}
 
 	function onDiagnostic(handler) {
 		if (typeof handler !== "function") throw new TypeError("handler must be a function");
 		diagnosticHandlers.add(handler);
-		if (!uiStarted) {
-			uiStarted = true;
-			runUI();
-		}
+		startUI();
 	}
 
-	function onEvicted(handler) {
+	function onStatus(handler) {
 		if (typeof handler !== "function") throw new TypeError("handler must be a function");
-		evictedHandlers.add(handler);
-		if (!uiStarted) {
-			uiStarted = true;
-			runUI();
-		}
+		statusHandlers.add(handler);
+		startUI();
+		handler(status);
 	}
 
-	function mountKey(element) {
-		return element?.dataset?.mountKey ?? null;
+	function onResync(handler) {
+		if (typeof handler !== "function") throw new TypeError("handler must be a function");
+		resyncHandlers.add(handler);
+		startUI();
+	}
+
+	// startUI opens the UI stream at most once. After closeUI the runtime is
+	// shut down for good, so re-registering a handler must not leave it wired to
+	// a loop that will never run again.
+	function startUI() {
+		if (uiStarted || uiClosed) return;
+		uiStarted = true;
+		runUI();
 	}
 
 	function closeUI() {
 		uiClosed = true;
+		uiStarted = false;
 		uiHandlers.clear();
 		diagnosticHandlers.clear();
-		evictedHandlers.clear();
+		statusHandlers.clear();
+		resyncHandlers.clear();
 	}
 
-	return { call, onUI, onDiagnostic, onEvicted, mountKey, closeUI };
+	return { call, onUI, onDiagnostic, onStatus, onResync, closeUI };
 }
 
 export const LiteAgent = createLiteAgent();

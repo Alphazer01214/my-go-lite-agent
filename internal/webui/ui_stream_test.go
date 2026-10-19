@@ -43,6 +43,19 @@ func TestUIStreamDeliversStateAndDiagnostic(t *testing.T) {
 		}
 	}()
 
+	select {
+	case line := <-lines:
+		var hello uiEnvelope
+		if err := json.Unmarshal([]byte(line), &hello); err != nil {
+			t.Fatal(err)
+		}
+		if hello.Type != "hello" {
+			t.Fatalf("first envelope = %#v, want hello", hello)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hello")
+	}
+
 	if _, err := server.PublishState("demo", json.RawMessage(`{"mount_id":"chat","state":{"revision":1}}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +76,85 @@ func TestUIStreamDeliversStateAndDiagnostic(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for %s", want)
+		}
+	}
+}
+
+func TestUIStreamsAreIndependent(t *testing.T) {
+	discovery := testDiscovery(t, plugin.UIComponent{Tag: "demo-chat", MountID: "chat", Slot: "center"})
+	registry, _ := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
+	server := NewServer(registry, nil)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	open := func() (chan string, func()) {
+		ctx, cancel := context.WithCancel(context.Background())
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/bridge/ui", nil)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		lines := make(chan string, 4)
+		go func() {
+			reader := bufio.NewReader(response.Body)
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				lines <- line
+			}
+		}()
+		return lines, func() {
+			cancel()
+			_ = response.Body.Close()
+		}
+	}
+
+	firstLines, closeFirst := open()
+	defer closeFirst()
+	secondLines, closeSecond := open()
+	defer closeSecond()
+
+	readHello := func(name string, lines chan string) {
+		select {
+		case line := <-lines:
+			var hello uiEnvelope
+			if err := json.Unmarshal([]byte(line), &hello); err != nil {
+				t.Fatalf("%s hello: %v", name, err)
+			}
+			if hello.Type != "hello" {
+				t.Fatalf("%s first envelope = %#v, want hello", name, hello)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not receive hello", name)
+		}
+	}
+	readHello("first", firstLines)
+	readHello("second", secondLines)
+
+	for revision := 1; revision <= 2; revision++ {
+		if _, err := server.PublishState("demo", json.RawMessage(`{"mount_id":"chat","state":{"revision":1}}`)); err != nil {
+			t.Fatal(err)
+		}
+		for name, lines := range map[string]chan string{"first": firstLines, "second": secondLines} {
+			select {
+			case line := <-lines:
+				var envelope uiEnvelope
+				if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+					t.Fatalf("%s envelope: %v", name, err)
+				}
+				if envelope.Type != "ui" || envelope.Kind != "state" {
+					t.Fatalf("%s envelope = %#v", name, envelope)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s did not receive revision %d", name, revision)
+			}
 		}
 	}
 }

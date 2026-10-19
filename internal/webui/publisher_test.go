@@ -17,7 +17,7 @@ func testPublisher(t *testing.T) (*Server, *uiConnection) {
 	registry, _ := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
 	server := NewServer(registry, nil)
 	connection := newUIConnection()
-	server.replaceUIConnection(connection)
+	server.addUIConnection(connection)
 	return server, connection
 }
 
@@ -87,14 +87,55 @@ func TestServerValidatesUIPublishOwnership(t *testing.T) {
 	}
 }
 
-func TestServerUIConnectionReplacementStopsPrevious(t *testing.T) {
+func TestServerUIBroadcastsToAllConnections(t *testing.T) {
 	server, first := testPublisher(t)
 	second := newUIConnection()
-	server.replaceUIConnection(second)
+	server.addUIConnection(second)
+	defer server.removeUIConnection(first)
+	defer server.removeUIConnection(second)
 
-	select {
-	case <-first.done:
-	case <-time.After(time.Second):
-		t.Fatal("previous UI connection was not stopped")
+	if _, err := server.PublishState("demo", json.RawMessage(`{"mount_id":"chat","state":{"revision":2}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.PublishCommand("demo", json.RawMessage(`{"mount_id":"chat","command":"scroll","payload":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	server.PushDiagnostic(plugin.Diagnostic{Plugin: "demo", Code: "warning", Message: "hello"})
+
+	for name, connection := range map[string]*uiConnection{"first": first, "second": second} {
+		state := readUIEnvelope(t, connection)
+		if state.Type != "ui" || state.Kind != "state" {
+			t.Fatalf("%s state envelope = %#v", name, state)
+		}
+		command := readUIEnvelope(t, connection)
+		if command.Kind != "command" || command.Command != "scroll" {
+			t.Fatalf("%s command envelope = %#v", name, command)
+		}
+		diagnostic := readUIEnvelope(t, connection)
+		if diagnostic.Type != "diagnostic" || diagnostic.Diagnostic == nil || diagnostic.Diagnostic.Code != "warning" {
+			t.Fatalf("%s diagnostic envelope = %#v", name, diagnostic)
+		}
+	}
+}
+
+func TestServerUISaturatedQueueDropsOnlyThatConnection(t *testing.T) {
+	server, slow := testPublisher(t)
+	fast := newUIConnection()
+	server.addUIConnection(fast)
+	defer server.removeUIConnection(slow)
+	defer server.removeUIConnection(fast)
+
+	for i := 0; i < cap(slow.queue); i++ {
+		slow.queue <- &uiEnvelope{}
+	}
+	if _, err := server.PublishState("demo", json.RawMessage(`{"mount_id":"chat","state":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	envelope := readUIEnvelope(t, fast)
+	if envelope.Kind != "state" {
+		t.Fatalf("fast envelope = %#v", envelope)
+	}
+	if got := slow.drops.Load(); got != 1 {
+		t.Fatalf("slow drops = %d, want 1", got)
 	}
 }

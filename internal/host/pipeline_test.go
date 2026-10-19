@@ -47,7 +47,7 @@ func TestPipelineRejectsPriorityConflict(t *testing.T) {
 }
 
 func TestHostProceedForwardsToNextConsumer(t *testing.T) {
-	h := newTestHost("current", "next")
+	h := newTestHost("current", "next", "other")
 	pipelineProc(h, "current", 200, RegistrationSnapshot{Capability: "tools", Method: "call"})
 	pipelineProc(h, "next", 100, RegistrationSnapshot{Capability: "tools", Method: "call"})
 	state := newPipelineState("", "tools", "call")
@@ -61,14 +61,13 @@ func TestHostProceedForwardsToNextConsumer(t *testing.T) {
 		capability: "tools", method: "call", payload: mustJSON(map[string]any{"n": 1}),
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- h.hostProceed("current", &Frame{
-			Version: FrameVersion, ID: "current-proceed", Type: FrameRequest,
-			Capability: HostCapability, Method: HostMethodProceed,
-			Payload: mustJSON(map[string]any{"call_id": "fwd-1", "payload": map[string]any{"n": 2}}),
-		})
-	}()
+	if err := h.hostProceed("current", &Frame{
+		Version: FrameVersion, ID: "current-proceed", Type: FrameRequest,
+		Capability: HostCapability, Method: HostMethodProceed,
+		Payload: mustJSON(map[string]any{"call_id": "fwd-1", "payload": map[string]any{"n": 2}}),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var request *Frame
 	for i := 0; i < 20; i++ {
@@ -81,6 +80,16 @@ func TestHostProceedForwardsToNextConsumer(t *testing.T) {
 	}
 	if request == nil || request.Priority != 100 {
 		t.Fatalf("next request = %#v", request)
+	}
+	if err := h.handleRequest("other", &Frame{
+		Version: FrameVersion, ID: "other-plugins", Type: FrameRequest,
+		Capability: HostCapability, Method: HostMethodPlugins, Payload: mustJSON(map[string]any{}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	otherResponses := drainFrames(t, h, "other")
+	if len(otherResponses) != 1 || otherResponses[0].Type != FrameResponse || otherResponses[0].ErrorCode != "" {
+		t.Fatalf("other responses = %#v", otherResponses)
 	}
 	if err := h.handleEvent("next", &Frame{
 		Version: FrameVersion, ID: request.ID, Type: FrameEvent,
@@ -98,15 +107,14 @@ func TestHostProceedForwardsToNextConsumer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	var responses []*Frame
+	for i := 0; i < 20; i++ {
+		responses = drainFrames(t, h, "current")
+		if len(responses) >= 2 {
+			break
 		}
-	case <-time.After(time.Second):
-		t.Fatal("hostProceed did not finish")
+		time.Sleep(5 * time.Millisecond)
 	}
-	responses := drainFrames(t, h, "current")
 	if len(responses) != 2 || responses[0].Type != FrameEvent || responses[1].Type != FrameResponse || responses[1].ID != "current-proceed" || responses[1].ErrorCode != "" {
 		t.Fatalf("responses = %#v", responses)
 	}

@@ -81,6 +81,12 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 			return err
 		}
+		if h.declaresConsumedMethod(frame.Capability, frame.Method) {
+			err := fmt.Errorf("no active Consumer for %s.%s: %w",
+				frame.Capability, frame.Method, ErrRouteFailed)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeRouteFailed, err.Error())
+			return err
+		}
 		ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
 		if ownerPlugin == "" {
 			err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
@@ -110,6 +116,12 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		return err
 	}
 	return nil
+}
+
+func (h *Host) declaresConsumedMethod(capability, method string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.declaresConsumedMethodLocked(capability, method)
 }
 
 func isPipelineNoCandidate(err error) bool {
@@ -157,6 +169,10 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 		Handlers []struct {
 			Capability string `json:"capability"`
 			Method     string `json:"method"`
+			// Name and Description are display metadata: they never take part in
+			// routing, they are kept so the WebUI can show what a route is for.
+			Name        string `json:"name,omitempty"`
+			Description string `json:"description,omitempty"`
 		} `json:"handlers"`
 	}
 	if err := json.Unmarshal(frame.Payload, &in); err != nil {
@@ -165,19 +181,22 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeBadPayload, err.Error())
 		return err
 	}
-	h.mu.RLock()
+	h.mu.Lock()
 	current := h.plugins[from]
-	h.mu.RUnlock()
 	if current == nil {
+		h.mu.Unlock()
 		err := fmt.Errorf("register from unknown instance %s: %w", from, ErrPluginNotMounted)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodePluginNotMounted, err.Error())
 		return err
 	}
 	if current.state != ProviderStateLoading && current.state != ProviderStateActive {
-		err := fmt.Errorf("instance %s is %s: %w", from, current.state, ErrPluginNotReady)
+		state := current.state
+		h.mu.Unlock()
+		err := fmt.Errorf("instance %s is %s: %w", from, state, ErrPluginNotReady)
 		h.replyError(from, frame.ID, frame.Capability, frame.Method, CodePluginNotReady, err.Error())
 		return err
 	}
+	h.mu.Unlock()
 	type routeKey struct {
 		Capability string `json:"capability"`
 		Method     string `json:"method"`
@@ -223,9 +242,15 @@ func (h *Host) hostRegister(from string, frame *Frame) error {
 	current.failureMessage = ""
 	current.registrations = current.registrations[:0]
 	for _, key := range accepted {
-		current.registrations = append(current.registrations, RegistrationSnapshot{
-			Capability: key.Capability, Method: key.Method,
-		})
+		registration := RegistrationSnapshot{Capability: key.Capability, Method: key.Method}
+		for _, hd := range in.Handlers {
+			if hd.Capability == key.Capability && hd.Method == key.Method {
+				registration.Name = hd.Name
+				registration.Description = hd.Description
+				break
+			}
+		}
+		current.registrations = append(current.registrations, registration)
 	}
 	sort.Slice(current.registrations, func(i, j int) bool {
 		if current.registrations[i].Capability == current.registrations[j].Capability {
@@ -266,7 +291,9 @@ func (h *Host) routeOwner(capability string, method string) string {
 	return h.routeOwnerLocked(capability, method)
 }
 
-func (h *Host) ownsCapability(pluginName, capability string) bool {
+// ownsCapabilityLocked reports whether pluginName owns any route under capability.
+// Callers must hold h.mu: the routes table is written by hostRegister.
+func (h *Host) ownsCapabilityLocked(pluginName, capability string) bool {
 	for key, owner := range h.routes {
 		if owner != pluginName {
 			continue
@@ -279,7 +306,9 @@ func (h *Host) ownsCapability(pluginName, capability string) bool {
 	return false
 }
 
-func (h *Host) hasCapabilityRoute(capability string) bool {
+// hasCapabilityRouteLocked reports whether any route exists under capability.
+// Callers must hold h.mu.
+func (h *Host) hasCapabilityRouteLocked(capability string) bool {
 	for key := range h.routes {
 		routeCapability, _, ok := strings.Cut(key, ".")
 		if ok && routeCapability == capability {
@@ -318,11 +347,8 @@ func (h *Host) handleResponse(frame *Frame) error {
 	res.ContextID = wt.contextID
 
 	// WaitHost：投 resCh（buffered 1，double 防），不写回插件
-	if wt.kind == WaitHost && wt.resCh != nil {
-		select {
-		case wt.resCh <- &res:
-		default:
-		}
+	if wt.kind == WaitHost {
+		h.signalWaitResult(wt, &res)
 		return nil
 	}
 	return h.write(wt.caller, &res)

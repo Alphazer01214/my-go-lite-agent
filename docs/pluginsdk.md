@@ -16,7 +16,14 @@ return p.Serve()
 
 `NewPlugin` 的插件名是进程身份。身份用于日志和 id 前缀，不参与业务路由。
 
-`Serve()` 先上报已注册方法，再读取 stdin 直到连接关闭。
+`Serve()` 先在独立 goroutine 上启动接收循环，再上报此刻已注册的方法，然后阻塞到 stdin 关闭。
+顺序不能反：注册请求本身是一次 Call，必须已经有人在收 Response。
+
+上报是一次快照：`Serve()` 之后再 `Register` 的 Handler 只在本进程内生效，不会再上报给 Host。
+需要新路由时由 Host 侧重新装载插件。
+
+上报的每个 Handler 携带 `capability`、`method`，以及 `WithInfo` 设置过的 `name` 和 `description`。
+Host 只把 `(capability, method)` 写进路由表，`name`/`description` 用于展示和诊断。
 
 ## 2. 注册
 
@@ -165,13 +172,14 @@ func (u *WebUI) SendCommand(mountID string, command string, payload json.RawMess
 - 两者只发送到本插件拥有的 mount；
 - 两者不需要额外权限声明；
 - 不新增 `WebUI.Call`；
-- 动态 Component 解析推迟到 sandbox 阶段。
+- 动态 Component 解析推迟到后续版本。
 
 当前 `Plugin.WebUI()` 返回 `WebUI`，上述接口已经实现。
 
 `SetState` 内部调用 `host.ui.state`。`SendCommand` 内部调用 `host.ui.command`。Host 校验目标后将 Push 放入浏览器队列。
 
-调用成功不表示浏览器已经接收。浏览器离线、队列已满和浏览器重启都不作为插件错误。
+调用成功只表示 Push 已入队，不表示浏览器已经渲染。没有浏览器连接、或队列已满时，Host 返回 `ui_not_mounted`，
+插件的 `SetState`/`SendCommand` 会拿到这个错误，可以重试或降级。
 
 ## 8. 类型边界
 

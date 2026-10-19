@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
@@ -38,22 +40,26 @@ func run() int {
 	}
 	defer listener.Close()
 
-	h, err := host.Run(discoveries, nil) // nil → Host 日志走 stderr
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "host run: %v\n", err)
-		return 1
-	}
+	// Build the Host first and start it only after the UI publisher is wired in:
+	// plugins publish ui.state as soon as they boot, and an unmounted publisher
+	// would answer ui_not_mounted.
+	h := host.New(discoveries, nil) // nil → Host 日志走 stderr
 	defer h.Close()
 	h.SetPluginDir(pluginDir)
 	h.SetTraceFunc(traceTo(os.Stderr))
 
+	uiServer := webui.NewServer(registry, h)
+	uiServer.SetLogFunc(func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
+	uiServer.SetPluginManager(h)
+	h.SetUIPublisher(uiServer)
+
+	h.Start()
+
 	mounted := h.GetMountedPlugins()
 	sort.Strings(mounted)
 	fmt.Fprintf(os.Stderr, "mounted: %v\n", mounted)
-
-	uiServer := webui.NewServer(registry, h)
-	uiServer.SetPluginManager(h)
-	h.SetUIPublisher(uiServer)
 
 	server := &http.Server{
 		Handler:           uiServer.Handler(),
@@ -68,7 +74,9 @@ func run() int {
 	fmt.Fprintf(os.Stderr, "webui: %s\n", serverURL(listener.Addr().String()))
 
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt)
+	// SIGTERM matters on Linux/container stop: without it the process is killed
+	// outright and defer h.Close() never runs, leaving plugin processes behind.
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	select {
 	case <-signals:
 	case err := <-serverErrors:
@@ -128,7 +136,13 @@ func traceTo(w *os.File) host.TraceFunc {
 	return func(dir, name string, f *protocol.Frame) {
 		payload := f.Payload
 		if len(payload) > 200 {
-			payload = append(append([]byte(nil), payload[:200]...), []byte("…")...)
+			// Cut on a rune boundary: a raw byte cut can split a multi-byte
+			// character and emit invalid UTF-8 into the log stream.
+			truncated := payload[:200]
+			for len(truncated) > 0 && !utf8.Valid(truncated) {
+				truncated = truncated[:len(truncated)-1]
+			}
+			payload = append(append([]byte(nil), truncated...), []byte("…")...)
 		}
 		fmt.Fprintf(w, "[%s] %s id=%s type=%s cap=%s method=%s from=%s err=%s payload=%s\n",
 			dir, name, f.ID, f.Type, f.Capability, f.Method, f.From, f.ErrorCode, payload)

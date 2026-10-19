@@ -25,8 +25,11 @@ func TestStreamAccumulatorMergesDeltas(t *testing.T) {
 	if len(got.Message.ToolCalls) != 1 || got.Message.ToolCalls[0].Function.Arguments != `{"path":"a"}` {
 		t.Fatalf("tool calls = %+v", got.Message.ToolCalls)
 	}
-	sequencer := newStreamSequencer()
-	if got := sequencer.withNext(got); got.UpdateID != 1 {
+	state := &turnState{}
+	if got := state.withNextUpdate(got); got.UpdateID != 1 {
 		t.Fatalf("update id = %d", got.UpdateID)
+	}
+	if got := state.withNextUpdate(got); got.UpdateID != 2 {
+		t.Fatalf("update id must increase, got %d", got.UpdateID)
 	}
 }

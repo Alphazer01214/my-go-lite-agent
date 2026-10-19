@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // projectMessages is a pure projection: same facts → same deriveOut.
 // Rules: active summary cutoff → message facts → last system in place
@@ -18,7 +21,7 @@ func projectMessages(facts []Fact, fullTool int) deriveOut {
 		}
 		var sm summaryMeta
 		if len(f.Meta) > 0 {
-			_ = jsonUnmarshal(f.Meta, &sm)
+			_ = json.Unmarshal(f.Meta, &sm)
 		}
 		if !sm.Active {
 			continue

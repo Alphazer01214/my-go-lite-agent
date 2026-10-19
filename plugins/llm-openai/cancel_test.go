@@ -48,12 +48,41 @@ func TestCancelAbortsUpstreamStream(t *testing.T) {
 
 func TestCancelBeforeCompleteRegistration(t *testing.T) {
 	p := newPlugin()
-	if !p.cancelCall("early-call") {
-		t.Fatal("cancelCall = false")
+	// Nothing is in flight yet, so the cancel is buffered rather than reported
+	// as a success against a call that does not exist.
+	if p.cancelCall("early-call") {
+		t.Fatal("cancelCall = true for a call that has not registered")
 	}
 	cancelled := false
 	p.registerCall("early-call", func() { cancelled = true })
 	if !cancelled {
 		t.Fatal("pre-cancelled call was not cancelled on registration")
 	}
+}
+
+func TestCancelBufferIsBounded(t *testing.T) {
+	p := newPlugin()
+	for i := 0; i < cancelledWindow*2; i++ {
+		if p.cancelCall(string(rune('a'+i%26)) + string(rune('0'+i%10)) + "-" + itoa(i)) {
+			t.Fatalf("cancelCall = true for unregistered call %d", i)
+		}
+	}
+	p.mu.Lock()
+	buffered := len(p.cancelled)
+	p.mu.Unlock()
+	if buffered > cancelledWindow {
+		t.Fatalf("cancel buffer grew to %d, want <= %d", buffered, cancelledWindow)
+	}
+}
+
+func itoa(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	var digits []byte
+	for v > 0 {
+		digits = append([]byte{byte('0' + v%10)}, digits...)
+		v /= 10
+	}
+	return string(digits)
 }

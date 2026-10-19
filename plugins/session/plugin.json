@@ -8,7 +8,7 @@
   "depends_on": [],
   "autostart": true,
   "priority": 1000,
-  "description": "Append-only Session Log (source of truth) with derive projection",
+  "description": "Session log, workspace registry, projection and multi-session UI",
   "commands": [
     { "name": "list", "description": "List sessions", "usage": "/session list" },
     { "name": "derive", "description": "Print Model Context messages", "usage": "/session derive" },

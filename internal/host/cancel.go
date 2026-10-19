@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -12,7 +13,7 @@ const (
 )
 
 func cancelReason(err error) string {
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return cancelReasonDeadline
 	}
 	return cancelReasonCancelled

@@ -89,14 +89,13 @@ func NewRegistry(discoveries plugin.Discoveries) (*Registry, []plugin.Diagnostic
 
 		sourcePath := filepath.Join(discovery.Dir, "plugin.json")
 		entryPath, entryURL, entryReady := registry.resolveEntry(discovery.Dir, discovery.Manifest.UI.Entry, pluginName, sourcePath)
-		if entryReady {
-			registry.pluginRoots[pluginName] = discovery.Dir
-			registry.resourceRoots[pluginName] = filepath.Dir(entryPath)
-		}
-
 		if !entryReady {
+			// resolveEntry already reported why; the plugin keeps its manifest
+			// entry but contributes no mount.
 			continue
 		}
+		registry.pluginRoots[pluginName] = discovery.Dir
+		registry.resourceRoots[pluginName] = filepath.Dir(entryPath)
 
 		for i, component := range discovery.Manifest.UI.Components {
 			componentPath := sourcePath + "#ui.components[" + strconv.Itoa(i) + "]"
@@ -248,12 +247,9 @@ func (r *Registry) buildSpec(
 	return MountSpec{Key: key, Tag: component.Tag, Slot: component.Slot, EntryURL: entryURL}, true
 }
 
-func (r *Registry) Replace(discoveries plugin.Discoveries) []plugin.Diagnostic {
-	next, diagnostics := NewRegistry(discoveries)
-	*r = *next
-	return diagnostics
-}
-
+// Replace is intentionally absent: a Registry is immutable once built. Swapping
+// its contents in place would let a concurrent reader (which only borrows the
+// pointer) observe a half-written map. Callers publish a new *Registry instead.
 func (r *Registry) Bootstrap() Bootstrap {
 	mounts := make([]BootstrapMount, 0, len(r.order))
 	for _, key := range r.order {

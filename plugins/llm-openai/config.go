@@ -12,11 +12,18 @@ const configFile = "config.json"
 
 // plugin holds the current config. complete captures a snapshot at call start.
 type plugin struct {
-	mu        sync.Mutex
-	cfg       config
-	active    map[string]context.CancelFunc
-	cancelled map[string]bool
+	mu     sync.Mutex
+	cfg    config
+	active map[string]context.CancelFunc
+	// cancelled remembers cancels that arrived before their completion
+	// registered. Host does not order req and cancel on the wire, so this is a
+	// real case; cancelledOrder keeps the buffer bounded.
+	cancelled      map[string]bool
+	cancelledOrder []string
 }
+
+// cancelledWindow bounds the pre-registration cancel buffer.
+const cancelledWindow = 256
 
 func newPlugin() *plugin {
 	p := &plugin{active: make(map[string]context.CancelFunc), cancelled: make(map[string]bool)}
@@ -53,7 +60,14 @@ func loadConfig() config {
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		cfg.Model = v
 	}
+	cfg.BaseURL = normalizeBaseURL(cfg.BaseURL)
 	return cfg
+}
+
+// normalizeBaseURL is applied on every input path (file, env, config.set) so
+// the upstream URL is built the same way no matter where it came from.
+func normalizeBaseURL(baseURL string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
 }
 
 func (p *plugin) registerCall(callID string, cancel context.CancelFunc) {
@@ -69,19 +83,40 @@ func (p *plugin) registerCall(callID string, cancel context.CancelFunc) {
 	p.active[callID] = cancel
 }
 
+// cancelCall cancels one in-flight completion. It reports whether this call
+// reached a live completion. An unknown id is parked in the bounded cancel
+// buffer instead of being reported as cancelled: the completion may not have
+// registered yet, and claiming success for a call that never existed would be
+// a lie.
 func (p *plugin) cancelCall(callID string) bool {
 	if callID == "" {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if cancel, ok := p.active[callID]; ok {
-		cancel()
-		delete(p.active, callID)
-		return true
+	cancel, ok := p.active[callID]
+	if !ok {
+		p.rememberCancelLocked(callID)
+		return false
+	}
+	cancel()
+	delete(p.active, callID)
+	return true
+}
+
+// rememberCancelLocked buffers one early cancel, evicting the oldest entry so a
+// stream of cancels for calls that never start cannot grow the map forever.
+func (p *plugin) rememberCancelLocked(callID string) {
+	if p.cancelled[callID] {
+		return
 	}
 	p.cancelled[callID] = true
-	return true
+	p.cancelledOrder = append(p.cancelledOrder, callID)
+	for len(p.cancelledOrder) > cancelledWindow {
+		oldest := p.cancelledOrder[0]
+		p.cancelledOrder = p.cancelledOrder[1:]
+		delete(p.cancelled, oldest)
+	}
 }
 
 func (p *plugin) finishCall(callID string) {
@@ -93,6 +128,7 @@ func (p *plugin) finishCall(callID string) {
 	delete(p.active, callID)
 	delete(p.cancelled, callID)
 }
+
 func (p *plugin) snapshot() config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -119,7 +155,9 @@ func maskKey(k string) string {
 func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.applyLocked(in)
+	if err := p.applyLocked(in); err != nil {
+		return configGetOut{}, errHandler(err.Error())
+	}
 	return p.getConfigLocked(), nil
 }
 
@@ -131,9 +169,9 @@ func (p *plugin) getConfigLocked() configGetOut {
 	}
 }
 
-func (p *plugin) applyLocked(in configSetIn) {
+func (p *plugin) applyLocked(in configSetIn) error {
 	if in.BaseURL != "" {
-		p.cfg.BaseURL = strings.TrimRight(in.BaseURL, "/")
+		p.cfg.BaseURL = normalizeBaseURL(in.BaseURL)
 	}
 	if in.APIKey != "" {
 		p.cfg.APIKey = in.APIKey
@@ -141,11 +179,17 @@ func (p *plugin) applyLocked(in configSetIn) {
 	if in.Model != "" {
 		p.cfg.Model = in.Model
 	}
-	_ = saveConfig(p.cfg)
+	// The key is masked for callers but must never reach disk: config.json is a
+	// plain file in the plugin directory. It stays in memory / the environment.
+	return saveConfig(p.cfg)
 }
 
 func saveConfig(c config) error {
-	data, err := json.MarshalIndent(c, "", "  ")
+	persisted := c
+	if persisted.APIKey != "" {
+		persisted.APIKey = ""
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return err
 	}
