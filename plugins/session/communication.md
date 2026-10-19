@@ -493,7 +493,7 @@ append、create 都不会改变已有选中会话。否则后台写入其他会�
 
 | Component | 上行 | 下行 |
 |---|---|---|
-| `session-history` | `session.workspace.list/create/select`、`session.refresh/state` | History State |
+| `session-history` | `session.workspace.list/create/select`、`session.refresh/state`、`LiteAgent.pickDirectory` | History State |
 | `session-chat` | `session.state`、`session.select/close`、`loop.turn/cancel` | Chat Panes State、Stream Command |
 | `session-trace` | `session.state` | Trace State |
 
@@ -522,7 +522,7 @@ sequenceDiagram
 
 ```text
 workspace selector
-workspace add form
+workspace folder picker
 session query
 ```
 
@@ -542,6 +542,7 @@ session query
 切换 Session 时，`session-chat` 按 Session ID 保留未发送输入。多个标签可以同时存在；后台标签收到完成或错误 State 后更新状态点。搜索只过滤 History 列表，不改变当前选中会话。
 
 没有选中 Workspace 时，“新建会话”和发送按钮禁用。Session 的 Workspace 在创建后只读。
+添加 Workspace 时，`session-history` 调用 Host 的 `LiteAgent.pickDirectory`。用户取消选择不改变当前 Workspace。
 
 Composer 固定在消息区底部。用户离开底部后不强制滚动。`回到最新` 由用户主动触发。
 

@@ -69,6 +69,30 @@ export function createLiteAgent({
 		for (const handler of statusHandlers) handler(next);
 	}
 
+	async function pickDirectory() {
+		const response = await fetchImpl("/bridge/pick-directory", {
+			method: "POST",
+			headers: { Accept: "application/json" },
+		});
+		let payload = null;
+		try {
+			payload = await response.json();
+		} catch {
+			payload = null;
+		}
+		if (!response.ok) {
+			const message = payload?.error?.message
+				|| `Folder picker failed with HTTP ${response.status}`;
+			const error = new Error(message);
+			error.code = payload?.error?.code || "folder_picker_failed";
+			throw error;
+		}
+		if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+			throw new Error("Folder picker returned an invalid response");
+		}
+		return payload;
+	}
+
 	async function call(capability, method, payload = {}, onEvent) {
 		if (!capability || !method) {
 			throw new TypeError("capability and method are required");
@@ -212,7 +236,7 @@ export function createLiteAgent({
 		resyncHandlers.clear();
 	}
 
-	return { call, onUI, onDiagnostic, onStatus, onResync, closeUI };
+	return { call, pickDirectory, onUI, onDiagnostic, onStatus, onResync, closeUI };
 }
 
 export const LiteAgent = createLiteAgent();

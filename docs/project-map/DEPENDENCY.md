@@ -23,7 +23,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  UI["session-chat.send (component) ::plugins/session/ui/main.js:1178"] -->|loop.turn| Bridge["serveBrowserCall (fn) ::internal/webui/bridge.go:23"]
+  UI["session-chat.send (component) ::plugins/session/ui/main.js:1251"] -->|loop.turn| Bridge["serveBrowserCall (fn) ::internal/webui/bridge.go:23"]
   Bridge -->|CallWithEvents| Call["CallWithEventsInContext (fn) ::internal/host/call.go:25"]
   Call -->|loop.turn| Turn["turn (method) ::plugins/agent/turn.go:93"]
   Turn -->|session.create| Create["create (method) ::plugins/session/store.go:300"]
@@ -80,7 +80,7 @@ flowchart BT
 
 ```mermaid
 flowchart LR
-  CancelUI["session-chat.cancel (component) ::plugins/session/ui/main.js:1216"] -->|loop.cancel| Cancel["cancel (method) ::plugins/agent/turn.go:156"]
+  CancelUI["session-chat.cancel (component) ::plugins/session/ui/main.js:1289"] -->|loop.cancel| Cancel["cancel (method) ::plugins/agent/turn.go:156"]
   Cancel --> State["turnState.markCancelled (method) ::plugins/agent/turn.go:33"]
   State --> Run["runTurn (method) ::plugins/agent/turn.go:351"]
   Run -->|turn_end(cancelled)| Append["session.append ::plugins/session/store.go:363"]

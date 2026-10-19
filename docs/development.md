@@ -285,6 +285,7 @@ WebUI 是可重启的交互端。业务执行和状态真源都在后端。浏�
 ```text
 GET  /bridge/bootstrap
 POST /bridge/call
+POST /bridge/pick-directory
 GET  /bridge/ui
 POST /bridge/plugins/rescan
 POST /bridge/plugins/{plugin}/start
@@ -293,6 +294,7 @@ POST /bridge/plugins/{plugin}/stop
 
 `GET /bridge/bootstrap` 返回插件快照、Mount 列表和 Diagnostic 快照，是 Shell 的启动入口。
 `POST /bridge/call` 返回 NDJSON Event 和最终 Response。`GET /bridge/ui` 接收 State、Command 和 Diagnostic。
+`POST /bridge/pick-directory` 打开 Host 所在机器的文件夹选择框，返回绝对路径。
 三个管理接口返回最新 Bootstrap，供 Shell 更新插件快照和 Mount 列表。
 
 所有 `POST` 端点校验 `Origin` 同源；跨源返回 403，不带 `Origin` 的请求放行。

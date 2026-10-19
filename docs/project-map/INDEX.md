@@ -12,7 +12,9 @@
 | `Host.New` | fn | `internal/host/host.go:209` | 构造 Host，暂不启动插件 |
 | `Host.Start` | fn | `internal/host/host.go:231` | 按自动启动闭包挂载插件 |
 | `Host.PluginSnapshot` | fn | `internal/host/snapshot.go:46` | 输出生命周期快照 |
-| `Server.Handler` | fn | `internal/webui/server.go:81` | 组装 HTTP 路由 |
+| `Server.Handler` | fn | `internal/webui/server.go:102` | 组装 HTTP 路由 |
+| `Server.servePickDirectory` | fn | `internal/webui/picker.go:44` | 打开 Host 目录选择器 |
+| `pickDirectoryNative` | fn | `internal/webui/picker.go:80` | 按平台调用系统文件夹选择器 |
 | `serveBrowserCall` | fn | `internal/webui/bridge.go:23` | Browser Call 适配 |
 | `PublishState` | fn | `internal/webui/publisher.go:155` | 发布 UI State |
 | `PublishCommand` | fn | `internal/webui/publisher.go:187` | 发布 UI Command |
@@ -104,10 +106,12 @@
 | 符号 | Kind | 位置 | 角色 |
 |---|---|---|---|
 | `createMountLoader.load` | fn | `internal/webui/static/loader.mjs:91` | 装载并对齐 Mount；移除已下线 Mount |
-| `createLiteAgent.call` | fn | `internal/webui/static/lite-agent.js:61` | 发起 Browser Call |
-| `createLiteAgent.onUI` | fn | `internal/webui/static/lite-agent.js:155` | 接收 UI Push |
-| `session-chat.send` | component | `plugins/session/ui/main.js:1178` | 发起 Turn |
-| `session-chat.cancel` | component | `plugins/session/ui/main.js:1216` | 取消 Turn |
+| `createLiteAgent.call` | fn | `internal/webui/static/lite-agent.js:96` | 发起 Browser Call |
+| `createLiteAgent.pickDirectory` | fn | `internal/webui/static/lite-agent.js:72` | 打开 Host 文件夹选择器 |
+| `session-history.addWorkspace` | component | `plugins/session/ui/main.js:663` | 选择文件夹并注册 Workspace |
+| `createLiteAgent.onUI` | fn | `internal/webui/static/lite-agent.js:196` | 接收 UI Push |
+| `session-chat.send` | component | `plugins/session/ui/main.js:1251` | 发起 Turn |
+| `session-chat.cancel` | component | `plugins/session/ui/main.js:1289` | 取消 Turn |
 | `renderPluginCenter` | fn | `internal/webui/static/app.js:162` | 渲染插件关系视图 |
 | `applyBootstrap` | fn | `internal/webui/static/app.js:206` | 更新插件中心与 Mount |
 

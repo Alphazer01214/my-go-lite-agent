@@ -113,20 +113,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: 6px;
   background: var(--session-surface, #ffffff);
 }
-.workspace-create-row {
-  display: flex;
+.workspace-picker button {
   flex: 0 0 auto;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.workspace-create-row[hidden] { display: none; }
-.workspace-create-row input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--session-border, #d5dbe1);
-  border-radius: 6px;
-  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
 }
 .chat-tabs {
   display: flex;
@@ -590,12 +579,7 @@ class SessionHistory extends HTMLElement {
         <style>${styles}</style>
         <div class="workspace-picker">
           <select class="workspace-select" aria-label="当前工作区"></select>
-          <button type="button" class="workspace-add" title="添加工作区">添加</button>
-        </div>
-        <div class="workspace-create-row" hidden>
-          <input class="workspace-create-input" type="text" placeholder="输入已存在的绝对目录">
-          <button type="button" class="workspace-open">打开</button>
-          <button type="button" class="workspace-cancel">取消</button>
+          <button type="button" class="workspace-add" title="添加工作区（选择文件夹）">选择文件夹</button>
         </div>
         <div class="history-head">
           <span class="hint grow"></span>
@@ -608,10 +592,6 @@ class SessionHistory extends HTMLElement {
 		this.head = this.shadowRoot.querySelector(".hint");
 		this.workspaceSelect = this.shadowRoot.querySelector(".workspace-select");
 		this.workspaceAdd = this.shadowRoot.querySelector(".workspace-add");
-		this.workspaceCreateRow = this.shadowRoot.querySelector(".workspace-create-row");
-		this.workspaceCreateInput = this.shadowRoot.querySelector(".workspace-create-input");
-		this.workspaceOpen = this.shadowRoot.querySelector(".workspace-open");
-		this.workspaceCancel = this.shadowRoot.querySelector(".workspace-cancel");
 		this.searchInput = this.shadowRoot.querySelector(".history-search");
 		this.createButton = this.shadowRoot.querySelector(".create");
 		this.list = this.shadowRoot.querySelector(".list");
@@ -621,15 +601,7 @@ class SessionHistory extends HTMLElement {
 		this.creating = false;
 		this.workspaceBusy = false;
 		this.workspaceSelect.addEventListener("change", () => this.selectWorkspace(this.workspaceSelect.value));
-		this.workspaceAdd.addEventListener("click", () => this.showWorkspaceCreate());
-		this.workspaceCancel.addEventListener("click", () => this.hideWorkspaceCreate());
-		this.workspaceOpen.addEventListener("click", () => this.createWorkspace());
-		this.workspaceCreateInput.addEventListener("keydown", (event) => {
-			if (event.key === "Enter" && !event.isComposing) {
-				event.preventDefault();
-				this.createWorkspace();
-			}
-		});
+		this.workspaceAdd.addEventListener("click", () => this.addWorkspace());
 		this.createButton.addEventListener("click", () => this.createSession());
 		this.searchInput.addEventListener("input", () => {
 			this.query = this.searchInput.value.trim().toLowerCase();
@@ -688,28 +660,16 @@ class SessionHistory extends HTMLElement {
 		}
 	}
 
-	showWorkspaceCreate() {
-		this.workspaceCreateRow.hidden = false;
-		this.workspaceCreateInput.focus();
-	}
-
-	hideWorkspaceCreate() {
-		this.workspaceCreateRow.hidden = true;
-		this.workspaceCreateInput.value = "";
-	}
-
-	async createWorkspace() {
-		const path = this.workspaceCreateInput.value.trim();
-		if (!path) {
-			this.workspaceCreateInput.focus();
-			return;
-		}
+	async addWorkspace() {
+		if (this.creating || this.workspaceBusy) return;
 		this.workspaceBusy = true;
 		this.error.textContent = "";
 		this.render();
 		try {
-			await call("workspace.create", { path });
-			this.hideWorkspaceCreate();
+			const picked = await window.LiteAgent.pickDirectory();
+			if (picked.cancelled) return;
+			if (!picked.path) throw new Error("文件夹选择未返回路径");
+			await call("workspace.create", { path: picked.path });
 			await call("refresh", {});
 			await this.refresh();
 		} catch (error) {

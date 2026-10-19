@@ -70,6 +70,47 @@ test("LiteAgent.call streams events then resolves response payload", async () =>
 	assert.deepEqual(payload, { ok: true });
 });
 
+test("LiteAgent.pickDirectory returns the Host picker payload", async () => {
+	let request;
+	const agent = createLiteAgent({
+		fetchImpl: async (url, options) => {
+			request = { url, options };
+			return new Response(JSON.stringify({ path: "/tmp/project" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		},
+	});
+
+	assert.deepEqual(await agent.pickDirectory(), { path: "/tmp/project" });
+	assert.equal(request.url, "/bridge/pick-directory");
+	assert.equal(request.options.method, "POST");
+
+	const cancelAgent = createLiteAgent({
+		fetchImpl: async () => new Response(JSON.stringify({ cancelled: true }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		}),
+	});
+	assert.deepEqual(await cancelAgent.pickDirectory(), { cancelled: true });
+});
+
+test("LiteAgent.pickDirectory rejects Host picker errors", async () => {
+	const agent = createLiteAgent({
+		fetchImpl: async () => new Response(JSON.stringify({
+			error: { code: "folder_picker_unsupported", message: "picker unavailable" },
+		}), {
+			status: 501,
+			headers: { "Content-Type": "application/json" },
+		}),
+	});
+
+	await assert.rejects(
+		agent.pickDirectory(),
+		(error) => error.code === "folder_picker_unsupported" && error.message === "picker unavailable",
+	);
+});
+
 test("LiteAgent.call rejects error and malformed streams", async () => {
 	const errorAgent = createLiteAgent({
 		newRequestID: () => "ui-call-error",

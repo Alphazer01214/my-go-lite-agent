@@ -160,6 +160,7 @@ GET  /platform/...        Host Shell 自身的 JS/CSS
 GET  /plugins/...         插件 UI 资源目录
 GET  /bridge/bootstrap    Plugin、Mount、Slot 和 Diagnostic
 POST /bridge/call         Capability Call
+POST /bridge/pick-directory  选择本地文件夹
 GET  /bridge/ui           State、Command 和 Diagnostic
 POST /bridge/plugins/rescan
 POST /bridge/plugins/{plugin}/start
@@ -252,6 +253,30 @@ Bootstrap 返回插件状态、静态 Mount 和当前 Diagnostic 快照，不返
 
 取消业务必须调用插件显式定义的取消方法（例如 `loop.cancel`）；刷新或关闭页面不会隐式取消。
 
+### 目录选择
+
+`POST /bridge/pick-directory` 打开 Host 所在机器的文件夹选择框，请求体为空。
+该接口属于 Host 平台，不经过插件 Capability。
+浏览器原生文件夹选择只返回句柄或相对路径，因此由 Host 返回绝对路径。
+用户选中目录时返回：
+
+```json
+{"path": "/Users/example/project"}
+```
+
+用户取消时返回：
+
+```json
+{"cancelled": true}
+```
+
+Host 在 macOS、Windows 和 Linux 上调用系统选择器。
+Linux 需要 `zenity` 或 `kdialog`。
+平台不支持时返回 501，选择器执行失败时返回 500。
+错误响应为 JSON，包含 `error.code` 和 `error.message`。
+错误码为 `folder_picker_unsupported` 或 `folder_picker_failed`。
+该接口与其它 `POST` 端点一样要求同源。
+
 ### Diagnostic Push
 
 ```json
@@ -310,6 +335,8 @@ Diagnostic 与 UI Push 共用 `/bridge/ui` 连接和有界队列。它不要求 
 ### Browser SDK
 
 `LiteAgent.call` 返回 Promise。成功时 resolve 最终 Response 的 `payload`。失败时 reject 带 `code` 的 Error。`onEvent` 接收归因 Event Frame。
+
+`LiteAgent.pickDirectory` 返回 Promise。成功时 resolve `{path}` 或 `{cancelled:true}`。失败时 reject 带 `code` 的 Error。
 
 `onUI` 接收 State 和 Command Push。`onDiagnostic` 接收 Diagnostic。`onStatus` 接收 `connecting`、`connected` 和 `reconnecting`。断线后 SDK 按指数退避自动重连 `/bridge/ui`。
 

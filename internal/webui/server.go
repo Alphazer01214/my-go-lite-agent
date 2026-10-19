@@ -27,6 +27,7 @@ type Server struct {
 	backend       CallBackend
 	pluginStates  PluginStateProvider
 	lifecycle     PluginLifecycle
+	pickDirectory directoryPicker
 	mu            sync.Mutex
 	connections   map[*uiConnection]struct{}
 	logger        func(string, ...any)
@@ -43,10 +44,11 @@ func NewServer(registry *Registry, backend CallBackend) *Server {
 	}
 	bootstrap := registry.Bootstrap()
 	return &Server{
-		registry:    registry,
-		backend:     backend,
-		connections: make(map[*uiConnection]struct{}),
-		diagnostics: append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...),
+		registry:      registry,
+		backend:       backend,
+		pickDirectory: pickDirectoryNative,
+		connections:   make(map[*uiConnection]struct{}),
+		diagnostics:   append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...),
 	}
 }
 
@@ -109,11 +111,12 @@ func (s *Server) Handler() http.Handler {
 		serveEmbeddedAsset(w, r, platformRoot, r.PathValue("path"))
 	})
 	mux.HandleFunc("GET /bridge/bootstrap", s.serveBootstrap)
-	mux.HandleFunc("POST /bridge/plugins/rescan", managementHandler(s.servePluginRescan))
-	mux.HandleFunc("POST /bridge/plugins/{plugin}/start", managementHandler(s.servePluginStart))
-	mux.HandleFunc("POST /bridge/plugins/{plugin}/stop", managementHandler(s.servePluginStop))
+	mux.HandleFunc("POST /bridge/plugins/rescan", sameOriginHandler(s.servePluginRescan))
+	mux.HandleFunc("POST /bridge/plugins/{plugin}/start", sameOriginHandler(s.servePluginStart))
+	mux.HandleFunc("POST /bridge/plugins/{plugin}/stop", sameOriginHandler(s.servePluginStop))
 	mux.HandleFunc("GET /bridge/ui", s.serveUI)
-	mux.HandleFunc("POST /bridge/call", managementHandler(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /bridge/pick-directory", sameOriginHandler(s.servePickDirectory))
+	mux.HandleFunc("POST /bridge/call", sameOriginHandler(func(w http.ResponseWriter, r *http.Request) {
 		serveBrowserCall(w, r, s.backend)
 	}))
 	mux.HandleFunc("GET /plugins/{plugin}/{path...}", func(w http.ResponseWriter, r *http.Request) {
@@ -137,13 +140,13 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-// managementHandler wraps the management endpoints, which start, stop and rescan
-// plugins. They take no body and no custom content type, so a cross-origin form
-// post would otherwise reach them: require a same-origin request first.
-func managementHandler(next http.HandlerFunc) http.HandlerFunc {
+// sameOriginHandler guards POST endpoints that mutate Host state, open local
+// UI, or execute Capability Calls. Requests without an Origin header (curl,
+// tests) pass; cross-origin browser posts are rejected.
+func sameOriginHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !sameOrigin(r) {
-			http.Error(w, "cross-origin plugin management is not allowed", http.StatusForbidden)
+			http.Error(w, "cross-origin request is not allowed", http.StatusForbidden)
 			return
 		}
 		next(w, r)
