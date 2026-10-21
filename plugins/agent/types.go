@@ -37,6 +37,18 @@ type chatMessage struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
+type llmMeta struct {
+	SessionID     string `json:"session_id"`
+	TurnID        string `json:"turn_id,omitempty"`
+	StepID        string `json:"step_id,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Scheme        string `json:"scheme,omitempty"`
+	WorkspaceID   string `json:"workspace_id,omitempty"`
+	Workspace     string `json:"workspace,omitempty"`
+	Model         string `json:"model,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
 type llmCompleteIn struct {
 	CallID      string           `json:"call_id,omitempty"`
 	Messages    []chatMessage    `json:"messages"`
@@ -45,14 +57,17 @@ type llmCompleteIn struct {
 	Temperature *float64         `json:"temperature,omitempty"`
 	MaxTokens   int              `json:"max_tokens,omitempty"`
 	Stream      *bool            `json:"stream,omitempty"`
+	Meta        *llmMeta         `json:"meta,omitempty"`
 }
 
 type llmCompleteOut struct {
-	Content      string     `json:"content"`
-	Reasoning    string     `json:"reasoning,omitempty"`
-	ToolCalls    []toolCall `json:"tool_calls,omitempty"`
-	FinishReason string     `json:"finish_reason"`
-	Usage        usage      `json:"usage"`
+	Content       string     `json:"content"`
+	Reasoning     string     `json:"reasoning,omitempty"`
+	ToolCalls     []toolCall `json:"tool_calls,omitempty"`
+	FinishReason  string     `json:"finish_reason"`
+	Usage         usage      `json:"usage"`
+	Model         string     `json:"model,omitempty"`
+	ContextWindow int        `json:"context_window,omitempty"`
 }
 
 type llmCancelIn struct {
@@ -86,6 +101,8 @@ type turnIn struct {
 	SessionID       string   `json:"session_id,omitempty"`
 	WorkspaceID     string   `json:"workspace_id,omitempty"`
 	Workspace       string   `json:"workspace,omitempty"`
+	Model           string   `json:"model,omitempty"`
+	ContextWindow   int      `json:"context_window,omitempty"`
 	MaxSteps        int      `json:"max_steps,omitempty"`
 	AllowedTools    []string `json:"allowed_tools,omitempty"`
 	DeniedTools     []string `json:"denied_tools,omitempty"`
@@ -122,7 +139,8 @@ type toolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
-	Risk        string          `json:"risk,omitempty"`
+	Risk        int             `json:"risk,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
 }
 
 type config struct {
@@ -146,6 +164,8 @@ type sessionCreateIn struct {
 	WorkspaceID     string `json:"workspace_id,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
 	Name            string `json:"name,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegation_depth,omitempty"`
@@ -156,8 +176,21 @@ type sessionCreateOut struct {
 }
 
 type sessionInfoOut struct {
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Workspace   string `json:"workspace,omitempty"`
+	WorkspaceID   string `json:"workspace_id,omitempty"`
+	Workspace     string `json:"workspace,omitempty"`
+	Model         string `json:"model,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+type modelConfig struct {
+	ID            string `json:"id"`
+	Label         string `json:"label,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+type modelsListOut struct {
+	DefaultModel string        `json:"default_model"`
+	Models       []modelConfig `json:"models"`
 }
 
 type sessionAppendIn struct {
@@ -173,26 +206,13 @@ type messagesOut struct {
 	Messages []chatMessage `json:"messages"`
 }
 
-type modelContextIn struct {
-	SessionID    string   `json:"session_id"`
-	TurnID       string   `json:"turn_id,omitempty"`
-	StepID       string   `json:"step_id,omitempty"`
-	Scheme       string   `json:"scheme,omitempty"`
-	WorkspaceID  string   `json:"workspace_id,omitempty"`
-	Workspace    string   `json:"workspace,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	DeniedTools  []string `json:"denied_tools,omitempty"`
-}
-
 type modelContextOut struct {
-	ModelContextID string           `json:"model_context_id"`
-	Messages       []chatMessage    `json:"messages"`
-	Tools          []toolDefinition `json:"tools"`
-	TokenEstimate  int              `json:"token_estimate"`
-	Warnings       []string         `json:"warnings,omitempty"`
-	// Degraded is set when the context had to be rebuilt locally because
-	// model-context or tools could not answer. It is surfaced in the
-	// request_header fact so a silent quality drop is visible in the log.
+	Messages      []chatMessage    `json:"messages"`
+	Tools         []toolDefinition `json:"tools"`
+	TokenEstimate int              `json:"token_estimate"`
+	// Degraded is set when the baseline had to omit tools. model-context runs
+	// later on the llm.complete chain and replaces the content zone; the agent
+	// does not call model-context.build directly.
 	Degraded string `json:"degraded,omitempty"`
 }
 

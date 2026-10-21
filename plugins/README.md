@@ -6,11 +6,15 @@
 
 | 插件 | 状态 | 主要能力 |
 |---|---|---|
-| `agent` | 当前实现 | Turn、Step、取消；Tools 和 Model Context 缺失时降级 |
+| `agent` | 当前实现 | Turn、Step、取消；Tools 缺失时降级 |
 | `llm-openai` | 当前实现 | OpenAI-compatible Completion |
 | `session` | 当前实现 | Session Fact Log、Workspace Registry、投影和多会话 UI |
+| `model-context` | 当前实现 | `llm.complete` 链上组装；system / runtime Facts、快照与确定性压缩 |
+| `tools` | 当前实现 | Tool 注册、Generation 感知发现与分发 |
+| `file-tools` | 当前实现 | Workspace 文件读写八件套 |
+| `shell-tools` | 当前实现 | 同步命令执行与进程树取消 |
 
-`tools`、`model-context`、`sandbox`、`file-tools`、`shell-tools`、`web-tools` 和 `subagent` 曾在本仓库实现，随后从源码移除，代码保留在 git 历史。
+`sandbox`、`web-tools` 和 `subagent` 曾在本仓库实现或设计，随后从源码移除，代码保留在 git 历史。
 
 ## 2. 跨插件通信
 
@@ -40,6 +44,7 @@
 | `session-history` | left | session |
 | `session-chat` | center | session |
 | `session-trace` | right | session |
+| `session-dock` | bottom | session |
 
 `agent` 只提供 Settings。`llm-openai` 只提供 Settings。两者不直接渲染聊天正文。
 
@@ -48,26 +53,32 @@
 ```text
 agent
 ├── llm-openai
-└── session
+├── model-context（llm.complete 消费者）
+├── session
+└── tools
+    ├── file-tools（file）
+    └── shell-tools（shell）
 ```
 
-启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI。
+启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`model-context` 负责把 system / runtime Facts 写入 Session 并投影模型输入，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI。
 
-`agent` 对 `tools` 和 `model-context` 是弱依赖。能力缺失时跳过工具阶段，或改用 `session.derive` 构建模型输入。
+`tools` 是通用注册表与分发器。`file-tools` 和 `shell-tools` 在启动时通过 `tools.sync` 注册工具；tools 只按 `(capability, method)` 分发，不直连 Provider。
+
+`agent` 对 `tools` 和 `model-context` 是弱依赖。缺少 model-context 时，agent 的 `session.derive + tools.list` 基线直接进入 llm-openai；缺少 tools 时跳过工具阶段。
 
 ## 6. 未实现能力
 
-Tools、Model Context、Sandbox 和文件、Shell、Web、Subagent 插件不在当前源码。交互式终端也未实现。
+Sandbox、Web 工具和 Subagent 插件不在当前源码。交互式终端和后台 Shell 也未实现。
 
 ## 7. 构建清单
 
 `scripts/shipped-plugins.conf` 是发布目标的唯一清单，`scripts/build.sh` 和 `scripts/build.ps1` 共用。当前收录：
 
 ```text
-core: agent session llm-openai
+core: agent session llm-openai model-context tools file-tools shell-tools
 tools:（空）
 ```
 
 `core` 是 autostart 根插件。`tools` 留给后续的非 autostart Tool Provider。清单只收录 `plugins/<name>/` 下已有 `plugin.json` 的插件。没有 `plugin.json` 的目录不是可挂载插件，构建脚本会跳过并告警，不会进入 dist。
 
-后续新增插件时，再同步修改清单和本目录。构建流程见 [docs/build.md](../docs/build.md)。
+后续新增插件时，再同步修改清单和本目录。构建流程见 [docs/platform/build.md](../docs/platform/build.md)。

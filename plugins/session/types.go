@@ -20,16 +20,18 @@ type Fact struct {
 // declared here as the single description of the log vocabulary, so a reader
 // knows the full set even when this plugin never produces a given type.
 const (
-	TypeSessionStart   = "session_start"
-	TypeTurnStart      = "turn_start"
-	TypeTurnEnd        = "turn_end"
-	TypeStepStart      = "step_start"
-	TypeStepEnd        = "step_end"
-	TypeRequestHeader  = "request_header"
-	TypeLLMUsage       = "llm_usage"
-	TypeMessage        = "message"
-	TypeContextSummary = "context_summary"
-	TypeSessionMeta    = "session_meta"
+	TypeSessionStart      = "session_start"
+	TypeTurnStart         = "turn_start"
+	TypeTurnEnd           = "turn_end"
+	TypeStepStart         = "step_start"
+	TypeStepEnd           = "step_end"
+	TypeRequestHeader     = "request_header"
+	TypeLLMUsage          = "llm_usage"
+	TypeMessage           = "message"
+	TypeContextSummary    = "context_summary"
+	TypeContextCompaction = "context_compaction"
+	TypeContextSnapshot   = "context_snapshot"
+	TypeSessionMeta       = "session_meta"
 )
 
 const (
@@ -46,24 +48,47 @@ type Meta struct {
 	Name             string `json:"name,omitempty"`
 	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
+	Model            string `json:"model,omitempty"`
+	ContextWindow    int    `json:"context_window,omitempty"`
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	DelegationDepth  int    `json:"delegation_depth,omitempty"`
 	CreatedTimestamp int64  `json:"created_ts"`
 }
 
-// summaryMeta is the only meta slice session parses (derive projection).
+// summaryMeta is read from context_summary facts. ShadowedFromSeq/ToSeq define
+// the ordinary-message range replaced by the summary; CoversThroughSeq keeps
+// older summaries readable.
 type summaryMeta struct {
 	Active           bool `json:"active"`
 	CoversThroughSeq int  `json:"covers_through_seq"`
+	ShadowedFromSeq  int  `json:"shadowed_from_seq"`
+	ShadowedToSeq    int  `json:"shadowed_to_seq"`
 }
 
+// messageMeta is the projection-relevant slice of a message fact's meta.
+// model-context marks its system prompt and runtime snapshots here.
+type messageMeta struct {
+	Source string `json:"source"`
+	Kind   string `json:"kind"`
+	Hash   string `json:"hash"`
+}
+
+const (
+	kindSystemPrompt   = "system_prompt"
+	kindRuntimeContext = "runtime_context"
+)
+
 // chatMessage is derive output (OpenAI chat shape; type kept local).
+// Seq and Meta are audit fields: LLM adapters ignore them, model-context uses
+// them to identify its own facts.
 type chatMessage struct {
+	Seq        int             `json:"seq,omitempty"`
 	Role       string          `json:"role"`
 	Content    string          `json:"content"`
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Meta       json.RawMessage `json:"meta,omitempty"`
 }
 
 type streamMessage struct {
@@ -97,6 +122,8 @@ type createIn struct {
 	Name            string `json:"name,omitempty"`
 	WorkspaceID     string `json:"workspace_id,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	Origin          string `json:"origin,omitempty"`
 	DelegationDepth int    `json:"delegation_depth,omitempty"`
@@ -150,6 +177,7 @@ type deriveOut struct {
 	CoveredThroughSeq int           `json:"covered_through_seq"`
 	SummarySeq        int           `json:"summary_seq,omitempty"`
 	TruncatedTools    int           `json:"truncated_tools"`
+	TruncatedSeqs     []int         `json:"truncated_seqs,omitempty"`
 }
 
 type listIn struct {
@@ -179,6 +207,8 @@ type infoOut struct {
 	Name             string `json:"name,omitempty"`
 	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
+	Model            string `json:"model,omitempty"`
+	ContextWindow    int    `json:"context_window,omitempty"`
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	DelegationDepth  int    `json:"delegation_depth,omitempty"`

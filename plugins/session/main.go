@@ -55,6 +55,7 @@ func main() {
 	s := pluginsdk.NewPlugin("session")
 	p.sdk = s
 	p.setUIPublisher(s.WebUI())
+	p.startStreamOutbox()
 
 	s.Register("session", "create", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in createIn
@@ -113,6 +114,32 @@ func main() {
 		}
 		return p.state(ctx, in)
 	})).WithInfo("state", "read rebuildable UI state"))
+
+	s.Register("session", "messages", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in messagesIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.messages(in)
+	})).WithInfo("messages", "read one older page of Chat messages"))
+
+	s.Register("session", "facts", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in factsIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.facts(in)
+	})).WithInfo("facts", "read one older page of audit Facts"))
+
+	s.Register("session", "dock", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in stateIn
+		if len(req.Payload) > 0 {
+			if err := decode(req, &in); err != nil {
+				return nil, err
+			}
+		}
+		return p.dockState(ctx, in)
+	})).WithInfo("dock", "read the bottom dock projection for the effective session"))
 
 	s.Register("session", "select", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in selectIn

@@ -87,9 +87,15 @@ func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (co
 		stream = *in.Stream
 	}
 	cfg := p.snapshot()
-	model := cfg.Model
-	if in.Model != "" {
-		model = in.Model
+	model := strings.TrimSpace(in.Model)
+	if model == "" {
+		model = cfg.DefaultModel
+	}
+	if model == "" {
+		model = cfg.Model
+	}
+	if model == "" {
+		model = defaultModelID
 	}
 	req := upstreamRequest{
 		Model:       model,
@@ -99,13 +105,22 @@ func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (co
 		Temperature: in.Temperature,
 		MaxTokens:   in.MaxTokens,
 	}
+	var out completeOut
+	var err error
 	if stream {
 		req.StreamOptions = &struct {
 			IncludeUsage bool `json:"include_usage"`
 		}{IncludeUsage: true}
-		return p.completeStream(ctx, cfg, req, emit)
+		out, err = p.completeStream(ctx, cfg, req, emit)
+	} else {
+		out, err = p.completeJSON(ctx, cfg, req)
 	}
-	return p.completeJSON(ctx, cfg, req)
+	if err != nil {
+		return completeOut{}, err
+	}
+	out.Model = model
+	out.ContextWindow = contextWindowFor(cfg.Models, model)
+	return out, nil
 }
 
 func (p *plugin) completeJSON(ctx context.Context, cfg config, req upstreamRequest) (completeOut, error) {
@@ -212,11 +227,11 @@ func (p *plugin) completeStream(ctx context.Context, cfg config, req upstreamReq
 				_ = emitJSON(emit, chunkText{Channel: chunkReasoning, Delta: choice.Delta.ReasoningContent})
 			}
 			for _, tc := range choice.Delta.ToolCalls {
-cur, ok := toolsByIndex[tc.Index]
-			if !ok {
-				cur = &toolCall{ID: tc.ID, Type: tc.Type}
-				toolsByIndex[tc.Index] = cur
-			}
+				cur, ok := toolsByIndex[tc.Index]
+				if !ok {
+					cur = &toolCall{ID: tc.ID, Type: tc.Type}
+					toolsByIndex[tc.Index] = cur
+				}
 				if tc.ID != "" {
 					cur.ID = tc.ID
 				}

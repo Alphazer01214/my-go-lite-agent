@@ -56,10 +56,31 @@ type SettingsMethod struct {
 }
 
 type SettingsField struct {
-	Key      string            `json:"key"`
-	Label    string            `json:"label,omitempty"`
-	Type     SettingsFieldType `json:"type"`
-	Required bool              `json:"required,omitempty"`
+	Key         string              `json:"key"`
+	Label       string              `json:"label,omitempty"`
+	Type        SettingsFieldType   `json:"type"`
+	Required    bool                `json:"required,omitempty"`
+	Description string              `json:"description,omitempty"`
+	OptionsFrom string              `json:"options_from,omitempty"`
+	OptionValue string              `json:"option_value,omitempty"`
+	OptionLabel string              `json:"option_label,omitempty"`
+	Options     []SettingsOption    `json:"options,omitempty"`
+	ItemFields  []SettingsItemField `json:"item_fields,omitempty"`
+}
+
+type SettingsOption struct {
+	Value string `json:"value"`
+	Label string `json:"label,omitempty"`
+}
+
+type SettingsItemField struct {
+	Key         string            `json:"key"`
+	Label       string            `json:"label,omitempty"`
+	Type        SettingsFieldType `json:"type"`
+	Required    bool              `json:"required,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Min         *float64          `json:"min,omitempty"`
+	Step        *float64          `json:"step,omitempty"`
 }
 
 type SettingsFieldType string
@@ -69,6 +90,8 @@ const (
 	SettingsFieldSecret  SettingsFieldType = "secret"
 	SettingsFieldNumber  SettingsFieldType = "number"
 	SettingsFieldBoolean SettingsFieldType = "boolean"
+	SettingsFieldSelect  SettingsFieldType = "select"
+	SettingsFieldList    SettingsFieldType = "list"
 )
 
 type Command struct {
@@ -94,7 +117,13 @@ var (
 		"capability": {}, "method": {},
 	}
 	settingsSchemaFields = map[string]struct{}{
-		"key": {}, "label": {}, "type": {}, "required": {},
+		"key": {}, "label": {}, "type": {}, "required": {}, "description": {},
+		"options_from": {}, "option_value": {}, "option_label": {},
+		"options": {}, "item_fields": {},
+	}
+	settingsItemFields = map[string]struct{}{
+		"key": {}, "label": {}, "type": {}, "required": {}, "description": {},
+		"min": {}, "step": {},
 	}
 )
 
@@ -191,6 +220,33 @@ func nestedManifestDiagnostics(pluginName, path string, fields map[string]json.R
 				})
 			}
 		}
+		rawItems, ok := entry["item_fields"]
+		if !ok {
+			continue
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(rawItems, &items); err != nil {
+			continue
+		}
+		for j, rawItem := range items {
+			itemPath := entryPath + ".item_fields[" + strconv.Itoa(j) + "]"
+			item, err := objectFields(rawItem)
+			if err != nil || item == nil {
+				continue
+			}
+			diagnostics = append(diagnostics, unknownFieldDiagnostics(
+				pluginName, itemPath, item, settingsItemFields, diagnosticSettingsItemUnknown,
+			)...)
+			if rawType, ok := item["type"]; ok {
+				var fieldType SettingsFieldType
+				if err := json.Unmarshal(rawType, &fieldType); err == nil && !validSettingsFieldType(fieldType) {
+					diagnostics = append(diagnostics, Diagnostic{
+						Plugin: pluginName, Path: itemPath, Code: diagnosticSettingsType,
+						Message: "unknown settings type: " + string(fieldType),
+					})
+				}
+			}
+		}
 	}
 	return diagnostics
 }
@@ -230,7 +286,8 @@ func unknownFieldDiagnostics(
 
 func validSettingsFieldType(fieldType SettingsFieldType) bool {
 	switch fieldType {
-	case SettingsFieldString, SettingsFieldSecret, SettingsFieldNumber, SettingsFieldBoolean:
+	case SettingsFieldString, SettingsFieldSecret, SettingsFieldNumber, SettingsFieldBoolean,
+		SettingsFieldSelect, SettingsFieldList:
 		return true
 	default:
 		return false

@@ -72,6 +72,22 @@ func main() {
 		return json.Marshal(out)
 	}).WithInfo("config.set", "update model config (applies immediately; running calls keep their snapshot)"))
 
+	s.Register("llm", "models.list", pluginsdk.NewHandler(func(context.Context, *pluginsdk.Request) (json.RawMessage, error) {
+		return json.Marshal(p.modelsList())
+	}).WithInfo("models.list", "list configured models and the default"))
+
+	s.Register("llm", "models.set", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+		var in modelsSetIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		out, err := p.modelsSet(in)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}).WithInfo("models.set", "replace the model catalog and default"))
+
 	s.Register("llm", "settings.get", pluginsdk.NewHandler(func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 		return json.Marshal(p.settingsGet())
 	}).WithInfo("settings.get", "read Settings Renderer values"))

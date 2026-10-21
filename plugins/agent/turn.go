@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type turnState struct {
@@ -94,6 +97,15 @@ type emitFunc func(payload json.RawMessage) error
 // context being canceled. It is short because these writes are local calls.
 const turnFinalizeTimeout = 2 * time.Second
 
+// cancelledTurnNote is recorded as a user message after a cancelled turn. It
+// stays in the model-visible log so the next turn does not resume the abandoned
+// task by accident. The chat UI filters this meta.kind.
+const cancelledTurnNote = "The user cancelled the previous turn before it completed. Do not continue that task unless the user explicitly asks again."
+
+// cancelledToolResult closes a tool_call id whose execution never started. Every
+// assistant tool_calls entry needs a matching tool result in the next request.
+const cancelledToolResult = "tool call not executed: the turn was cancelled before this tool ran"
+
 // finalizeContext detaches terminal bookkeeping from the caller's cancellation.
 // A canceled inbound call must still be able to persist turn_end.
 func finalizeContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -122,18 +134,23 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 			return turnOut{}, err
 		}
 	}
-	workspaceID, workspace, workspaceErr := p.sessionWorkspace(ctx, sessionID)
-	if workspaceErr != nil {
-		return turnOut{}, workspaceErr
+	info, infoErr := p.sessionInfo(ctx, sessionID)
+	if infoErr != nil {
+		return turnOut{}, infoErr
 	}
-	if in.Workspace != "" && !sameWorkspacePath(in.Workspace, workspace) {
+	if in.Workspace != "" && !sameWorkspacePath(in.Workspace, info.Workspace) {
 		return turnOut{}, errBadArguments("workspace does not match the session workspace")
 	}
-	if workspace == "" {
+	if info.Workspace == "" {
 		return turnOut{}, errBadArguments("session workspace is required")
 	}
-	in.WorkspaceID = workspaceID
-	in.Workspace = workspace
+	in.WorkspaceID = info.WorkspaceID
+	in.Workspace = info.Workspace
+
+	// The session records the model chosen at creation. A catalog edit may have
+	// removed that id since then; resolve it before the first request so a stale
+	// name does not reach the upstream.
+	model, contextWindow, fallbackFrom := p.resolveModel(ctx, info.Model, info.ContextWindow)
 
 	slot := p.slotFor(sessionID)
 	slot.turnMu.Lock()
@@ -154,13 +171,63 @@ func (p *plugin) turn(ctx context.Context, in turnIn) (turnOut, error) {
 		SessionID:       sessionID,
 		WorkspaceID:     in.WorkspaceID,
 		Workspace:       in.Workspace,
+		Model:           model,
+		ContextWindow:   contextWindow,
 		MaxSteps:        maxSteps,
 		AllowedTools:    in.AllowedTools,
 		DeniedTools:     in.DeniedTools,
 		ParentSessionID: in.ParentSessionID,
 		Origin:          in.Origin,
 		DelegationDepth: in.DelegationDepth,
-	}, scheme, maxSteps)
+	}, scheme, maxSteps, fallbackFrom)
+}
+
+// resolveModel maps the session's recorded model onto the current catalog.
+// A missing model falls back to the catalog default (the same model the LLM
+// plugin would pick for a new session); an empty one resolves to the current
+// default so request headers report what actually ran. If the catalog is
+// unavailable the recorded values pass through unchanged.
+func (p *plugin) resolveModel(ctx context.Context, requested string, storedWindow int) (string, int, string) {
+	requested = strings.TrimSpace(requested)
+	raw, err := p.sdk.Call(ctx, "llm", "models.list", json.RawMessage("{}"))
+	if err != nil {
+		return requested, storedWindow, ""
+	}
+	var catalog modelsListOut
+	if err := json.Unmarshal(raw, &catalog); err != nil || len(catalog.Models) == 0 {
+		return requested, storedWindow, ""
+	}
+	if requested != "" {
+		for _, model := range catalog.Models {
+			if model.ID != requested {
+				continue
+			}
+			if model.ContextWindow > 0 {
+				return model.ID, model.ContextWindow, ""
+			}
+			return model.ID, storedWindow, ""
+		}
+	}
+	def := strings.TrimSpace(catalog.DefaultModel)
+	var fallback modelConfig
+	found := false
+	for _, model := range catalog.Models {
+		if model.ID == def {
+			fallback = model
+			found = true
+			break
+		}
+	}
+	if !found {
+		fallback = catalog.Models[0]
+	}
+	if fallback.ID == "" {
+		return requested, storedWindow, ""
+	}
+	if requested == "" {
+		return fallback.ID, fallback.ContextWindow, ""
+	}
+	return fallback.ID, fallback.ContextWindow, requested
 }
 
 func (p *plugin) cancel(ctx context.Context, in cancelIn) (cancelOut, error) {
@@ -194,8 +261,10 @@ func (p *plugin) cancel(ctx context.Context, in cancelIn) (cancelOut, error) {
 
 func (p *plugin) createSession(ctx context.Context, in turnIn) (string, error) {
 	raw, err := p.sdk.Call(ctx, "session", "create", mustJSON(sessionCreateIn{
-		WorkspaceID: in.WorkspaceID, Workspace: in.Workspace, ParentSessionID: in.ParentSessionID,
-		Origin: in.Origin, DelegationDepth: in.DelegationDepth,
+		WorkspaceID: in.WorkspaceID, Workspace: in.Workspace,
+		Model: in.Model, ContextWindow: in.ContextWindow,
+		ParentSessionID: in.ParentSessionID,
+		Origin:          in.Origin, DelegationDepth: in.DelegationDepth,
 	}))
 	if err != nil {
 		return "", err
@@ -207,16 +276,16 @@ func (p *plugin) createSession(ctx context.Context, in turnIn) (string, error) {
 	return out.SessionID, nil
 }
 
-func (p *plugin) sessionWorkspace(ctx context.Context, sessionID string) (string, string, error) {
+func (p *plugin) sessionInfo(ctx context.Context, sessionID string) (sessionInfoOut, error) {
 	raw, err := p.sdk.Call(ctx, "session", "info", mustJSON(map[string]string{"session_id": sessionID}))
 	if err != nil {
-		return "", "", err
+		return sessionInfoOut{}, err
 	}
 	var out sessionInfoOut
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", "", errHandler("bad session.info response")
+		return sessionInfoOut{}, errHandler("bad session.info response")
 	}
-	return out.WorkspaceID, out.Workspace, nil
+	return out, nil
 }
 
 func (p *plugin) appendFacts(ctx context.Context, sessionID string, facts []map[string]any) ([]int, error) {
@@ -241,42 +310,34 @@ func (p *plugin) assembleMessages(ctx context.Context, sessionID string) ([]chat
 	return out.Messages, nil
 }
 
-// buildModelContext asks model-context for the prompt. A missing or failing
-// capability degrades to session.derive + tools.list: the turn still runs, but
-// the caller is told so it does not report a token estimate that was never made.
-func (p *plugin) buildModelContext(ctx context.Context, in turnIn, scheme, turnID, stepID string) (modelContextOut, error) {
-	payload := mustJSON(modelContextIn{
-		SessionID: in.SessionID, TurnID: turnID, StepID: stepID, Scheme: scheme,
-		WorkspaceID: in.WorkspaceID, Workspace: in.Workspace,
-		AllowedTools: in.AllowedTools, DeniedTools: in.DeniedTools,
-	})
-	raw, err := p.sdk.Call(ctx, "model-context", "build", payload)
-	degraded := ""
-	if err == nil {
-		var out modelContextOut
-		decodeErr := json.Unmarshal(raw, &out)
-		if decodeErr == nil {
-			return out, nil
-		}
-		degraded = "bad model-context response: " + decodeErr.Error()
-	} else {
-		degraded = "model-context unavailable: " + err.Error()
-	}
+// buildModelContext builds the fallback baseline: session.derive + tools.list.
+// When model-context is active it consumes llm.complete, records system and
+// runtime facts in the session, then replaces the content zone. The agent never
+// calls model-context.build directly.
+func (p *plugin) buildModelContext(ctx context.Context, in turnIn, scheme string) (modelContextOut, error) {
 	messages, err := p.assembleMessages(ctx, in.SessionID)
 	if err != nil {
 		return modelContextOut{}, err
 	}
-	_, tools, toolsDegraded, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
+	_, tools, degraded, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
 	if toolErr != nil {
 		return modelContextOut{}, toolErr
 	}
-	if toolsDegraded != "" {
-		if degraded != "" {
-			degraded += "; "
-		}
-		degraded += toolsDegraded
+	return modelContextOut{
+		Messages: messages, Tools: tools, Degraded: degraded,
+		TokenEstimate: estimateContextTokens(messages, tools),
+	}, nil
+}
+
+func estimateContextTokens(messages []chatMessage, tools []toolDefinition) int {
+	body, err := json.Marshal(struct {
+		Messages []chatMessage    `json:"messages"`
+		Tools    []toolDefinition `json:"tools"`
+	}{Messages: messages, Tools: tools})
+	if err != nil {
+		return 0
 	}
-	return modelContextOut{Messages: messages, Tools: tools, Degraded: degraded}, nil
+	return (len(body) + 3) / 4
 }
 
 // collectTools resolves the tool list for this scheme. tools.list is optional,
@@ -321,9 +382,7 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denie
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		description := t.Description
-		if t.Risk != "" {
-			description += "\nRisk: " + t.Risk + "."
-		}
+		description += fmt.Sprintf("\nRisk: %d.", t.Risk)
 		tools = append(tools, toolDefinition{
 			Type: "function",
 			Function: toolFunction{
@@ -336,17 +395,19 @@ func (p *plugin) collectTools(ctx context.Context, scheme string, allowed, denie
 	return filtered, tools, degraded, nil
 }
 
-func (p *plugin) callTool(ctx context.Context, name, arguments, sessionID, workspace, callID string) (toolResult, error) {
+func (p *plugin) callTool(ctx context.Context, name, arguments, sessionID, workspace, workspaceID, mode, callID string) (toolResult, error) {
 	args := json.RawMessage(arguments)
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
 	raw, err := p.sdk.Call(ctx, "tools", "call", mustJSON(map[string]any{
-		"name":       name,
-		"arguments":  args,
-		"session_id": sessionID,
-		"workspace":  workspace,
-		"call_id":    callID,
+		"name":         name,
+		"arguments":    args,
+		"session_id":   sessionID,
+		"workspace":    workspace,
+		"workspace_id": workspaceID,
+		"mode":         mode,
+		"call_id":      callID,
 	}))
 	if err != nil {
 		return toolResult{}, err
@@ -358,7 +419,7 @@ func (p *plugin) callTool(ctx context.Context, name, arguments, sessionID, works
 	return out, nil
 }
 
-func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) (out turnOut, retErr error) {
+func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int, modelFallbackFrom string) (out turnOut, retErr error) {
 	out = turnOut{SessionID: in.SessionID}
 	seqs := make([]int, 0, 16)
 	turnID := fmt.Sprintf("t-%d-%d", time.Now().UnixNano(), p.turnSeq.Add(1))
@@ -385,9 +446,18 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		for key, value := range extra {
 			meta[key] = value
 		}
-		s, err := p.appendFacts(ctx, in.SessionID, []map[string]any{{
+		facts := []map[string]any{{
 			"type": "turn_end", "role": "host", "meta": meta,
-		}})
+		}}
+		if reason == "cancelled" {
+			facts = append(facts, map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": cancelledTurnNote,
+				"meta":    appendMeta("", map[string]any{"kind": "turn_cancelled"}),
+			})
+		}
+		s, err := p.appendFacts(ctx, in.SessionID, facts)
 		if err != nil {
 			return err
 		}
@@ -403,6 +473,9 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}
 		reason := "error"
 		extra := map[string]any{"error": retErr.Error()}
+		if code := pluginsdk.Code(retErr); code != "" {
+			extra["error_code"] = code
+		}
 		if st.isCancelled() || st.ctx.Err() != nil {
 			reason = "cancelled"
 			extra = nil
@@ -436,6 +509,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 	// A turn that exits because the step budget ran out must not be recorded as
 	// "completed"; one that finished its last step normally is.
 	lastStepHadToolCalls := false
+	toolCallCount := 0
 	for step := 1; step <= maxSteps; step++ {
 		if st.isCancelled() || st.ctx.Err() != nil {
 			if st.ctx.Err() != nil {
@@ -448,15 +522,24 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		stepID := fmt.Sprintf("%s-s%d", turnID, step)
 		st.setStepID(stepID)
 
-		contextOut, contextErr := p.buildModelContext(st.ctx, in, scheme, turnID, stepID)
+		contextOut, contextErr := p.buildModelContext(st.ctx, in, scheme)
 		if contextErr != nil {
 			return out, contextErr
 		}
 		msgs, tools := contextOut.Messages, contextOut.Tools
 
 		headerMeta := map[string]any{
-			"step": step, "model_context_id": contextOut.ModelContextID,
+			"step": step, "mode": scheme, "scheme": scheme,
 			"token_estimate": contextOut.TokenEstimate,
+		}
+		if in.Model != "" {
+			headerMeta["model"] = in.Model
+		}
+		if in.ContextWindow > 0 {
+			headerMeta["context_window"] = in.ContextWindow
+		}
+		if modelFallbackFrom != "" {
+			headerMeta["model_fallback_from"] = modelFallbackFrom
 		}
 		if contextOut.Degraded != "" {
 			headerMeta["degraded"] = contextOut.Degraded
@@ -475,7 +558,15 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			out.Cancelled = true
 			break
 		}
-		llmIn := llmCompleteIn{CallID: callID, Messages: msgs, Tools: tools}
+		llmIn := llmCompleteIn{
+			CallID: callID, Messages: msgs, Tools: tools, Model: in.Model,
+			Meta: &llmMeta{
+				SessionID: in.SessionID, TurnID: turnID, StepID: stepID,
+				Mode: scheme, Scheme: scheme,
+				WorkspaceID: in.WorkspaceID, Workspace: in.Workspace,
+				Model: in.Model, ContextWindow: in.ContextWindow,
+			},
+		}
 		stream := true
 		llmIn.Stream = &stream
 
@@ -600,12 +691,22 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		}))
 		addUsage(&out.Usage, llmOut.Usage)
 
+		assistantFact := map[string]any{
+			"type": "message", "role": "assistant", "content": llmOut.Content,
+			"meta": appendMeta(stepID, map[string]any{"reasoning": llmOut.Reasoning}),
+		}
+		// The provider rejects role=tool unless the preceding assistant message
+		// carries the matching tool_calls. Persist them with the assistant fact
+		// so the next derive is a valid request history.
+		if len(llmOut.ToolCalls) > 0 {
+			assistantFact["tool_calls"] = llmOut.ToolCalls
+		}
 		s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{
-			{"type": "llm_usage", "role": "host", "meta": appendMeta(stepID, map[string]any{"usage": llmOut.Usage})},
-			{
-				"type": "message", "role": "assistant", "content": llmOut.Content,
-				"meta": appendMeta(stepID, map[string]any{"reasoning": llmOut.Reasoning}),
-			},
+			{"type": "llm_usage", "role": "host", "meta": appendMeta(stepID, map[string]any{
+				"usage": llmOut.Usage, "model": llmOut.Model, "context_window": llmOut.ContextWindow,
+				"finish_reason": llmOut.FinishReason,
+			})},
+			assistantFact,
 		})
 		if err != nil {
 			return out, err
@@ -614,8 +715,50 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 		out.Reply = llmOut.Content
 
 		if len(llmOut.ToolCalls) == 0 {
+			finishReason := strings.TrimSpace(llmOut.FinishReason)
+			switch finishReason {
+			case "length":
+				s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
+					"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{
+						"reason": "error", "step": step, "error_code": "llm_output_truncated",
+					}),
+				}})
+				if err != nil {
+					return out, err
+				}
+				seqs = append(seqs, s...)
+				return out, pluginsdk.ErrCode("llm_output_truncated",
+					"model output hit the token limit before finishing")
+			case "content_filter":
+				s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
+					"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{
+						"reason": "error", "step": step, "error_code": "llm_content_filtered",
+					}),
+				}})
+				if err != nil {
+					return out, err
+				}
+				seqs = append(seqs, s...)
+				return out, pluginsdk.ErrCode("llm_content_filtered",
+					"model output was stopped by the upstream content filter")
+			case "tool_calls", "function_call":
+				s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
+					"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{
+						"reason": "error", "step": step, "error_code": "llm_tool_calls_missing",
+					}),
+				}})
+				if err != nil {
+					return out, err
+				}
+				seqs = append(seqs, s...)
+				return out, pluginsdk.ErrCode("llm_tool_calls_missing",
+					"model reported tool_calls but returned none")
+			}
 			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
-				"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{"reason": "completed", "step": step}),
+				"type": "step_end", "role": "host", "meta": appendMeta(stepID, map[string]any{
+					"reason": "completed", "step": step, "finish_reason": finishReason,
+					"scheme": scheme, "tool_calls": 0,
+				}),
 			}})
 			if err != nil {
 				return out, err
@@ -624,17 +767,49 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			break
 		}
 
+		toolCallCount += len(llmOut.ToolCalls)
 		cancelledMidTools := false
-		for _, tc := range llmOut.ToolCalls {
+		// Every tool_call in the persisted assistant fact needs a matching tool
+		// result before the next request. When cancellation stops the loop, close
+		// the remaining ids with an explicit "not executed" result instead of
+		// leaving a transcript the provider rejects.
+		appendCancelledToolResults := func(from int) error {
+			facts := make([]map[string]any, 0, len(llmOut.ToolCalls)-from)
+			for _, tc := range llmOut.ToolCalls[from:] {
+				facts = append(facts, map[string]any{
+					"type": "message", "role": "tool", "content": cancelledToolResult,
+					"tool_call_id": tc.ID,
+					"meta": appendMeta(stepID, map[string]any{
+						"tool_name": tc.Function.Name, "is_error": true, "cancelled": true,
+					}),
+				})
+			}
+			if len(facts) == 0 {
+				return nil
+			}
+			finCtx, finCancel := finalizeContext(st.ctx)
+			defer finCancel()
+			appended, err := p.appendFacts(finCtx, in.SessionID, facts)
+			if err != nil {
+				return err
+			}
+			seqs = append(seqs, appended...)
+			return nil
+		}
+		for index, tc := range llmOut.ToolCalls {
 			if st.isCancelled() || st.ctx.Err() != nil {
 				if st.ctx.Err() != nil {
 					st.markCancelled()
 				}
 				out.Cancelled = true
 				cancelledMidTools = true
+				if err := appendCancelledToolResults(index); err != nil {
+					return out, err
+				}
 				break
 			}
-			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments, in.SessionID, in.Workspace, tc.ID)
+			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments,
+				in.SessionID, in.Workspace, in.WorkspaceID, scheme, tc.ID)
 			content := result.Content
 			toolMeta := map[string]any{
 				"tool_name": tc.Function.Name, "is_error": result.IsError,
@@ -644,18 +819,41 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 				toolMeta["tool_meta"] = result.Meta
 			}
 			if callErr != nil {
-				content = "tool error: " + callErr.Error()
+				errCode := pluginsdk.Code(callErr)
+				if errCode != "" {
+					content = fmt.Sprintf("tool error [%s]: %s", errCode, callErr.Error())
+					toolMeta["error_code"] = errCode
+				} else {
+					content = "tool error: " + callErr.Error()
+				}
 				toolMeta["is_error"] = true
 				toolMeta["wire_error"] = callErr.Error()
 			}
-			s, err = p.appendFacts(st.ctx, in.SessionID, []map[string]any{{
+			appendCtx := st.ctx
+			cancelled := st.isCancelled() || st.ctx.Err() != nil
+			var releaseAppend context.CancelFunc
+			if cancelled {
+				appendCtx, releaseAppend = finalizeContext(st.ctx)
+			}
+			s, err = p.appendFacts(appendCtx, in.SessionID, []map[string]any{{
 				"type": "message", "role": "tool", "content": content, "tool_call_id": tc.ID,
 				"meta": appendMeta(stepID, toolMeta),
 			}})
+			if releaseAppend != nil {
+				releaseAppend()
+			}
 			if err != nil {
 				return out, err
 			}
 			seqs = append(seqs, s...)
+			if cancelled {
+				out.Cancelled = true
+				cancelledMidTools = true
+				if err := appendCancelledToolResults(index + 1); err != nil {
+					return out, err
+				}
+				break
+			}
 		}
 		if cancelledMidTools {
 			// The assistant fact above already lists every tool_call of this step,
@@ -699,7 +897,9 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int) 
 			reason = "max_steps"
 		}
 		finCtx, finCancel := finalizeContext(st.ctx)
-		err = writeTurnEnd(finCtx, reason, nil)
+		err = writeTurnEnd(finCtx, reason, map[string]any{
+			"tool_calls": toolCallCount, "steps": out.Steps,
+		})
 		finCancel()
 		if err != nil {
 			return out, err

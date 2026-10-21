@@ -34,6 +34,11 @@ type plugin struct {
 	mu                  sync.RWMutex
 	reg                 map[string]*store
 	streams             map[string]streamSnapshot
+	streamOutMu         sync.Mutex
+	streamOut           map[string]*streamOutDelta
+	streamOnce          sync.Once
+	streamStop          chan struct{}
+	streamStopOnce      sync.Once
 	ui                  uiPublisher
 	uiRevision          uint64
 	selected            string
@@ -63,6 +68,7 @@ func newPlugin(dir string) *plugin {
 	}
 	return &plugin{
 		dir: dir, workspaces: workspaces, reg: make(map[string]*store), streams: make(map[string]streamSnapshot),
+		streamOut: make(map[string]*streamOutDelta), streamStop: make(chan struct{}),
 		cfg: loadConfig(), selectedByWorkspace: make(map[string]string),
 		// Revisions must stay monotonic across process restarts. A browser that
 		// reconnects to a restarted plugin would otherwise discard the fresh
@@ -90,6 +96,7 @@ func loadConfig() config {
 }
 
 func (p *plugin) close() {
+	p.streamStopOnce.Do(func() { close(p.streamStop) })
 	p.mu.Lock()
 	stores := make([]*store, 0, len(p.reg))
 	for _, st := range p.reg {
@@ -326,11 +333,17 @@ func (p *plugin) create(ctx context.Context, in createIn) (createOut, error) {
 		return createOut{SessionID: st.id, CreatedTimestamp: meta.CreatedTimestamp}, nil
 	}
 
+	contextWindow := in.ContextWindow
+	if contextWindow < 0 {
+		contextWindow = 0
+	}
 	meta := Meta{
 		SessionID:        id,
 		Name:             in.Name,
 		WorkspaceID:      workspaceID,
 		Workspace:        workspacePath,
+		Model:            strings.TrimSpace(in.Model),
+		ContextWindow:    contextWindow,
 		ParentSessionID:  in.ParentSessionID,
 		Origin:           in.Origin,
 		DelegationDepth:  in.DelegationDepth,
@@ -390,7 +403,7 @@ func (p *plugin) append(ctx context.Context, in appendIn) (appendOut, error) {
 			p.clearStream(st.id, meta.TurnID, meta.StepID)
 		}
 	}
-	p.publishAfterAppend(ctx, st.id)
+	p.publishAfterAppend(ctx, st.id, appendedFacts(in.Facts, seqs, nowMS()), seqs[0]-1, seqs[len(seqs)-1])
 	return appendOut{SessionID: st.id, Seqs: seqs, NextSeq: next}, nil
 }
 
@@ -586,6 +599,8 @@ func (p *plugin) info(in infoIn) (infoOut, error) {
 		Name:             meta.Name,
 		WorkspaceID:      meta.WorkspaceID,
 		Workspace:        meta.Workspace,
+		Model:            meta.Model,
+		ContextWindow:    meta.ContextWindow,
 		ParentSessionID:  meta.ParentSessionID,
 		Origin:           meta.Origin,
 		DelegationDepth:  meta.DelegationDepth,

@@ -1,5 +1,17 @@
 {
   "base_url": "https://api.deepseek.com/v1",
   "api_key": "",
-  "model": "deepseek-chat"
+  "models": [
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536
+    },
+    {
+      "id": "deepseek-reasoner",
+      "label": "DeepSeek Reasoner",
+      "context_window": 65536
+    }
+  ],
+  "default_model": "deepseek-chat"
 }

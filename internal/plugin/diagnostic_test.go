@@ -145,6 +145,59 @@ func TestLoadManifestDecodesUIAndSettingsContributions(t *testing.T) {
 	}
 }
 
+func TestLoadManifestDecodesSettingsSelectAndList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin.json")
+	body := `{
+		"name": "demo",
+		"version": "0.1.0",
+		"protocol": 1,
+		"entry": "demo",
+		"settings": {
+			"get": {"capability": "demo", "method": "settings.get"},
+			"save": {"capability": "demo", "method": "settings.save"},
+			"schema": [
+				{
+					"key": "models",
+					"type": "list",
+					"description": "catalog",
+					"item_fields": [
+						{"key": "id", "label": "ID", "type": "string", "required": true},
+						{"key": "context_window", "type": "number", "min": 0}
+					]
+				},
+				{
+					"key": "default_model",
+					"type": "select",
+					"options_from": "models",
+					"option_value": "id",
+					"option_label": "label"
+				}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, diagnostics := LoadManifest(path)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	if got.Settings == nil || len(got.Settings.Schema) != 2 {
+		t.Fatalf("settings = %#v", got.Settings)
+	}
+	models := got.Settings.Schema[0]
+	if models.Type != SettingsFieldList || models.Description != "catalog" ||
+		len(models.ItemFields) != 2 || models.ItemFields[1].Min == nil || *models.ItemFields[1].Min != 0 {
+		t.Fatalf("models = %#v", models)
+	}
+	selectField := got.Settings.Schema[1]
+	if selectField.Type != SettingsFieldSelect || selectField.OptionsFrom != "models" ||
+		selectField.OptionValue != "id" || selectField.OptionLabel != "label" {
+		t.Fatalf("select = %#v", selectField)
+	}
+}
+
 func TestLoadManifestReportsNestedUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plugin.json")
@@ -157,7 +210,10 @@ func TestLoadManifestReportsNestedUnknownFields(t *testing.T) {
 		"settings": {
 			"get": {"capability": "demo", "method": "get", "trust": true},
 			"save": {"capability": "demo", "method": "set"},
-			"schema": [{"key": "x", "type": "enum", "min": 0}]
+			"schema": [
+				{"key": "x", "type": "enum", "min": 0},
+				{"key": "models", "type": "list", "item_fields": [{"key": "id", "type": "string", "nope": 1}]}
+			]
 		}
 	}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -168,7 +224,7 @@ func TestLoadManifestReportsNestedUnknownFields(t *testing.T) {
 	if got.UI == nil || got.Settings == nil {
 		t.Fatalf("manifest = %#v", got)
 	}
-	for _, code := range []string{"ui_unknown_field", "settings_method_unknown_field", "settings_field_unknown_field", "settings_unknown_type"} {
+	for _, code := range []string{"ui_unknown_field", "settings_method_unknown_field", "settings_field_unknown_field", "settings_item_unknown_field", "settings_unknown_type"} {
 		if !hasDiagnostic(diagnostics, code) {
 			t.Fatalf("missing %s in %#v", code, diagnostics)
 		}

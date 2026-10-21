@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
+	"github.com/tomori/my-go-lite-agent/internal/plugin"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -202,5 +204,86 @@ func TestBrowserCallReturnsOneResponseWithoutEvents(t *testing.T) {
 	frames := decodeNDJSON(t, recorder.Body.String())
 	if len(frames) != 1 || frames[0].Type != protocol.FrameResponse || frames[0].ID != "ui-call-1" {
 		t.Fatalf("frames = %#v", frames)
+	}
+}
+
+func runCallWithDiagnostics(t *testing.T, backend CallBackend) []plugin.Diagnostic {
+	t.Helper()
+	request := browserCallRequest(t, `{"version":1,"id":"ui-call-1","type":"req","capability":"loop","method":"turn","payload":{}}`)
+	recorder := httptest.NewRecorder()
+	diagnostics := make(chan plugin.Diagnostic, 4)
+	serveBrowserCall(recorder, request, backend, func(diagnostic plugin.Diagnostic) {
+		diagnostics <- diagnostic
+	})
+
+	var got []plugin.Diagnostic
+	for {
+		select {
+		case diagnostic := <-diagnostics:
+			got = append(got, diagnostic)
+		default:
+			return got
+		}
+	}
+}
+
+func TestCallDiagnosticSkipsCancellation(t *testing.T) {
+	request := browserCall{Capability: "loop", Method: "turn"}
+	if _, ok := callDiagnostic(request, protocol.CodeCallCancelled, "cancelled by user"); ok {
+		t.Fatal("call_cancelled must not become a diagnostic")
+	}
+}
+
+func TestCallDiagnosticIgnoresEmptyCode(t *testing.T) {
+	request := browserCall{Capability: "session", Method: "state"}
+	if _, ok := callDiagnostic(request, "", ""); ok {
+		t.Fatal("a successful response must not become a diagnostic")
+	}
+}
+
+func TestBrowserCallReportsPluginErrorFrame(t *testing.T) {
+	backend := &stubCallBackend{result: &protocol.Frame{
+		Version:    protocol.FrameVersion,
+		ID:         "host-1",
+		Type:       protocol.FrameResponse,
+		Capability: "loop",
+		Method:     "turn",
+		ErrorCode:  "llm_upstream",
+		ErrorMsg:   "connection refused",
+	}}
+	got := runCallWithDiagnostics(t, backend)
+	if len(got) != 1 {
+		t.Fatalf("want 1 diagnostic, got %d", len(got))
+	}
+	if got[0].Plugin != "loop" || got[0].Path != "loop.turn" || got[0].Code != "llm_upstream" {
+		t.Fatalf("unexpected diagnostic: %+v", got[0])
+	}
+	if got[0].Message != "connection refused" {
+		t.Fatalf("unexpected message: %q", got[0].Message)
+	}
+}
+
+func TestBrowserCallReportsHostError(t *testing.T) {
+	got := runCallWithDiagnostics(t, &stubCallBackend{err: errors.New("boom")})
+	if len(got) != 1 {
+		t.Fatalf("want 1 diagnostic, got %d", len(got))
+	}
+	if got[0].Code != protocol.CodeHandlerError {
+		t.Fatalf("unexpected code: %q", got[0].Code)
+	}
+}
+
+func TestBrowserCallSkipsSuccessfulAndCancelledCalls(t *testing.T) {
+	success := &stubCallBackend{result: &protocol.Frame{
+		Version: protocol.FrameVersion, ID: "host-1", Type: protocol.FrameResponse,
+		Capability: "loop", Method: "turn",
+	}}
+	if got := runCallWithDiagnostics(t, success); len(got) != 0 {
+		t.Fatalf("success produced %d diagnostics", len(got))
+	}
+
+	cancelled := &stubCallBackend{err: fmt.Errorf("call loop.turn: %w", context.Canceled)}
+	if got := runCallWithDiagnostics(t, cancelled); len(got) != 0 {
+		t.Fatalf("cancellation produced %d diagnostics", len(got))
 	}
 }

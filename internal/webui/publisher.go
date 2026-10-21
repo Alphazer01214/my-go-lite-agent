@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
@@ -30,20 +32,40 @@ type uiEnvelope struct {
 }
 
 type uiConnection struct {
-	id    string
-	queue chan *uiEnvelope
-	drops atomic.Uint64
+	id       string
+	queue    chan *uiEnvelope
+	drops    atomic.Uint64
+	overflow chan struct{}
+	// onOverflow unblocks a writer that is already stuck on a slow socket.
+	onOverflow   func()
+	overflowOnce sync.Once
 }
 
 func newUIConnection() *uiConnection {
 	return &uiConnection{
-		queue: make(chan *uiEnvelope, 64),
+		queue:    make(chan *uiEnvelope, 64),
+		overflow: make(chan struct{}),
 	}
+}
+
+func (c *uiConnection) markOverflow() {
+	c.overflowOnce.Do(func() {
+		if c.onOverflow != nil {
+			c.onOverflow()
+		}
+		close(c.overflow)
+	})
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	connection := newUIConnection()
 	connection.id = fmt.Sprintf("ui-conn-%d", s.connectionSeq.Add(1))
+	controller := http.NewResponseController(w)
+	connection.onOverflow = func() {
+		// Wake a writer blocked on a slow or dead socket. A write deadline in
+		// the past makes the in-flight Encode fail so the handler can exit.
+		_ = controller.SetWriteDeadline(time.Now())
+	}
 	s.addUIConnection(connection)
 	defer s.removeUIConnection(connection)
 
@@ -73,9 +95,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 			if err := json.NewEncoder(w).Encode(envelope); err != nil {
 				return
 			}
-			if err := http.NewResponseController(w).Flush(); err != nil {
+			if err := controller.Flush(); err != nil {
 				return
 			}
+		case <-connection.overflow:
+			s.log("ui: slow connection closed id=%s drops=%d", connection.id, connection.drops.Load())
+			return
 		case <-r.Context().Done():
 			return
 		}
@@ -122,8 +147,9 @@ func (s *Server) enqueueUI(envelope *uiEnvelope) bool {
 			delivered = true
 		default:
 			if connection.drops.Add(1) == 1 {
-				s.log("ui: queue full id=%s", connection.id)
+				s.log("ui: queue full id=%s closing=true", connection.id)
 			}
+			connection.markOverflow()
 		}
 	}
 	return delivered

@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+const (
+	// chatWindowMessages bounds every ChatState payload. Older messages are
+	// fetched through session.messages when the user asks for them.
+	chatWindowMessages = 200
+	chatWindowBytes    = 2 << 20
+	// traceWindowFacts bounds the audit window. session.facts serves older pages.
+	traceWindowFacts = 200
+	traceWindowBytes = 2 << 20
+	// uiPageLimit caps one explicit page read.
+	uiPageLimit = 500
+)
+
 type uiPublisher interface {
 	SetState(mountID string, state json.RawMessage) error
 	SendCommand(mountID string, command string, payload json.RawMessage) error
@@ -21,6 +33,11 @@ type chatMessageUI struct {
 	Timestamp  int64           `json:"timestamp,omitempty"`
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	IsError    bool            `json:"is_error,omitempty"`
+	Truncated  bool            `json:"truncated,omitempty"`
+	Source     string          `json:"source,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
 }
 
 type chatTurnUI struct {
@@ -28,18 +45,123 @@ type chatTurnUI struct {
 	Status          string `json:"status"`
 	Step            int    `json:"step,omitempty"`
 	CancelRequested bool   `json:"cancel_requested"`
+	Error           string `json:"error,omitempty"`
+}
+
+type chatTurnInfoUI struct {
+	TurnID    string `json:"turn_id"`
+	Status    string `json:"status"`
+	Step      int    `json:"step,omitempty"`
+	StartedAt int64  `json:"started_ts,omitempty"`
+	EndedAt   int64  `json:"ended_ts,omitempty"`
+	Messages  int    `json:"message_count"`
+	Tools     int    `json:"tool_count"`
+	Error     string `json:"error,omitempty"`
+}
+
+// chatUsageUI folds provider-reported llm_usage facts. It deliberately carries
+// no local estimate: the dock meter must be the API's own accounting.
+type chatUsageUI struct {
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
+	Requests         int    `json:"requests"`
+	LastPromptTokens int    `json:"last_prompt_tokens"`
+	Model            string `json:"model,omitempty"`
+	ContextWindow    int    `json:"context_window,omitempty"`
+}
+
+// chatContextUI summarizes the newest context_snapshot fact. The inspector that
+// expands it into messages lives in model-context.
+type chatContextUI struct {
+	ModelContextID string   `json:"model_context_id,omitempty"`
+	TurnID         string   `json:"turn_id,omitempty"`
+	StepID         string   `json:"step_id,omitempty"`
+	MessageCount   int      `json:"message_count"`
+	TokenEstimate  int      `json:"token_estimate"`
+	Model          string   `json:"model,omitempty"`
+	ContextWindow  int      `json:"context_window,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+}
+
+type chatRequestUI struct {
+	TurnID        string `json:"turn_id,omitempty"`
+	StepID        string `json:"step_id,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Scheme        string `json:"scheme,omitempty"`
+	Model         string `json:"model,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
 }
 
 type chatStateUI struct {
-	SessionID   string          `json:"session_id"`
-	Name        string          `json:"name,omitempty"`
-	WorkspaceID string          `json:"workspace_id,omitempty"`
-	Workspace   string          `json:"workspace,omitempty"`
-	Revision    int             `json:"revision"`
-	Messages    []chatMessageUI `json:"messages"`
-	Turn        chatTurnUI      `json:"turn"`
-	Stream      *streamSnapshot `json:"stream,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	SessionID     string           `json:"session_id"`
+	Name          string           `json:"name,omitempty"`
+	WorkspaceID   string           `json:"workspace_id,omitempty"`
+	Workspace     string           `json:"workspace,omitempty"`
+	Model         string           `json:"model,omitempty"`
+	ContextWindow int              `json:"context_window,omitempty"`
+	Revision      int              `json:"revision"`
+	ThroughSeq    int              `json:"through_seq"`
+	FirstSeq      int              `json:"first_seq,omitempty"`
+	HasMore       bool             `json:"has_more,omitempty"`
+	Messages      []chatMessageUI  `json:"messages"`
+	Turn          chatTurnUI       `json:"turn"`
+	Turns         []chatTurnInfoUI `json:"turns"`
+	Usage         chatUsageUI      `json:"usage"`
+	Context       *chatContextUI   `json:"context,omitempty"`
+	Request       *chatRequestUI   `json:"request,omitempty"`
+	Stream        *streamSnapshot  `json:"stream,omitempty"`
+	Error         string           `json:"error,omitempty"`
+}
+
+// chatAppendUI is the live delta for one append batch. AfterSeq is the last
+// Fact sequence the receiver must already hold; through_seq covers host Facts
+// that produce no message. A mismatch means the receiver must resync.
+type chatAppendUI struct {
+	SessionID  string            `json:"session_id"`
+	Revision   int               `json:"revision"`
+	AfterSeq   int               `json:"after_seq"`
+	ThroughSeq int               `json:"through_seq"`
+	Messages   []chatMessageUI   `json:"messages"`
+	Turn       *chatTurnAppendUI `json:"turn,omitempty"`
+}
+
+// chatTurnAppendUI carries only fields the append can prove. It deliberately
+// omits cancel_requested so a delta cannot clear an active cancellation.
+type chatTurnAppendUI struct {
+	TurnID string `json:"turn_id,omitempty"`
+	Status string `json:"status,omitempty"`
+	Step   int    `json:"step,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// streamDeltaUI is the live wire shape. The full draft stays in ChatState for
+// resync; normal frames carry only text appended since the last frame.
+type streamDeltaUI struct {
+	SessionID      string `json:"session_id"`
+	TurnID         string `json:"turn_id"`
+	StepID         string `json:"step_id"`
+	UpdateID       int    `json:"update_id"`
+	Reset          bool   `json:"reset"`
+	ContentDelta   string `json:"content_delta,omitempty"`
+	ReasoningDelta string `json:"reasoning_delta,omitempty"`
+	Status         string `json:"status"`
+}
+
+// dockStateUI is the bottom bar projection. It never carries messages; the
+// context inspector fetches those on demand.
+type dockStateUI struct {
+	SessionID     string         `json:"session_id,omitempty"`
+	Name          string         `json:"name,omitempty"`
+	WorkspaceID   string         `json:"workspace_id,omitempty"`
+	Workspace     string         `json:"workspace,omitempty"`
+	Revision      int            `json:"revision"`
+	Model         string         `json:"model,omitempty"`
+	ContextWindow int            `json:"context_window,omitempty"`
+	Turn          chatTurnUI     `json:"turn"`
+	Usage         chatUsageUI    `json:"usage"`
+	Context       *chatContextUI `json:"context,omitempty"`
+	Request       *chatRequestUI `json:"request,omitempty"`
 }
 
 type chatPanesStateUI struct {
@@ -50,9 +172,9 @@ type chatPanesStateUI struct {
 }
 
 type historyStateUI struct {
-	Sessions    []sessionSummary  `json:"sessions"`
-	SelectedID  string            `json:"selected_id,omitempty"`
-	WorkspaceID string            `json:"workspace_id,omitempty"`
+	Sessions    []sessionSummary `json:"sessions"`
+	SelectedID  string           `json:"selected_id,omitempty"`
+	WorkspaceID string           `json:"workspace_id,omitempty"`
 	// SelectedWorkspaceID is the registry's current workspace, which is not
 	// necessarily WorkspaceID (that one follows the requested session). The
 	// mount uses it to highlight the right workspace without a second call.
@@ -63,13 +185,69 @@ type historyStateUI struct {
 }
 
 type traceStateUI struct {
-	SessionID string `json:"session_id"`
-	Revision  int    `json:"revision"`
-	Facts     []Fact `json:"facts"`
+	SessionID  string `json:"session_id"`
+	Revision   int    `json:"revision"`
+	ThroughSeq int    `json:"through_seq"`
+	FirstSeq   int    `json:"first_seq,omitempty"`
+	HasMore    bool   `json:"has_more,omitempty"`
+	Total      int    `json:"total"`
+	Facts      []Fact `json:"facts"`
+}
+
+// traceAppendUI is the live delta for the audit view. Facts are the appended
+// ones only; the client validates AfterSeq before merging.
+type traceAppendUI struct {
+	SessionID  string `json:"session_id"`
+	Revision   int    `json:"revision"`
+	AfterSeq   int    `json:"after_seq"`
+	ThroughSeq int    `json:"through_seq"`
+	Total      int    `json:"total"`
+	Facts      []Fact `json:"facts"`
+}
+
+// dockAppendUI carries only dock fields that changed in one append batch.
+// Usage is a delta; Context and Request are the newest whole summaries.
+type dockAppendUI struct {
+	SessionID string            `json:"session_id"`
+	Revision  int               `json:"revision"`
+	Turn      *chatTurnAppendUI `json:"turn,omitempty"`
+	Usage     *chatUsageUI      `json:"usage,omitempty"`
+	Context   *chatContextUI    `json:"context,omitempty"`
+	Request   *chatRequestUI    `json:"request,omitempty"`
 }
 
 type stateIn struct {
 	SessionID string `json:"session_id,omitempty"`
+}
+
+// messagesIn pages older Chat messages, ending before BeforeSeq (exclusive).
+type messagesIn struct {
+	SessionID string `json:"session_id"`
+	BeforeSeq int    `json:"before_seq,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+type messagesOut struct {
+	SessionID string          `json:"session_id"`
+	Messages  []chatMessageUI `json:"messages"`
+	FirstSeq  int             `json:"first_seq,omitempty"`
+	HasMore   bool            `json:"has_more"`
+	Total     int             `json:"total"`
+}
+
+// factsIn pages older audit Facts, ending before BeforeSeq (exclusive).
+type factsIn struct {
+	SessionID string `json:"session_id"`
+	BeforeSeq int    `json:"before_seq,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+type factsOut struct {
+	SessionID string `json:"session_id"`
+	Facts     []Fact `json:"facts"`
+	FirstSeq  int    `json:"first_seq,omitempty"`
+	HasMore   bool   `json:"has_more"`
+	Total     int    `json:"total"`
 }
 
 type stateOut struct {
@@ -117,7 +295,12 @@ type factContextMeta struct {
 	Reasoning string `json:"reasoning"`
 	Step      int    `json:"step"`
 	Plugin    string `json:"plugin,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 	Error     string `json:"error,omitempty"`
+	ToolName  string `json:"tool_name,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 func (p *plugin) setUIPublisher(ui uiPublisher) {
@@ -149,6 +332,16 @@ func (p *plugin) updateStream(ctx context.Context, in streamUpdateIn) (streamUpd
 		p.mu.Unlock()
 		return streamUpdateOut{Accepted: false, Reason: "stale"}, nil
 	}
+	reset := true
+	contentDelta := in.Message.Content
+	reasoningDelta := in.Message.Reasoning
+	if ok && previous.TurnID == in.TurnID && previous.StepID == in.StepID &&
+		strings.HasPrefix(in.Message.Content, previous.Message.Content) &&
+		strings.HasPrefix(in.Message.Reasoning, previous.Message.Reasoning) {
+		reset = false
+		contentDelta = in.Message.Content[len(previous.Message.Content):]
+		reasoningDelta = in.Message.Reasoning[len(previous.Message.Reasoning):]
+	}
 	snapshot := streamSnapshot{
 		SessionID: in.SessionID,
 		TurnID:    in.TurnID,
@@ -158,14 +351,17 @@ func (p *plugin) updateStream(ctx context.Context, in streamUpdateIn) (streamUpd
 		Status:    in.Status,
 	}
 	p.streams[in.SessionID] = snapshot
-	ui := p.ui
 	open := p.isOpenLocked(in.SessionID)
 	p.mu.Unlock()
 
 	// Every open pane tracks its own stream, including background sessions.
-	if ui != nil && open {
-		payload, _ := json.Marshal(snapshot)
-		_ = ui.SendCommand("chat", "stream", payload)
+	// The outbox coalesces deltas; the handler never waits for a UI round trip.
+	if open {
+		p.enqueueStream(streamDeltaUI{
+			SessionID: in.SessionID, TurnID: in.TurnID, StepID: in.StepID,
+			UpdateID: in.UpdateID, Reset: reset,
+			ContentDelta: contentDelta, ReasoningDelta: reasoningDelta, Status: in.Status,
+		})
 	}
 	if in.Status == "cancel_requested" {
 		p.publishPanes(ctx)
@@ -181,6 +377,7 @@ func (p *plugin) clearStream(sessionID, turnID, stepID string) {
 		delete(p.streams, sessionID)
 	}
 	p.mu.Unlock()
+	p.dropStream(sessionID, turnID, stepID)
 }
 
 // selectedID is the Runtime-owned selection. The browser never owns it.
@@ -255,7 +452,7 @@ func (p *plugin) selectSession(ctx context.Context, in selectIn) (selectOut, err
 		return selectOut{}, err
 	}
 	meta := st.snapshotMeta()
-	if err := p.selectWorkspace(meta.WorkspaceID); err != nil {
+	if err := p.setWorkspace(meta.WorkspaceID); err != nil {
 		return selectOut{}, err
 	}
 	p.mu.Lock()
@@ -412,7 +609,7 @@ func (p *plugin) state(ctx context.Context, in stateIn) (stateOut, error) {
 			meta := st.snapshotMeta()
 			workspaceID = meta.WorkspaceID
 			if workspaceID != "" {
-				_ = p.selectWorkspace(workspaceID)
+				_ = p.setWorkspace(workspaceID)
 			}
 		}
 	}
@@ -468,8 +665,61 @@ func (p *plugin) state(ctx context.Context, in stateIn) (stateOut, error) {
 	if err != nil {
 		return stateOut{}, err
 	}
-	out.Trace = &traceStateUI{SessionID: id, Revision: p.nextUIRevision(), Facts: facts}
+	trace := windowedTraceState(id, facts, p.nextUIRevision())
+	out.Trace = &trace
 	return out, nil
+}
+
+func lastFactSeq(facts []Fact) int {
+	if len(facts) == 0 {
+		return 0
+	}
+	return facts[len(facts)-1].Seq
+}
+
+func windowedTraceState(sessionID string, facts []Fact, revision int) traceStateUI {
+	total := len(facts)
+	start := total
+	bytes := 0
+	for start > 0 && total-start < traceWindowFacts {
+		fact := facts[start-1]
+		size := len(fact.Content) + len(fact.Meta) + len(fact.ToolCalls)
+		if start < total && bytes+size > traceWindowBytes {
+			break
+		}
+		bytes += size
+		start--
+	}
+	window := facts[start:]
+	state := traceStateUI{
+		SessionID: sessionID, Revision: revision, ThroughSeq: lastFactSeq(facts),
+		HasMore: start > 0, Total: total, Facts: window,
+	}
+	if len(window) > 0 {
+		state.FirstSeq = window[0].Seq
+	}
+	return state
+}
+
+func windowChatMessages(messages []chatMessageUI) ([]chatMessageUI, int, bool) {
+	total := len(messages)
+	start := total
+	bytes := 0
+	for start > 0 && total-start < chatWindowMessages {
+		message := messages[start-1]
+		size := len(message.Content) + len(message.Reasoning) + len(message.ToolCalls)
+		if start < total && bytes+size > chatWindowBytes {
+			break
+		}
+		bytes += size
+		start--
+	}
+	window := messages[start:]
+	firstSeq := 0
+	if len(window) > 0 {
+		firstSeq = window[0].Seq
+	}
+	return window, firstSeq, start > 0
 }
 
 // publishForSelection pushes History plus the selected session's Chat and Trace.
@@ -487,15 +737,238 @@ func (p *plugin) publishSession(ctx context.Context, sessionID string) {
 	p.publishTrace(ctx, sessionID)
 }
 
-// publishAfterAppend reports count changes to History, and refreshes the
-// visible Chat and Trace only when the appended session is the selected one.
-func (p *plugin) publishAfterAppend(ctx context.Context, sessionID string) {
+// publishAfterAppend reports count changes to History, then sends only the
+// appended Facts to open panes. Full Chat/Trace State stays reserved for
+// mount, selection, refresh and resync.
+func (p *plugin) publishAfterAppend(ctx context.Context, sessionID string, facts []Fact, afterSeq, throughSeq int) {
 	p.publishHistory(ctx)
 	if p.isOpen(sessionID) {
-		p.publishPanes(ctx)
+		p.publishChatAppend(ctx, sessionID, facts, afterSeq, throughSeq)
 	}
 	if sessionID == p.selectedID() {
-		p.publishTrace(ctx, sessionID)
+		p.publishTraceAppend(ctx, sessionID, facts, afterSeq, throughSeq)
+		p.publishDockAppend(ctx, sessionID, facts)
+	}
+}
+
+func appendedFacts(ins []factIn, seqs []int, timestamp int64) []Fact {
+	facts := make([]Fact, 0, len(ins))
+	for i, in := range ins {
+		seq := 0
+		if i < len(seqs) {
+			seq = seqs[i]
+		}
+		facts = append(facts, Fact{
+			Seq: seq, Type: in.Type, Role: in.Role, Content: in.Content,
+			ToolCalls: in.ToolCalls, ToolCallID: in.ToolCallID, Meta: in.Meta,
+			Timestamp: timestamp,
+		})
+	}
+	return facts
+}
+
+func chatMessageFromFact(fact Fact) chatMessageUI {
+	var meta factContextMeta
+	if len(fact.Meta) > 0 {
+		_ = json.Unmarshal(fact.Meta, &meta)
+	}
+	return chatMessageUI{
+		Seq: fact.Seq, TurnID: meta.TurnID, StepID: meta.StepID,
+		Role: fact.Role, Content: fact.Content, Reasoning: meta.Reasoning,
+		Timestamp: fact.Timestamp, ToolCalls: fact.ToolCalls, ToolCallID: fact.ToolCallID,
+		ToolName: meta.ToolName, IsError: meta.IsError, Truncated: meta.Truncated,
+		Source: meta.Source, Kind: meta.Kind,
+	}
+}
+
+func turnAppendFromFacts(facts []Fact) *chatTurnAppendUI {
+	var turn *chatTurnAppendUI
+	for _, fact := range facts {
+		var meta factContextMeta
+		if len(fact.Meta) > 0 {
+			_ = json.Unmarshal(fact.Meta, &meta)
+		}
+		switch fact.Type {
+		case TypeTurnStart:
+			turn = &chatTurnAppendUI{TurnID: meta.TurnID, Status: "running"}
+		case TypeStepStart:
+			if turn == nil {
+				turn = &chatTurnAppendUI{TurnID: meta.TurnID}
+			}
+			turn.TurnID = meta.TurnID
+			turn.Status = "running"
+			turn.Step = meta.Step
+		case TypeTurnEnd:
+			if turn == nil {
+				turn = &chatTurnAppendUI{TurnID: meta.TurnID}
+			}
+			turn.TurnID = meta.TurnID
+			turn.Status = meta.Reason
+			turn.Error = meta.Error
+		}
+	}
+	return turn
+}
+
+func (p *plugin) publishChatAppend(ctx context.Context, sessionID string, facts []Fact, afterSeq, throughSeq int) {
+	messages := make([]chatMessageUI, 0, len(facts))
+	for _, fact := range facts {
+		if fact.Type != TypeMessage {
+			continue
+		}
+		var meta factContextMeta
+		if len(fact.Meta) > 0 {
+			_ = json.Unmarshal(fact.Meta, &meta)
+		}
+		if meta.Kind == "turn_cancelled" {
+			continue
+		}
+		messages = append(messages, chatMessageFromFact(fact))
+	}
+	state := chatAppendUI{
+		SessionID: sessionID, Revision: p.nextUIRevision(), AfterSeq: afterSeq,
+		ThroughSeq: throughSeq, Messages: messages, Turn: turnAppendFromFacts(facts),
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	p.mu.RLock()
+	ui := p.ui
+	p.mu.RUnlock()
+	if ui == nil {
+		return
+	}
+	_ = ui.SendCommand("chat", "append", payload)
+}
+
+func (p *plugin) publishTraceAppend(ctx context.Context, sessionID string, facts []Fact, afterSeq, throughSeq int) {
+	total := len(facts)
+	if st, err := p.get(sessionID); err == nil {
+		total, _ = st.counts()
+	}
+	state := traceAppendUI{
+		SessionID: sessionID, Revision: p.nextUIRevision(), AfterSeq: afterSeq,
+		ThroughSeq: throughSeq, Total: total, Facts: facts,
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	p.mu.RLock()
+	ui := p.ui
+	p.mu.RUnlock()
+	if ui == nil {
+		return
+	}
+	_ = ui.SendCommand("trace", "append", payload)
+}
+
+func (p *plugin) publishDockAppend(ctx context.Context, sessionID string, facts []Fact) {
+	state := dockAppendUI{SessionID: sessionID, Revision: p.nextUIRevision(), Turn: turnAppendFromFacts(facts)}
+	var usage chatUsageUI
+	usageSeen := false
+	var contextMeta, requestMeta json.RawMessage
+	for _, fact := range facts {
+		switch fact.Type {
+		case TypeLLMUsage:
+			var um struct {
+				Usage struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				} `json:"usage"`
+				Model         string `json:"model"`
+				ContextWindow int    `json:"context_window"`
+			}
+			if len(fact.Meta) > 0 {
+				_ = json.Unmarshal(fact.Meta, &um)
+			}
+			total := um.Usage.TotalTokens
+			if total == 0 {
+				total = um.Usage.PromptTokens + um.Usage.CompletionTokens
+			}
+			usage.PromptTokens += um.Usage.PromptTokens
+			usage.CompletionTokens += um.Usage.CompletionTokens
+			usage.TotalTokens += total
+			usage.Requests++
+			usage.LastPromptTokens = um.Usage.PromptTokens
+			if um.Model != "" {
+				usage.Model = um.Model
+			}
+			if um.ContextWindow > 0 {
+				usage.ContextWindow = um.ContextWindow
+			}
+			usageSeen = true
+		case TypeContextSnapshot:
+			contextMeta = fact.Meta
+		case TypeRequestHeader:
+			requestMeta = fact.Meta
+		}
+	}
+	if usageSeen {
+		state.Usage = &usage
+	}
+	if len(contextMeta) > 0 {
+		state.Context = contextFromSnapshotMeta(contextMeta)
+	}
+	if len(requestMeta) > 0 {
+		state.Request = requestFromHeaderMeta(requestMeta)
+	}
+	if state.Turn == nil && state.Usage == nil && state.Context == nil && state.Request == nil {
+		return
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	p.mu.RLock()
+	ui := p.ui
+	p.mu.RUnlock()
+	if ui == nil {
+		return
+	}
+	_ = ui.SendCommand("dock", "append", payload)
+}
+
+func contextFromSnapshotMeta(meta json.RawMessage) *chatContextUI {
+	var snap struct {
+		ModelContextID string   `json:"model_context_id"`
+		TurnID         string   `json:"turn_id"`
+		StepID         string   `json:"step_id"`
+		MessageCount   int      `json:"message_count"`
+		TokenEstimate  int      `json:"token_estimate"`
+		Model          string   `json:"model"`
+		ContextWindow  int      `json:"context_window"`
+		Warnings       []string `json:"warnings"`
+	}
+	_ = json.Unmarshal(meta, &snap)
+	return &chatContextUI{
+		ModelContextID: snap.ModelContextID,
+		TurnID:         snap.TurnID,
+		StepID:         snap.StepID,
+		MessageCount:   snap.MessageCount,
+		TokenEstimate:  snap.TokenEstimate,
+		Model:          snap.Model,
+		ContextWindow:  snap.ContextWindow,
+		Warnings:       snap.Warnings,
+	}
+}
+
+func requestFromHeaderMeta(meta json.RawMessage) *chatRequestUI {
+	var rm struct {
+		TurnID        string `json:"turn_id"`
+		StepID        string `json:"step_id"`
+		Mode          string `json:"mode"`
+		Scheme        string `json:"scheme"`
+		Model         string `json:"model"`
+		ContextWindow int    `json:"context_window"`
+	}
+	_ = json.Unmarshal(meta, &rm)
+	return &chatRequestUI{
+		TurnID: rm.TurnID, StepID: rm.StepID,
+		Mode: rm.Mode, Scheme: rm.Scheme,
+		Model: rm.Model, ContextWindow: rm.ContextWindow,
 	}
 }
 
@@ -563,14 +1036,14 @@ func (p *plugin) publishPanes(ctx context.Context) {
 	panes := p.uiPaneStates(ctx, workspaceID, selected)
 	// SelectedID must live inside the pushed set: the browser keys its view
 	// off it, and a dangling id makes the pane fall back to another session.
-	found := false
-	for _, pane := range panes {
-		if pane.SessionID == selected {
-			found = true
+	var selectedPane *chatStateUI
+	for i := range panes {
+		if panes[i].SessionID == selected {
+			selectedPane = &panes[i]
 			break
 		}
 	}
-	if !found {
+	if selectedPane == nil {
 		selected = ""
 	}
 	state := chatPanesStateUI{
@@ -580,6 +1053,62 @@ func (p *plugin) publishPanes(ctx context.Context) {
 		Panes:       panes,
 	}
 	p.publishState(ctx, "chat", state)
+	p.publishDock(ctx, selectedPane)
+}
+
+func dockStateFromPane(pane chatStateUI) dockStateUI {
+	return dockStateUI{
+		SessionID:     pane.SessionID,
+		Name:          pane.Name,
+		WorkspaceID:   pane.WorkspaceID,
+		Workspace:     pane.Workspace,
+		Model:         pane.Model,
+		ContextWindow: pane.ContextWindow,
+		Turn:          pane.Turn,
+		Usage:         pane.Usage,
+		Context:       pane.Context,
+		Request:       pane.Request,
+	}
+}
+
+func (p *plugin) publishDock(ctx context.Context, pane *chatStateUI) {
+	state := dockStateUI{}
+	if pane != nil {
+		state = dockStateFromPane(*pane)
+	}
+	state.Revision = p.nextUIRevision()
+	p.publishState(ctx, "dock", state)
+}
+
+// dockState is the resync read for the bottom mount. It resolves the effective
+// session exactly like session.state, but returns only the dock projection.
+func (p *plugin) dockState(ctx context.Context, in stateIn) (dockStateUI, error) {
+	workspaceID := ""
+	if current, ok := p.selectedWorkspace(); ok {
+		workspaceID = current.WorkspaceID
+	}
+	if in.SessionID != "" {
+		st, err := p.get(in.SessionID)
+		if err != nil {
+			return dockStateUI{}, err
+		}
+		meta := st.snapshotMeta()
+		workspaceID = meta.WorkspaceID
+		if workspaceID != "" {
+			_ = p.setWorkspace(workspaceID)
+		}
+	}
+	id := p.effectiveID(in.SessionID, workspaceID)
+	if id == "" {
+		return dockStateUI{Revision: p.nextUIRevision()}, nil
+	}
+	pane, err := p.chatState(ctx, id)
+	if err != nil {
+		return dockStateUI{}, err
+	}
+	out := dockStateFromPane(pane)
+	out.Revision = p.nextUIRevision()
+	return out, nil
 }
 
 func (p *plugin) publishTraceSelected(ctx context.Context) {
@@ -627,7 +1156,7 @@ func (p *plugin) publishTrace(ctx context.Context, sessionID string) {
 	if err != nil {
 		return
 	}
-	state := traceStateUI{SessionID: sessionID, Revision: p.nextUIRevision(), Facts: facts}
+	state := windowedTraceState(sessionID, facts, p.nextUIRevision())
 	p.publishState(ctx, "trace", state)
 }
 
@@ -643,6 +1172,96 @@ func (p *plugin) publishState(ctx context.Context, mountID string, state any) {
 		return
 	}
 	_ = ui.SetState(mountID, payload)
+}
+
+// messages pages older Chat messages. BeforeSeq is exclusive; zero starts at
+// the newest page. The returned slice stays in chronological order.
+func (p *plugin) messages(in messagesIn) (messagesOut, error) {
+	if in.SessionID == "" {
+		return messagesOut{}, errBadArguments("session_id is required")
+	}
+	st, err := p.get(in.SessionID)
+	if err != nil {
+		return messagesOut{}, err
+	}
+	facts, _, err := p.readFacts(st.id)
+	if err != nil {
+		return messagesOut{}, err
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = chatWindowMessages
+	}
+	if limit > uiPageLimit {
+		limit = uiPageLimit
+	}
+	all := make([]chatMessageUI, 0, len(facts))
+	for _, fact := range facts {
+		if fact.Type == TypeMessage {
+			all = append(all, chatMessageFromFact(fact))
+		}
+	}
+	end := len(all)
+	if in.BeforeSeq > 0 {
+		for end > 0 && all[end-1].Seq >= in.BeforeSeq {
+			end--
+		}
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	page := make([]chatMessageUI, end-start)
+	copy(page, all[start:end])
+	out := messagesOut{
+		SessionID: st.id, Messages: page, HasMore: start > 0, Total: len(all),
+	}
+	if len(page) > 0 {
+		out.FirstSeq = page[0].Seq
+	}
+	return out, nil
+}
+
+// facts pages older audit Facts. BeforeSeq is exclusive; zero starts at the
+// newest page. The returned slice stays in chronological order.
+func (p *plugin) facts(in factsIn) (factsOut, error) {
+	if in.SessionID == "" {
+		return factsOut{}, errBadArguments("session_id is required")
+	}
+	st, err := p.get(in.SessionID)
+	if err != nil {
+		return factsOut{}, err
+	}
+	facts, total, err := p.readFacts(st.id)
+	if err != nil {
+		return factsOut{}, err
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = traceWindowFacts
+	}
+	if limit > uiPageLimit {
+		limit = uiPageLimit
+	}
+	end := len(facts)
+	if in.BeforeSeq > 0 {
+		for end > 0 && facts[end-1].Seq >= in.BeforeSeq {
+			end--
+		}
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	page := make([]Fact, end-start)
+	copy(page, facts[start:end])
+	out := factsOut{
+		SessionID: st.id, Facts: page, HasMore: start > 0, Total: total,
+	}
+	if len(page) > 0 {
+		out.FirstSeq = page[0].Seq
+	}
+	return out, nil
 }
 
 func (p *plugin) chatState(ctx context.Context, sessionID string) (chatStateUI, error) {
@@ -661,12 +1280,30 @@ func (p *plugin) chatStateInternal(ctx context.Context, sessionID string, allowR
 	}
 	turnOwner := ""
 	state := chatStateUI{
-		SessionID:   sessionID,
-		Name:        meta.Name,
-		WorkspaceID: meta.WorkspaceID,
-		Workspace:   meta.Workspace,
-		Messages:    make([]chatMessageUI, 0, len(facts)),
-		Turn:        chatTurnUI{Status: "idle"},
+		SessionID:     sessionID,
+		Name:          meta.Name,
+		WorkspaceID:   meta.WorkspaceID,
+		Workspace:     meta.Workspace,
+		Model:         meta.Model,
+		ContextWindow: meta.ContextWindow,
+		Messages:      make([]chatMessageUI, 0, len(facts)),
+		Turn:          chatTurnUI{Status: "idle"},
+	}
+	var usage chatUsageUI
+	var latestUsageModel string
+	var latestUsageWindow int
+	var contextMeta json.RawMessage
+	var requestMeta json.RawMessage
+	turnInfos := make(map[string]*chatTurnInfoUI)
+	turnOrder := make([]string, 0)
+	ensureTurn := func(id string) *chatTurnInfoUI {
+		info, ok := turnInfos[id]
+		if !ok {
+			info = &chatTurnInfoUI{TurnID: id, Status: "running"}
+			turnInfos[id] = info
+			turnOrder = append(turnOrder, id)
+		}
+		return info
 	}
 	for _, fact := range facts {
 		var meta factContextMeta
@@ -675,26 +1312,163 @@ func (p *plugin) chatStateInternal(ctx context.Context, sessionID string, allowR
 		}
 		switch fact.Type {
 		case TypeMessage:
+			if meta.Kind == "turn_cancelled" {
+				break
+			}
 			state.Messages = append(state.Messages, chatMessageUI{
 				Seq: fact.Seq, TurnID: meta.TurnID, StepID: meta.StepID,
 				Role: fact.Role, Content: fact.Content, Reasoning: meta.Reasoning,
 				Timestamp: fact.Timestamp, ToolCalls: fact.ToolCalls, ToolCallID: fact.ToolCallID,
+				ToolName: meta.ToolName, IsError: meta.IsError, Truncated: meta.Truncated,
+				Source: meta.Source, Kind: meta.Kind,
 			})
+			if meta.TurnID != "" {
+				info := ensureTurn(meta.TurnID)
+				info.Messages++
+				if fact.Role == RoleTool {
+					info.Tools++
+				}
+			}
 		case TypeTurnStart:
 			state.Turn = chatTurnUI{TurnID: meta.TurnID, Status: "running"}
 			turnOwner = meta.Plugin
+			if meta.TurnID != "" {
+				info := ensureTurn(meta.TurnID)
+				info.Status = "running"
+				if info.StartedAt == 0 {
+					info.StartedAt = fact.Timestamp
+				}
+			}
 		case TypeStepStart:
 			state.Turn.TurnID = meta.TurnID
 			state.Turn.Step = meta.Step
 			state.Turn.Status = "running"
+			if meta.TurnID != "" {
+				info := ensureTurn(meta.TurnID)
+				info.Status = "running"
+				info.Step = meta.Step
+				if info.StartedAt == 0 {
+					info.StartedAt = fact.Timestamp
+				}
+			}
 		case TypeTurnEnd:
 			state.Turn.TurnID = meta.TurnID
 			state.Turn.Status = meta.Reason
+			state.Turn.Error = meta.Error
+			if meta.TurnID != "" {
+				info := ensureTurn(meta.TurnID)
+				info.Status = meta.Reason
+				info.EndedAt = fact.Timestamp
+				info.Error = meta.Error
+			}
+		case TypeLLMUsage:
+			var um struct {
+				Usage struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				} `json:"usage"`
+				Model         string `json:"model"`
+				ContextWindow int    `json:"context_window"`
+			}
+			if len(fact.Meta) > 0 {
+				_ = json.Unmarshal(fact.Meta, &um)
+			}
+			total := um.Usage.TotalTokens
+			if total == 0 {
+				total = um.Usage.PromptTokens + um.Usage.CompletionTokens
+			}
+			usage.PromptTokens += um.Usage.PromptTokens
+			usage.CompletionTokens += um.Usage.CompletionTokens
+			usage.TotalTokens += total
+			usage.Requests++
+			usage.LastPromptTokens = um.Usage.PromptTokens
+			if um.Model != "" {
+				latestUsageModel = um.Model
+			}
+			if um.ContextWindow > 0 {
+				latestUsageWindow = um.ContextWindow
+			}
+		case TypeContextSnapshot:
+			// Keep only the newest raw meta. A snapshot carries the full tool
+			// list, so reparsing every historical snapshot would dominate a
+			// long session's projection cost.
+			contextMeta = fact.Meta
+		case TypeRequestHeader:
+			requestMeta = fact.Meta
 		}
+	}
+	var contextSummary *chatContextUI
+	if len(contextMeta) > 0 {
+		var snap struct {
+			ModelContextID string   `json:"model_context_id"`
+			TurnID         string   `json:"turn_id"`
+			StepID         string   `json:"step_id"`
+			MessageCount   int      `json:"message_count"`
+			TokenEstimate  int      `json:"token_estimate"`
+			Model          string   `json:"model"`
+			ContextWindow  int      `json:"context_window"`
+			Warnings       []string `json:"warnings"`
+		}
+		_ = json.Unmarshal(contextMeta, &snap)
+		contextSummary = &chatContextUI{
+			ModelContextID: snap.ModelContextID,
+			TurnID:         snap.TurnID,
+			StepID:         snap.StepID,
+			MessageCount:   snap.MessageCount,
+			TokenEstimate:  snap.TokenEstimate,
+			Model:          snap.Model,
+			ContextWindow:  snap.ContextWindow,
+			Warnings:       snap.Warnings,
+		}
+	}
+	var requestSummary *chatRequestUI
+	if len(requestMeta) > 0 {
+		var rm struct {
+			TurnID        string `json:"turn_id"`
+			StepID        string `json:"step_id"`
+			Mode          string `json:"mode"`
+			Scheme        string `json:"scheme"`
+			Model         string `json:"model"`
+			ContextWindow int    `json:"context_window"`
+		}
+		_ = json.Unmarshal(requestMeta, &rm)
+		requestSummary = &chatRequestUI{
+			TurnID: rm.TurnID, StepID: rm.StepID,
+			Mode: rm.Mode, Scheme: rm.Scheme,
+			Model: rm.Model, ContextWindow: rm.ContextWindow,
+		}
+	}
+	state.Turns = make([]chatTurnInfoUI, 0, len(turnOrder))
+	for _, id := range turnOrder {
+		state.Turns = append(state.Turns, *turnInfos[id])
+	}
+	usage.Model = latestUsageModel
+	usage.ContextWindow = latestUsageWindow
+	state.Usage = usage
+	state.Context = contextSummary
+	state.Request = requestSummary
+	if state.Model == "" {
+		state.Model = latestUsageModel
+		if state.Model == "" && requestSummary != nil {
+			state.Model = requestSummary.Model
+		}
+	}
+	// The meter's numerator and denominator must come from the same request.
+	// Session metadata is only a fallback before the first usage arrives.
+	if latestUsageWindow > 0 {
+		state.ContextWindow = latestUsageWindow
+	}
+	if state.ContextWindow <= 0 && contextSummary != nil {
+		state.ContextWindow = contextSummary.ContextWindow
+	}
+	if state.ContextWindow <= 0 && requestSummary != nil {
+		state.ContextWindow = requestSummary.ContextWindow
 	}
 	if state.Messages == nil {
 		state.Messages = []chatMessageUI{}
 	}
+	state.Messages, state.FirstSeq, state.HasMore = windowChatMessages(state.Messages)
 	ownerState := p.pluginState(ctx, turnOwner)
 	if allowRecovery && state.Turn.Status == "running" && turnOwner != "" && turnOwnerUnavailable(ownerState) {
 		if p.recoverOpenTurn(sessionID, state.Turn.TurnID, turnOwner) {
@@ -711,6 +1485,7 @@ func (p *plugin) chatStateInternal(ctx context.Context, sessionID string, allowR
 	if streamOK && stream.Status == "cancel_requested" && stream.TurnID == state.Turn.TurnID {
 		state.Turn.CancelRequested = true
 	}
+	state.ThroughSeq = lastFactSeq(facts)
 	state.Revision = p.nextUIRevision()
 	return state, nil
 }

@@ -2,6 +2,7 @@ package host
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -137,6 +138,26 @@ func (h *Host) selectPipelineCandidate(state *pipelineState) (pipelineCandidate,
 	return best, nil
 }
 
+// noActiveProviderError distinguishes a stopped provider from a real routing
+// cycle. A stopped provider removes its route, so the pipeline only sees the
+// already visited consumers and reports a loop. Name the outage instead.
+func (h *Host) noActiveProviderError(capability, method string) error {
+	key := capability + "." + method
+	h.mu.RLock()
+	owner, ok := h.routes[key]
+	active := false
+	if ok {
+		if p := h.plugins[owner]; p != nil && p.state == ProviderStateActive {
+			active = true
+		}
+	}
+	h.mu.RUnlock()
+	if active {
+		return nil
+	}
+	return fmt.Errorf("no active provider for %s: %w", key, ErrPluginNotReady)
+}
+
 func (h *Host) declaresConsumedMethodLocked(capability, method string) bool {
 	for _, discovery := range h.discoveries.Plugins {
 		if consumesMethod(discovery.Manifest, capability, method) {
@@ -202,6 +223,11 @@ func (h *Host) finishProceed(
 ) {
 	candidate, err := h.selectPipelineCandidate(state)
 	if err != nil {
+		if errors.Is(err, ErrPipelineLoop) {
+			if providerErr := h.noActiveProviderError(capability, method); providerErr != nil {
+				err = providerErr
+			}
+		}
 		code := ErrorCode(err, CodeRouteFailed)
 		h.replyError(from, frame.ID, capability, method, code, err.Error())
 		return

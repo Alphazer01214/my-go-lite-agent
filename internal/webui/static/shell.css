@@ -198,6 +198,11 @@ select:focus-visible {
   display: none;
 }
 
+/* A mounted but hidden dock must not leave the bottom border behind. */
+.slot-bottom:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
 .diagnostic-panel {
   position: fixed;
   z-index: 10;
@@ -685,6 +690,78 @@ select:focus-visible {
   width: 18px;
   min-height: 18px;
   justify-self: start;
+}
+
+.setting-field-full {
+  grid-column: 1 / -1;
+}
+
+.setting-hint {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.setting-field select {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.setting-field select:disabled {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.settings-list {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.settings-list-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-list-row input {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.settings-list-add,
+.settings-list-remove {
+  min-height: 30px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.settings-list-add {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.settings-list-remove {
+  flex: 0 0 auto;
 }
 
 .setting-label {

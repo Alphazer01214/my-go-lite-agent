@@ -125,6 +125,9 @@ func TestServerUISaturatedQueueDropsOnlyThatConnection(t *testing.T) {
 	defer server.removeUIConnection(slow)
 	defer server.removeUIConnection(fast)
 
+	overflowed := false
+	slow.onOverflow = func() { overflowed = true }
+
 	for i := 0; i < cap(slow.queue); i++ {
 		slow.queue <- &uiEnvelope{}
 	}
@@ -137,5 +140,13 @@ func TestServerUISaturatedQueueDropsOnlyThatConnection(t *testing.T) {
 	}
 	if got := slow.drops.Load(); got != 1 {
 		t.Fatalf("slow drops = %d, want 1", got)
+	}
+	select {
+	case <-slow.overflow:
+	default:
+		t.Fatal("slow connection was not marked for resync")
+	}
+	if !overflowed {
+		t.Fatal("slow connection writer was not woken")
 	}
 }

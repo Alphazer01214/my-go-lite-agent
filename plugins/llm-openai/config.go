@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 )
 
-const configFile = "config.json"
+const (
+	configFile     = "config.json"
+	defaultBaseURL = "https://api.deepseek.com/v1"
+	defaultModelID = "deepseek-chat"
+)
 
 // plugin holds the current config. complete captures a snapshot at call start.
 type plugin struct {
@@ -33,8 +38,10 @@ func newPlugin() *plugin {
 
 func loadConfig() config {
 	cfg := config{
-		BaseURL: "https://api.deepseek.com/v1",
-		Model:   "deepseek-chat",
+		BaseURL:      defaultBaseURL,
+		Model:        defaultModelID,
+		DefaultModel: defaultModelID,
+		Models:       []modelConfig{{ID: defaultModelID, Label: defaultModelID}},
 	}
 	if data, err := os.ReadFile(configFile); err == nil {
 		var c config
@@ -45,6 +52,8 @@ func loadConfig() config {
 			if c.APIKey != "" {
 				cfg.APIKey = c.APIKey
 			}
+			cfg.Models = c.Models
+			cfg.DefaultModel = c.DefaultModel
 			if c.Model != "" {
 				cfg.Model = c.Model
 			}
@@ -57,11 +66,115 @@ func loadConfig() config {
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		cfg.APIKey = v
 	}
-	if v := os.Getenv("OPENAI_MODEL"); v != "" {
+	if v := strings.TrimSpace(os.Getenv("OPENAI_MODEL")); v != "" {
 		cfg.Model = v
+		cfg.DefaultModel = v
+		cfg.Models = ensureModel(cfg.Models, v)
 	}
-	cfg.BaseURL = normalizeBaseURL(cfg.BaseURL)
-	return cfg
+	return normalizeConfig(cfg)
+}
+
+// normalizeConfig folds the legacy single-model field into a catalog and
+// repairs whatever the file left inconsistent. Loading stays lenient: a bad
+// entry is dropped instead of preventing the plugin from starting.
+func normalizeConfig(c config) config {
+	c.BaseURL = normalizeBaseURL(c.BaseURL)
+	if c.BaseURL == "" {
+		c.BaseURL = defaultBaseURL
+	}
+	models := sanitizeModels(c.Models)
+	legacy := strings.TrimSpace(c.Model)
+	if len(models) == 0 {
+		id := legacy
+		if id == "" {
+			id = defaultModelID
+		}
+		models = []modelConfig{{ID: id, Label: id}}
+	}
+	def := strings.TrimSpace(c.DefaultModel)
+	if def == "" && hasModel(models, legacy) {
+		def = legacy
+	}
+	if def == "" || !hasModel(models, def) {
+		def = models[0].ID
+	}
+	c.Models = models
+	c.DefaultModel = def
+	c.Model = def
+	return c
+}
+
+func sanitizeModels(in []modelConfig) []modelConfig {
+	out := make([]modelConfig, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, model := range in {
+		model.ID = strings.TrimSpace(model.ID)
+		if model.ID == "" || seen[model.ID] {
+			continue
+		}
+		model.Label = strings.TrimSpace(model.Label)
+		if model.Label == "" {
+			model.Label = model.ID
+		}
+		if model.ContextWindow < 0 {
+			model.ContextWindow = 0
+		}
+		seen[model.ID] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+func validateModels(in []modelConfig) ([]modelConfig, error) {
+	if len(in) == 0 {
+		return nil, fmt.Errorf("models must not be empty")
+	}
+	out := make([]modelConfig, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, model := range in {
+		model.ID = strings.TrimSpace(model.ID)
+		if model.ID == "" {
+			return nil, fmt.Errorf("model id is required")
+		}
+		if seen[model.ID] {
+			return nil, fmt.Errorf("duplicate model id %q", model.ID)
+		}
+		if model.ContextWindow < 0 {
+			return nil, fmt.Errorf("model %q context_window must not be negative", model.ID)
+		}
+		model.Label = strings.TrimSpace(model.Label)
+		if model.Label == "" {
+			model.Label = model.ID
+		}
+		seen[model.ID] = true
+		out = append(out, model)
+	}
+	return out, nil
+}
+
+func ensureModel(models []modelConfig, id string) []modelConfig {
+	if hasModel(models, id) {
+		return models
+	}
+	return append(models, modelConfig{ID: id, Label: id})
+}
+
+func hasModel(models []modelConfig, id string) bool {
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func contextWindowFor(models []modelConfig, id string) int {
+	for _, model := range models {
+		if model.ID == id {
+			return model.ContextWindow
+		}
+	}
+	return 0
 }
 
 // normalizeBaseURL is applied on every input path (file, env, config.set) so
@@ -163,10 +276,66 @@ func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 
 func (p *plugin) getConfigLocked() configGetOut {
 	return configGetOut{
-		BaseURL: p.cfg.BaseURL,
-		APIKey:  maskKey(p.cfg.APIKey),
-		Model:   p.cfg.Model,
+		BaseURL:      p.cfg.BaseURL,
+		APIKey:       maskKey(p.cfg.APIKey),
+		Model:        p.cfg.DefaultModel,
+		Models:       append([]modelConfig(nil), p.cfg.Models...),
+		DefaultModel: p.cfg.DefaultModel,
 	}
+}
+
+func (p *plugin) modelsList() modelsListOut {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.modelsListLocked()
+}
+
+func (p *plugin) modelsListLocked() modelsListOut {
+	return modelsListOut{
+		DefaultModel: p.cfg.DefaultModel,
+		Models:       append([]modelConfig(nil), p.cfg.Models...),
+	}
+}
+
+// modelsSet replaces the whole catalog. Unlike config.set, a model that is not
+// listed is an error here: the manager UI is authoritative about the list.
+func (p *plugin) modelsSet(in modelsSetIn) (modelsListOut, error) {
+	models, err := validateModels(in.Models)
+	if err != nil {
+		return modelsListOut{}, errBadArguments(err.Error())
+	}
+	def := strings.TrimSpace(in.DefaultModel)
+	if def == "" {
+		def = models[0].ID
+	}
+	if !hasModel(models, def) {
+		return modelsListOut{}, errBadArguments("default_model is not in models")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// A no-op save must not rewrite config.json unnecessarily.
+	if p.cfg.DefaultModel == def && sameModels(p.cfg.Models, models) {
+		return p.modelsListLocked(), nil
+	}
+	p.cfg.Models = models
+	p.cfg.DefaultModel = def
+	p.cfg.Model = def
+	if err := saveConfig(p.cfg); err != nil {
+		return modelsListOut{}, errHandler(err.Error())
+	}
+	return p.modelsListLocked(), nil
+}
+
+func sameModels(a, b []modelConfig) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *plugin) applyLocked(in configSetIn) error {
@@ -176,19 +345,50 @@ func (p *plugin) applyLocked(in configSetIn) error {
 	if in.APIKey != "" {
 		p.cfg.APIKey = in.APIKey
 	}
-	if in.Model != "" {
-		p.cfg.Model = in.Model
+	// Copy before appending: a completion that captured the previous config
+	// holds the old slice and must not see a shared backing array change.
+	models := append([]modelConfig(nil), p.cfg.Models...)
+	if in.Models != nil {
+		normalized, err := validateModels(*in.Models)
+		if err != nil {
+			return err
+		}
+		models = normalized
 	}
-	// The key is masked for callers but must never reach disk: config.json is a
-	// plain file in the plugin directory. It stays in memory / the environment.
+	candidate := strings.TrimSpace(in.DefaultModel)
+	legacy := strings.TrimSpace(in.Model)
+	if candidate == "" {
+		candidate = legacy
+	}
+	if candidate != "" && !hasModel(models, candidate) {
+		models = append(models, modelConfig{ID: candidate, Label: candidate})
+	}
+	if candidate == "" {
+		candidate = p.cfg.DefaultModel
+	}
+	if !hasModel(models, candidate) {
+		candidate = models[0].ID
+	}
+	p.cfg.Models = models
+	p.cfg.DefaultModel = candidate
+	p.cfg.Model = candidate
 	return saveConfig(p.cfg)
 }
 
 func saveConfig(c config) error {
 	persisted := c
-	if persisted.APIKey != "" {
-		persisted.APIKey = ""
+	persisted.Models = sanitizeModels(persisted.Models)
+	if len(persisted.Models) == 0 {
+		id := strings.TrimSpace(persisted.DefaultModel)
+		if id == "" {
+			id = defaultModelID
+		}
+		persisted.Models = []modelConfig{{ID: id, Label: id}}
 	}
+	if persisted.DefaultModel == "" || !hasModel(persisted.Models, persisted.DefaultModel) {
+		persisted.DefaultModel = persisted.Models[0].ID
+	}
+	persisted.Model = persisted.DefaultModel
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return err

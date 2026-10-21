@@ -27,5 +27,6 @@ const (
 	diagnosticSettingsUnknown       = "settings_unknown_field"
 	diagnosticSettingsMethodUnknown = "settings_method_unknown_field"
 	diagnosticSettingsFieldUnknown  = "settings_field_unknown_field"
+	diagnosticSettingsItemUnknown   = "settings_item_unknown_field"
 	diagnosticSettingsType          = "settings_unknown_type"
 )

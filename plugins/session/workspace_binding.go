@@ -72,14 +72,69 @@ func (p *plugin) workspaceRecords() ([]workspaceRecord, string) {
 	return p.workspaces.list()
 }
 
-// selectWorkspace makes one workspace current. An empty id is rejected: the
-// caller must name the workspace it wants, not silently change nothing.
-func (p *plugin) selectWorkspace(workspaceID string) error {
+// setWorkspace changes the workspace registry only. Internal callers that
+// already know the target session use this to avoid a second selection pass.
+func (p *plugin) setWorkspace(workspaceID string) error {
 	if strings.TrimSpace(workspaceID) == "" {
 		return errCoded("workspace_required", "workspace_id is required")
 	}
 	_, err := p.workspaces.selectID(workspaceID)
 	return err
+}
+
+// selectWorkspace is the user-facing switch. The pane on screen must belong to
+// the new workspace, or the history list and chat context disagree.
+func (p *plugin) selectWorkspace(workspaceID string) error {
+	if err := p.setWorkspace(workspaceID); err != nil {
+		return err
+	}
+	p.reconcileWorkspaceSelection(workspaceID)
+	return nil
+}
+
+// reconcileWorkspaceSelection keeps the selected pane inside workspaceID. It
+// prefers the workspace's remembered session, then the newest session. An empty
+// workspace clears the selection instead of leaving a foreign pane selected.
+func (p *plugin) reconcileWorkspaceSelection(workspaceID string) {
+	if strings.TrimSpace(workspaceID) == "" {
+		return
+	}
+	p.mu.RLock()
+	current := p.selected
+	remembered := p.selectedByWorkspace[workspaceID]
+	p.mu.RUnlock()
+
+	if current != "" {
+		if st, err := p.get(current); err == nil && st.snapshotMeta().WorkspaceID == workspaceID {
+			return
+		}
+	}
+	if remembered != "" {
+		if st, err := p.get(remembered); err == nil && st.snapshotMeta().WorkspaceID == workspaceID {
+			p.mu.Lock()
+			p.openSessionLocked(remembered)
+			p.selected = remembered
+			p.mu.Unlock()
+			return
+		}
+	}
+
+	list, err := p.list(workspaceID)
+	if err != nil || len(list.Sessions) == 0 {
+		p.mu.Lock()
+		p.selected = ""
+		if p.selectedByWorkspace[workspaceID] == remembered {
+			delete(p.selectedByWorkspace, workspaceID)
+		}
+		p.mu.Unlock()
+		return
+	}
+	id := list.Sessions[0].SessionID
+	p.mu.Lock()
+	p.openSessionLocked(id)
+	p.selected = id
+	p.selectedByWorkspace[workspaceID] = id
+	p.mu.Unlock()
 }
 
 func sameWorkspacePath(left, right string) bool {

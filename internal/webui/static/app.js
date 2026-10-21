@@ -142,6 +142,11 @@ async function savePluginSettings(plugin, values, form) {
 	try {
 		await LiteAgent.call(request.capability, request.method, { values });
 		await loadPluginSettings(plugin, form);
+		// Other plugin UIs may cache data derived from this config, such as
+		// session-history's model catalog.
+		window.dispatchEvent(new CustomEvent("liteagent:settings-saved", {
+			detail: { plugin: plugin.name },
+		}));
 		setSettingsStatus(form, "已保存", "success");
 	} catch (error) {
 		setSettingsStatus(form, error instanceof Error ? error.message : String(error), "error");
@@ -228,7 +233,9 @@ async function runPluginAction(plugin, action, button) {
 			headers: { Accept: "application/json" },
 		});
 		const payload = await parseManagementResponse(response);
-		await applyBootstrap(payload);
+		// A lifecycle action can restart a plugin without changing its mount.
+		// Resync mounted components so they re-read the new plugin generation.
+		await applyBootstrap(payload, { resync: true });
 		setPluginActionStatus(`${plugin.name} 已${action === "start" ? "启动" : "停止"}`, "success");
 	} catch (error) {
 		setPluginActionStatus(error instanceof Error ? error.message : String(error), "error");
@@ -245,7 +252,7 @@ async function rescanPlugins() {
 			headers: { Accept: "application/json" },
 		});
 		const payload = await parseManagementResponse(response);
-		await applyBootstrap(payload);
+		await applyBootstrap(payload, { resync: true });
 		setPluginActionStatus(`扫描完成，共 ${payload.plugins?.length || 0} 个插件`, "success");
 	} catch (error) {
 		setPluginActionStatus(error instanceof Error ? error.message : String(error), "error");

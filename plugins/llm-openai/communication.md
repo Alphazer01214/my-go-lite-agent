@@ -12,6 +12,8 @@
 | `llm.cancel` | 取消指定 Call | 当前实现 |
 | `llm.config.get` | 读取模型配置 | 当前实现 |
 | `llm.config.set` | 更新模型配置 | 当前实现 |
+| `llm.models.list` | 读取模型目录与默认模型 | 当前实现 |
+| `llm.models.set` | 整体替换模型目录与默认模型 | 当前实现 |
 
 ## 2. llm.complete
 
@@ -54,7 +56,7 @@
 |---|---|---|
 | `messages` | 是 | OpenAI chat messages |
 | `tools` | 否 | function tools |
-| `model` | 否 | 覆盖配置 |
+| `model` | 否 | 本次请求使用的模型；省略时用 `default_model` |
 | `temperature` | 否 | 采样温度 |
 | `max_tokens` | 否 | 最大生成 token |
 | `stream` | 否 | nil 时默认 true |
@@ -80,10 +82,13 @@
     "prompt_tokens": 100,
     "completion_tokens": 20,
     "total_tokens": 120
-  }
+  },
+  "model": "deepseek-chat",
+  "context_window": 65536
 }
 ```
 
+`model` 是实际使用的模型。`context_window` 取自模型目录，未知时为 `0`。
 流式模式下，Response 仍返回累计后的完整结果。Event 只用于实时增量。
 
 ## 3. llm.cancel
@@ -173,19 +178,19 @@ Accept: text/event-stream
 {
   "base_url": "https://api.deepseek.com/v1",
   "api_key": "api***key",
-  "model": "deepseek-chat"
+  "model": "deepseek-chat",
+  "models": [
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536
+    }
+  ],
+  "default_model": "deepseek-chat"
 }
 ```
 
-目标 Settings 契约改为：
-
-```json
-{
-  "base_url": "https://api.deepseek.com/v1",
-  "api_key_configured": true,
-  "model": "deepseek-chat"
-}
-```
+`model` 与 `default_model` 同值，保留旧字段供现有调用方读取。
 
 ### llm.config.set
 
@@ -195,17 +200,116 @@ Accept: text/event-stream
 {
   "base_url": "https://api.openai.com/v1",
   "api_key": "new-secret",
-  "model": "gpt-test"
+  "model": "gpt-test",
+  "models": [
+    {
+      "id": "gpt-test",
+      "label": "GPT Test",
+      "context_window": 131072
+    }
+  ],
+  "default_model": "gpt-test"
 }
 ```
 
-当前实现中，空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。Settings 空 secret 表示不修改。清除 secret 需要显式动作。
+`models` 存在时整体替换模型目录；`model` 或 `default_model` 指向目录中不存在的 ID 时会补一条同名模型。
+空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。
+显式提供 `api_key` 时会写入内存并持久化到 `config.json`；清除密钥使用 `llm.settings.save`。
+
+### llm.models.list
+
+输入空对象。输出：
+
+```json
+{
+  "default_model": "deepseek-chat",
+  "models": [
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536
+    }
+  ]
+}
+```
+
+模型目录只描述同一个 `base_url` 下的模型；`api_key` 不出现在该方法的输出里。
+
+### llm.models.set
+
+输入：
+
+```json
+{
+  "models": [
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536
+    },
+    {
+      "id": "deepseek-reasoner",
+      "label": "DeepSeek Reasoner",
+      "context_window": 65536
+    }
+  ],
+  "default_model": "deepseek-chat"
+}
+```
+
+输出与 `llm.models.list` 相同。`models` 必须非空，ID 必须唯一；`default_model` 省略时取第一项，指向目录外时返回 `bad_arguments`。
+
+旧配置只有 `model` 时，启动会迁移为单模型目录；`OPENAI_MODEL` 会覆盖默认模型，并在不在目录中时追加一项。
 
 `base_url` 在三条输入路径（`config.json`、环境变量、`llm.config.set`）上都会去掉首尾空白和末尾 `/`，
 因此不会拼出 `…/v1//chat/completions`。
 
-新值会写入插件目录下的 `config.json`，但 `api_key` 落盘前被清空：密钥只留在内存和环境变量里。
-写盘失败时返回 `handler_error`，此时内存里的新值已经生效但没有持久化。
+新值会写入插件目录下的 `config.json`，包括明文 `api_key`。写盘失败时返回 `handler_error`，
+此时内存里的新值已经生效但没有持久化。`config.json` 已被 `.gitignore` 排除，请自行保护文件权限。
+
+### llm.settings.get
+
+供 Host Settings Renderer 读取。输出：
+
+```json
+{
+  "values": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": { "configured": true },
+    "clear_api_key": false,
+    "models": [
+      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+    ],
+    "default_model": "deepseek-chat"
+  }
+}
+```
+
+`api_key` 不回显明文，只报告是否已配置。`models` 用于设置页的模型目录行编辑器，
+`default_model` 用于联动下拉。
+
+### llm.settings.save
+
+输入：
+
+```json
+{
+  "values": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": "new-secret",
+    "clear_api_key": false,
+    "models": [
+      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+    ],
+    "default_model": "deepseek-chat"
+  }
+}
+```
+
+- `api_key` 为空表示不修改；`clear_api_key=true` 时清空密钥，即使同时填写了新 Key。
+- `models` 必须非空，ID 必须唯一；`default_model` 为空时取第一项，指向目录外时返回 `bad_arguments`。
+- 保存会写入 `config.json`，包括明文 `api_key`；成功后 Host 派发 `liteagent:settings-saved`，
+  `session-history` 重新读取 `llm.models.list` 刷新新会话模型下拉。
 
 ## 7. 调用关系
 
@@ -243,12 +347,16 @@ Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 |---|---|---|
 | Settings 读取 | UI → Plugin | `llm.config.get` |
 | Settings 保存 | UI → Plugin | `llm.config.set` |
-| Settings Renderer 读取 | UI → Plugin | `llm.settings.get` |
-| Settings Renderer 保存 | UI → Plugin | `llm.settings.save` |
+| 插件中心设置读取 | Host Settings Renderer → Plugin | `llm.settings.get` |
+| 插件中心设置保存 | Host Settings Renderer → Plugin | `llm.settings.save` |
+| 新会话模型下拉 | `session-history` → Plugin | `llm.models.list` |
+| 模型目录管理 | 插件中心设置页 | `llm.settings.get/save` |
 | LLM 正文 | Plugin → Agent | `llm.chunk` |
 | LLM 最终结果 | Plugin → Agent | `llm.complete` Response |
 
-llm-openai 没有 `setData` 或 `runCommand` 调用。
+llm-openai 没有 `setData` 或 `runCommand` 调用。`session-history` 只读取模型目录作为可选协作者；
+能力不可用时隐藏选择器，Session 仍按 llm-openai 自己的默认模型运行。模型目录的编辑在插件中心设置页完成，
+保存成功后 Host 派发 `liteagent:settings-saved` 触发 `session-history` 刷新下拉。
 
 ## 10. 结构体索引
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
@@ -65,7 +66,7 @@ func TestManualStopReturnsInactiveState(t *testing.T) {
 	}
 }
 
-func TestStartPluginRequiresHealthyDependencies(t *testing.T) {
+func TestStartPluginWarnsButDoesNotBlockOnDependencies(t *testing.T) {
 	root := t.TempDir()
 	writePluginPackage(t, root, "base", `{"name":"base","version":"1.0.0","protocol":1,"entry":"base"}`)
 	writePluginPackage(t, root, "dependent", `{"name":"dependent","version":"1.0.0","protocol":1,"entry":"dependent","depends_on":["base"]}`)
@@ -75,9 +76,22 @@ func TestStartPluginRequiresHealthyDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var logs []string
+	h.hlog = func(message string) { logs = append(logs, message) }
+
 	err := h.StartPlugin("dependent")
-	if !errors.Is(err, ErrPluginNotMounted) {
-		t.Fatalf("start error = %v", err)
+	if err != nil && strings.Contains(err.Error(), "dependency") {
+		t.Fatalf("unhealthy dependency must not block start: %v", err)
+	}
+
+	var warned bool
+	for _, line := range logs {
+		if strings.Contains(line, "start warn:") && strings.Contains(line, "dependency base") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a start warning for the missing dependency, logs = %#v", logs)
 	}
 }
 

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiteAgent 数据流转 · 序列图</title>
+<meta name="description" content="用 mermaid sequenceDiagram 风格逐跳展示 LiteAgent 的数据传输：Frame 的 id 改写、pending 闭环、Browser Call、Turn 主链路、流式增量、上下文组装、工具轮、取消、异常与刷新重连。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="sequence.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">▚</span>
+    <span class="brand-name">LiteAgent</span>
+    <span class="brand-sub">数据流转</span>
+  </div>
+  <nav class="nav" aria-label="章节">
+    <a href="#frames">Frame</a>
+    <a href="#keys">pending</a>
+    <a href="#diagrams">序列图</a>
+    <a href="#errors">错误落点</a>
+    <a href="#index">索引</a>
+    <a href="index.html">结构总览 ↗</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <section class="hero" id="overview">
+    <div class="hero-copy">
+      <p class="kicker">Go · 进程外插件 Runtime · Frame v2</p>
+      <h1>数据怎么流，<br>一帧一帧看。</h1>
+      <p class="lede">
+        这一页只讲一件事：一次调用从发出到落地，每一跳发生了什么。
+        图用仓库文档同款的 <code>sequenceDiagram</code> 记法，点任意一条消息看那一跳的细节。
+      </p>
+      <p class="hero-cta">
+        <a href="index.html">← 回到结构总览：分层、插件图谱与边界</a>
+      </p>
+      <ul class="facts" id="heroFacts"></ul>
+    </div>
+  </section>
+
+  <section class="block" id="frames">
+    <header class="block-head">
+      <span class="idx">01</span>
+      <div>
+        <h2>Frame 字段解剖</h2>
+        <p class="block-lede">线格式是 4 字节大端长度加 UTF-8 JSON body，单条上限 16 MiB。下面每一行都注明谁写、何时写。</p>
+      </div>
+    </header>
+    <div class="panel">
+      <table class="tbl" id="frameFields"></table>
+    </div>
+  </section>
+
+  <section class="block" id="keys">
+    <header class="block-head">
+      <span class="idx">02</span>
+      <div>
+        <h2>pending 键与 id 的关系</h2>
+        <p class="block-lede">这是最容易搞错的地方：pending 的键不是插件的 id，是 Host 自己分配的内部 id。</p>
+      </div>
+    </header>
+    <div class="panel">
+      <table class="tbl" id="pendingKeys"></table>
+      <p class="hint">归因事件与 Response 走同一条还原路径：Host 查 pending，把 Frame.id 换回发起方的原始 id，再投回去。</p>
+    </div>
+  </section>
+
+  <section class="block" id="diagrams">
+    <header class="block-head">
+      <span class="idx">03</span>
+      <div>
+        <h2>序列图</h2>
+        <p class="block-lede">实线是调用，虚线是返回。点任意一条消息看那一跳的细节；源码可以展开，和 docs 里的写法一致。</p>
+      </div>
+    </header>
+    <div id="parts"></div>
+  </section>
+
+  <section class="block" id="errors">
+    <header class="block-head">
+      <span class="idx">04</span>
+      <div>
+        <h2>错误码在流程中的落点</h2>
+        <p class="block-lede">同一个码在不同位置含义不同。这里列出它们各自在哪一跳被写进 Frame。</p>
+      </div>
+    </header>
+    <div class="panel">
+      <table class="tbl" id="errPoints"></table>
+    </div>
+  </section>
+
+  <section class="block" id="index">
+    <header class="block-head">
+      <span class="idx">05</span>
+      <div>
+        <h2>全部图索引</h2>
+        <p class="block-lede">十二张图，按数据流方向排。</p>
+      </div>
+    </header>
+    <div class="panel">
+      <ol class="tight num" id="diagramIndex"></ol>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <p class="foot-title">数据来源</p>
+    <p>本页序列图与 <code>internal/host/</code>、<code>internal/webui/</code>、<code>pluginsdk/</code>、<code>plugins/*/</code> 的实现逐跳比对，并与 <code>docs/protocol.md</code>、<code>docs/webui.md</code>、<code>docs/project-map/OVERVIEW.md</code> 的同名图对照。渲染器是本页自带的 <code>sequence.js</code>，不依赖 npm 与 CDN。</p>
+    <p class="foot-meta">LiteAgent · 整理于 2026-10-20 · 行为以当前源码为准</p>
+  </div>
+</footer>
+
+<script src="sequence.js"></script>
+<script src="sequence-data.js"></script>
+<script src="sequence-page.js"></script>
+</body>
+</html>

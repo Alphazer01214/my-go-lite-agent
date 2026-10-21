@@ -165,7 +165,9 @@ func TestConsumerRegistrationDoesNotClaimProviderRoute(t *testing.T) {
 	}
 }
 
-func TestInactiveDeclaredConsumerFailsClosed(t *testing.T) {
+// 缺席即放行：声明了 consumes 的 Consumer 没有活跃实例时，跳过这一跳，
+// 调用直接交给该 (capability, method) 的 Provider。
+func TestInactiveDeclaredConsumerFailsOpen(t *testing.T) {
 	h := newTestHost("provider")
 	h.plugins["provider"].discovery.Manifest.Provides = []string{"web"}
 	h.SetDiscoveries(plugin.Discoveries{Plugins: []plugin.Discovery{
@@ -182,12 +184,39 @@ func TestInactiveDeclaredConsumerFailsClosed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.handleRequest("provider", &Frame{
+		ID: "call", Type: FrameRequest, Capability: "web", Method: "fetch",
+		Payload: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("fail-open call: %v", err)
+	}
+
+	var forwarded bool
+	for _, f := range drainFrames(t, h, "provider") {
+		if f.Type == FrameRequest && f.Capability == "web" && f.Method == "fetch" {
+			forwarded = true
+		}
+	}
+	if !forwarded {
+		t.Fatal("provider did not receive the forwarded web.fetch request")
+	}
+}
+
+// 缺席即放行的边界：Consumer 与 Provider 都不存在时才是方法缺失。
+func TestAbsentConsumerAndProviderIsMethodNotFound(t *testing.T) {
+	h := newTestHost("provider")
+	h.SetDiscoveries(plugin.Discoveries{Plugins: []plugin.Discovery{
+		{Dir: "provider", Manifest: plugin.Manifest{Name: "provider"}},
+		{Dir: "sandbox", Manifest: plugin.Manifest{Name: "sandbox", Consumes: []plugin.ConsumesMethod{{
+			Capability: "web", Method: "fetch",
+		}}}},
+	}})
 	err := h.handleRequest("provider", &Frame{
 		ID: "call", Type: FrameRequest, Capability: "web", Method: "fetch",
 		Payload: json.RawMessage(`{}`),
 	})
-	if !errors.Is(err, ErrRouteFailed) {
-		t.Fatalf("error = %v, want route_failed", err)
+	if !errors.Is(err, ErrMethodNotFound) {
+		t.Fatalf("error = %v, want method_not_found", err)
 	}
 }
 

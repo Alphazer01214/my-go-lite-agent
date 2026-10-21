@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// A registry workspace switch must not blank the pane on screen. The selected
-// open session joins the pushed panes even when it belongs to another
-// workspace, and SelectedID stays inside the pushed set.
-func TestPublishPanesKeepsSelectedAcrossWorkspaceSwitch(t *testing.T) {
+// A workspace switch must leave the chat and history on the same workspace.
+// The newest session of the target workspace becomes selected when the previous
+// selection belongs elsewhere.
+func TestPublishPanesSelectsWorkspaceSession(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
 	ui := newFakeUIPublisher()
@@ -24,16 +24,18 @@ func TestPublishPanesKeepsSelectedAcrossWorkspaceSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.create(context.Background(), createIn{
-		SessionID: "s1", WorkspaceID: wsA.WorkspaceID, Workspace: pathA,
-	}); err != nil {
-		t.Fatal(err)
+	for _, in := range []createIn{
+		{SessionID: "s1", WorkspaceID: wsA.WorkspaceID, Workspace: pathA},
+		{SessionID: "s2", WorkspaceID: wsB.WorkspaceID, Workspace: pathB},
+	} {
+		if _, err := p.create(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := p.selectSession(context.Background(), selectIn{SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
 
-	// The user picks workspace B in the picker while s1 stays on screen.
 	if err := p.selectWorkspace(wsB.WorkspaceID); err != nil {
 		t.Fatal(err)
 	}
@@ -49,24 +51,17 @@ func TestPublishPanesKeepsSelectedAcrossWorkspaceSwitch(t *testing.T) {
 	if err := json.Unmarshal(raw[len(raw)-1], &panes); err != nil {
 		t.Fatal(err)
 	}
-	if panes.SelectedID != "s1" {
-		t.Fatalf("selected = %q, want s1", panes.SelectedID)
+	if panes.SelectedID != "s2" {
+		t.Fatalf("selected = %q, want s2", panes.SelectedID)
 	}
-	found := false
-	for _, pane := range panes.Panes {
-		if pane.SessionID == "s1" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("selected pane missing from panes: %+v", panes.Panes)
+	if len(panes.Panes) != 1 || panes.Panes[0].SessionID != "s2" {
+		t.Fatalf("panes = %+v, want [s2]", panes.Panes)
 	}
 }
 
-// A state read must not move or clear the Runtime selection. After the registry
-// workspace drifts away from the session on screen, state() still returns that
-// session so a page reload restores the view instead of an empty page.
-func TestStateReadKeepsSelectionWhenWorkspaceMisaligned(t *testing.T) {
+// Switching to an empty workspace clears the selection. The state read must not
+// resurrect a session from the previous workspace.
+func TestStateReadClearsSelectionForEmptyWorkspace(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
 
@@ -95,24 +90,23 @@ func TestStateReadKeepsSelectionWhenWorkspaceMisaligned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Chat == nil || out.Chat.SessionID != "s1" {
-		t.Fatalf("chat = %+v, want s1", out.Chat)
+	if out.Chat != nil {
+		t.Fatalf("chat = %+v, want nil", out.Chat)
 	}
-	if len(out.Chats) != 1 || out.Chats[0].SessionID != "s1" {
-		t.Fatalf("chats = %+v, want [s1]", out.Chats)
+	if len(out.Chats) != 0 {
+		t.Fatalf("chats = %+v, want empty", out.Chats)
 	}
-	if got := p.selectedID(); got != "s1" {
-		t.Fatalf("selection = %q after state read, want s1", got)
+	if got := p.selectedID(); got != "" {
+		t.Fatalf("selection = %q after workspace switch, want empty", got)
 	}
-	if out.History.SelectedID != "s1" {
-		t.Fatalf("history selected = %q, want s1", out.History.SelectedID)
+	if out.History.SelectedID != "" {
+		t.Fatalf("history selected = %q, want empty", out.History.SelectedID)
 	}
 }
 
-// When the registry workspace has its own remembered selection, a state read
-// must still resolve to the session on screen. A reload must not flip the view
-// to the other workspace's session, and must not steal the selection.
-func TestStateReadKeepsScreenSessionOverWorkspaceMemory(t *testing.T) {
+// A workspace switch prefers its remembered session over the pane that was on
+// screen in another workspace. State reads then resolve inside the new workspace.
+func TestStateReadFollowsRememberedWorkspaceSelection(t *testing.T) {
 	p := newPlugin(t.TempDir())
 	t.Cleanup(p.close)
 
@@ -133,7 +127,6 @@ func TestStateReadKeepsScreenSessionOverWorkspaceMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Visit s2 (remembered under B), then go back to s1 on screen.
 	for _, id := range []string{"s2", "s1"} {
 		if _, err := p.selectSession(context.Background(), selectIn{SessionID: id}); err != nil {
 			t.Fatal(err)
@@ -147,10 +140,13 @@ func TestStateReadKeepsScreenSessionOverWorkspaceMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Chat == nil || out.Chat.SessionID != "s1" {
-		t.Fatalf("chat = %+v, want s1 on screen", out.Chat)
+	if out.Chat == nil || out.Chat.SessionID != "s2" {
+		t.Fatalf("chat = %+v, want s2", out.Chat)
 	}
-	if got := p.selectedID(); got != "s1" {
-		t.Fatalf("selection = %q after state read, want s1", got)
+	if got := p.selectedID(); got != "s2" {
+		t.Fatalf("selection = %q after workspace switch, want s2", got)
+	}
+	if out.History.SelectedID != "s2" {
+		t.Fatalf("history selected = %q, want s2", out.History.SelectedID)
 	}
 }

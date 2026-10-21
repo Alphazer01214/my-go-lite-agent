@@ -9,19 +9,19 @@
 | `loop` | Turn 生命周期 |
 | `agent` | Agent 配置 |
 
-`plugin.json` 声明的硬依赖是 `session` 和 `llm-openai`。`tools` 和 `model-context` 是弱依赖能力：Model Context 缺失时读取 `session.derive`，Tools 缺失时跳过工具阶段。
+`plugin.json` 声明的硬依赖是 `session` 和 `llm-openai`。`tools` 是弱依赖能力：缺失时跳过工具阶段。`model-context` 是 `llm.complete` 链上的可选消费者，agent 不直接调用它。
 
 ## 2. 当前职责
 
 - 创建或复用 Session；
 - 以 Session 已绑定的 Workspace 作为本次 Turn 的唯一工作目录；
+- 从 Session 读取本次使用的 `model/context_window`，并用 `llm.models.list` 对照当前目录：模型已从目录移除时回退到当前默认模型，回退来源写入 `request_header.model_fallback_from`；
 - 写入 user message；
-- 优先调用 `model-context.build` 获取模型输入和工具定义；
-- 在 Model Context 不可用时回退到 Session 投影；
-- 调用 `llm.complete`；
+- 构建基线：`session.derive` 加 `tools.list`；
+- 调用 `llm.complete`，由 model-context 在链上决定是否替换上下文；
 - 执行 `tools.call` 并读取统一 Tool Result；
 - 写入 assistant/tool message，以及工具错误和截断元数据；
-- 写入 turn、step 和 usage 元数据；
+- 写入 turn、step 和 usage 元数据；usage fact 同时记录实际模型与窗口；
 - 处理取消和最大步数。
 
 Agent 不保存 UI State，也不直接渲染消息。

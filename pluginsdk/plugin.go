@@ -117,8 +117,11 @@ const inboundWindowSize = 256
 // Plugin is the in-process runtime: dispatches inbound req, completes outbound Call.
 // Plugins never address by plugin name — only capability.method.
 type Plugin struct {
-	mu   sync.Mutex
-	name string
+	mu sync.Mutex
+	// writeMu serializes stdout frames without sharing the state lock. A
+	// blocked pipe write must never stop Listen from completing pending calls.
+	writeMu sync.Mutex
+	name    string
 	// handlers maps "capability.method" to a Handler
 	handlers map[string]Handler
 	// pending maps outbound Call id to its waiter state.
@@ -443,53 +446,61 @@ func (p *Plugin) toEvent(frame *protocol.Frame) *Event {
 
 // waitResult drains the waiter until res (or channel close).
 // Attributed evt frames go to callback when non-nil; otherwise they are discarded.
-// Exactly one cancel Frame is written per Call: a watcher goroutine arms it as
-// soon as ctx is done, while the waiter keeps draining until the peer answers.
-// The waiter never selects on ctx.Done() itself — a permanently ready Done
-// channel would spin this loop at full CPU for the rest of the Call.
+// The caller's context bounds the wait directly: on cancellation the pending
+// call is detached and a cancel Frame is sent best-effort. The waiter must not
+// depend on that write, because the same blocked stdout can be the reason the
+// context expired.
 func (p *Plugin) waitResult(ctx context.Context, call *outboundCall, capability, method string, callback func(*Event)) (json.RawMessage, error) {
-	watchDone := make(chan struct{})
-	defer close(watchDone)
-	go func() {
+	for {
 		select {
 		case <-ctx.Done():
-			if !p.markOutboundCancel(call, ctx.Err()) {
-				return
+			// Return from the caller's context directly. Waiting for a cancel
+			// frame to be written would make the timeout depend on the same
+			// blocked pipe that caused the deadline.
+			if p.markOutboundCancel(call, ctx.Err()) {
+				go func() { _ = p.writeCancel(call, ctx.Err()) }()
 			}
-			_ = p.writeCancel(call, ctx.Err())
-		case <-watchDone:
-		}
-	}()
-
-	for {
-		frame, ok := <-call.ch
-		if !ok || frame == nil {
-			if canceled := call.cancellationError(); canceled != nil {
-				return nil, canceled
-			}
-			return nil, fmt.Errorf("call %s.%s: connection closed", capability, method)
-		}
-		switch frame.Type {
-		case protocol.FrameEvent:
-			if callback != nil {
-				callback(p.toEvent(frame))
-			}
-		case protocol.FrameResponse:
-			if canceled := call.cancellationError(); canceled != nil {
-				return nil, canceled
-			}
-			if frame.ErrorCode != "" || frame.ErrorMsg != "" {
-				code := frame.ErrorCode
-				if code == "" {
-					code = CodeHandlerError
+			p.removePending(call)
+			return nil, contextCallError(ctx.Err())
+		case frame, ok := <-call.ch:
+			if !ok || frame == nil {
+				if canceled := call.cancellationError(); canceled != nil {
+					return nil, canceled
 				}
-				return nil, ErrCode(code, frame.ErrorMsg)
+				return nil, fmt.Errorf("call %s.%s: connection closed", capability, method)
 			}
-			return frame.Payload, nil
-		default:
-			// ignore unknown
+			switch frame.Type {
+			case protocol.FrameEvent:
+				if callback != nil {
+					callback(p.toEvent(frame))
+				}
+			case protocol.FrameResponse:
+				if canceled := call.cancellationError(); canceled != nil {
+					return nil, canceled
+				}
+				if frame.ErrorCode != "" || frame.ErrorMsg != "" {
+					code := frame.ErrorCode
+					if code == "" {
+						code = CodeHandlerError
+					}
+					return nil, ErrCode(code, frame.ErrorMsg)
+				}
+				return frame.Payload, nil
+			default:
+				// ignore unknown
+			}
 		}
 	}
+}
+
+// removePending detaches one outbound call without touching a different call
+// that may have reused the same id after a late delivery.
+func (p *Plugin) removePending(call *outboundCall) {
+	p.mu.Lock()
+	if p.pending[call.id] == call {
+		delete(p.pending, call.id)
+	}
+	p.mu.Unlock()
 }
 
 func contextCallError(err error) error {
@@ -583,8 +594,8 @@ func (p *Plugin) Emit(capability string, method string, payload json.RawMessage)
 
 // EmitInContext sends an unattributed event in one execution context.
 func (p *Plugin) EmitInContext(contextID, capability, method string, payload json.RawMessage) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
 	return protocol.WriteFrame(p.stdout, &protocol.Frame{
 		Version:    protocol.FrameVersion,
 		Type:       protocol.FrameEvent,
@@ -602,8 +613,8 @@ func (p *Plugin) EmitWithID(id string, capability string, method string, payload
 
 // EmitWithIDInContext sends an attributed event in one execution context.
 func (p *Plugin) EmitWithIDInContext(contextID, id string, capability string, method string, payload json.RawMessage) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
 	return protocol.WriteFrame(p.stdout, &protocol.Frame{
 		Version:    protocol.FrameVersion,
 		ID:         id,
@@ -651,9 +662,10 @@ func reasonCode(reason string) string {
 	return CodeCallCancelled
 }
 
-// writeFrame serializes one Frame onto stdout.
+// writeFrame serializes one Frame onto stdout. It uses writeMu, never mu: a
+// blocked stdout write must not prevent Listen from completing pending calls.
 func (p *Plugin) writeFrame(frame *protocol.Frame) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
 	return protocol.WriteFrame(p.stdout, frame)
 }

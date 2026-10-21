@@ -74,9 +74,12 @@ func (h *Host) StartPlugin(name string) error {
 		return nil
 	}
 
+	// depends_on 只用来提示，不用来许可：调用靠 capability+method 路由，Host
+	// 不需要知道目标插件是否活着。缺依赖照样启动，后续调用自己拿到
+	// plugin_not_mounted，并由 UI 诊断呈现。
 	for _, dependency := range discovery.Manifest.DependsOn {
 		if err := h.alive(dependency); err != nil {
-			return fmt.Errorf("plugin %s dependency %s: %w", name, dependency, err)
+			h.hlog(fmt.Sprintf("start warn: plugin %s dependency %s: %v", name, dependency, err))
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
+	"github.com/tomori/my-go-lite-agent/internal/plugin"
 	"github.com/tomori/my-go-lite-agent/protocol"
 )
 
@@ -20,7 +21,7 @@ type CallBackend interface {
 	) (*protocol.Frame, error)
 }
 
-func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBackend) {
+func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBackend, onDiagnostic func(plugin.Diagnostic)) {
 	if backend == nil {
 		http.Error(w, "call backend unavailable", http.StatusInternalServerError)
 		return
@@ -98,8 +99,16 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 			sendEvent,
 		)
 		if callErr != nil {
+			if diagnostic, ok := callDiagnostic(request, callErrorCode(callErr), callErr.Error()); ok && onDiagnostic != nil {
+				onDiagnostic(diagnostic)
+			}
 			sendFinal(callErrorResponse(request, callErr))
 			return
+		}
+		if frame != nil && frame.ErrorCode != "" {
+			if diagnostic, ok := callDiagnostic(request, frame.ErrorCode, frame.ErrorMsg); ok && onDiagnostic != nil {
+				onDiagnostic(diagnostic)
+			}
 		}
 		sendFinal(frame)
 	}()
@@ -137,4 +146,20 @@ func callErrorResponse(request browserCall, err error) *protocol.Frame {
 
 func callErrorCode(err error) string {
 	return host.ErrorCode(err, protocol.CodeHandlerError)
+}
+
+// callDiagnostic turns a failed browser call into a user-facing diagnostic.
+// Only calls the browser asked for reach this path, so tool-call failures the
+// agent absorbs mid-turn stay out of the panel, and an explicit stop is not a
+// fault the user needs to see.
+func callDiagnostic(request browserCall, code, message string) (plugin.Diagnostic, bool) {
+	if code == "" || code == protocol.CodeCallCancelled {
+		return plugin.Diagnostic{}, false
+	}
+	return plugin.Diagnostic{
+		Plugin:  request.Capability,
+		Path:    request.Capability + "." + request.Method,
+		Code:    code,
+		Message: message,
+	}, true
 }

@@ -24,7 +24,11 @@ Session 属于一个 Workspace。创建时传入 `workspace_id`，Session 将它
 
 Workspace 绑定在 Session 生命周期内不可修改。`session.update` 只更新显示名称。
 
+创建时还可以传入 `model` 和 `context_window`，它们同样写入 `session_start`，创建后不变。Session 不校验模型目录，
+只保存调用方选择的模型 id 和窗口。
+
 历史列表和打开标签按当前 Workspace 过滤。每个 Workspace 分别保留选中会话，切换 Workspace 不关闭其他 Workspace 的后台 Turn。
+切换 Workspace 时优先恢复该 Workspace 的选中会话；没有记录时选中最新会话；没有会话时清空选中。
 
 ## 3. 持久化
 
@@ -49,7 +53,17 @@ plugins/session/sessions/<session_id>.jsonl
 
 ## 4. Fact 真源
 
-最终 assistant `message` Fact 是正文真源。LLM delta 不写入 Session。刷新后从 Fact 重建 UI。
+Fact Log 只追加，不更新、不删除。最终 assistant `message` Fact 是正文真源。LLM delta 不写入 Session。刷新后从 Fact 重建 UI。
+
+model-context 会把渲染后的 system prompt、runtime context、压缩摘要和请求快照写成 Facts。`session.derive` 把这些内容投影为模型可见消息：
+
+- 最新 system prompt 放到头部；
+- 最新 active 摘要用 shadow range 遮蔽旧消息；
+- 最新 runtime context 放在摘要之后；
+- 旧 tool result 按配置替换为确定性 stub；
+- 原始消息始终保留在日志中。
+
+压缩只追加 `context_summary` 与 `context_compaction`，不删除旧消息。`context_snapshot` 记录某一步实际发送的 surface 和 hash。
 
 ## 5. 配置
 
@@ -72,12 +86,26 @@ Session 拥有：
 | `session-history` | left | 会话列表和元数据 |
 | `session-chat` | center | 消息、Turn 和 Stream Draft |
 | `session-trace` | right | Fact Trace |
+| `session-dock` | bottom | 模型、API usage、上下文占用和 Turn 状态 |
 
-`session.state` 负责重建三个 UI State。`session.stream.update` 更新临时 Stream Draft。最终 assistant `message` Fact 到达后，Session 清除 Draft。
+`session.state` 负责重建前三个 UI State，`session.dock` 负责重建底部 Dock State。`session.stream.update` 更新临时 Stream Draft。
+最终 assistant `message` Fact 到达后，Session 清除 Draft。
 
-Session Runtime 是这三个 Component 的直接驱动者。llm-openai 不直接渲染输出。
+`session-dock` 的上下文百分比使用最近一次 `llm_usage` 的 `prompt_tokens` 除以模型窗口；会话累计用量同样来自 API 返回值。
+`context_snapshot` 的 `token_estimate` 只在明细面板中标注为估算。面板通过 `model-context.inspect` 展开实际发送的消息，
+通过 `model-context.build` 预览下一次请求。没有选中会话时 dock 隐藏，Host 的 bottom Slot 也随之隐藏。
+
+Session Runtime 是这些 Component 的直接驱动者。llm-openai 不直接渲染输出。
 
 当前交互包括 Workspace 选择与添加、按 Workspace 过滤会话、会话搜索、多会话标签、按会话保留输入草稿、后台会话运行指示、底部消息输入框、流式状态、停止生成、消息和代码复制、思考过程折叠、回到最新和稳定 revision。
+
+聊天消息按 Turn 折叠：完成轮默认收起过程，只保留用户消息、上下文块和最终回答；Turn 头显示状态、过程条数、工具数和时长。
+没有过程行的轮次显示状态行，零工具完成的轮次标注「未调用工具」。展开后，工具结果、reasoning 和 tool_calls 仍各自可折叠。
+折叠选择只存在浏览器内存中。
+
+左侧“新建会话”旁有模型下拉，通过 `llm.models.list` 读取模型目录；模型目录的编辑在插件中心 → 设置 → `llm-openai` 中完成。
+创建会话时选中的 `model/context_window` 写入 `session_start`。设置保存成功后 Host 派发 `liteagent:settings-saved`，
+下拉会重新读取模型目录。llm 能力不可用时该行隐藏，会话仍按 llm 的默认模型运行。
 
 ## 7. 文档
 

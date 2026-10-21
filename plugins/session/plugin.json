@@ -20,7 +20,8 @@
     "components": [
       { "tag": "session-history", "mount_id": "history", "slot": "left" },
       { "tag": "session-chat", "mount_id": "chat", "slot": "center" },
-      { "tag": "session-trace", "mount_id": "trace", "slot": "right" }
+      { "tag": "session-trace", "mount_id": "trace", "slot": "right" },
+      { "tag": "session-dock", "mount_id": "dock", "slot": "bottom" }
     ]
   }
 }

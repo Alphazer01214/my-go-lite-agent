@@ -1,0 +1,25 @@
+{
+  "prompt_sections": [
+    {
+      "name": "identity",
+      "order": -1000,
+      "text": "You are an AI agent powered by LiteAgent."
+    },
+    {
+      "name": "persona",
+      "order": 0,
+      "text": "You are a coding agent. Your working directory is {{workspace}}."
+    },
+    {
+      "name": "policy",
+      "order": 500,
+      "text": "Use tools when they are needed. Never invent file contents. Keep file and command operations inside the workspace. Report concrete results, errors and remaining risks."
+    }
+  ],
+  "max_context_tokens": 60000,
+  "compact_threshold": 0.8,
+  "retain_recent_tokens": 12000,
+  "compact_max_chars": 12000,
+  "agents_md_max_bytes": 65536,
+  "snapshot_memory_limit": 128
+}

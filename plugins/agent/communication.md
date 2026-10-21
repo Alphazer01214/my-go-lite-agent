@@ -40,6 +40,8 @@
 | `session_id` | 否 | 为空时创建 Session |
 | `workspace_id` | 否 | 创建 Session 时绑定的 Workspace |
 | `workspace` | 否 | Workspace 路径一致性校验 |
+| `model` | 否 | 覆盖 Session 元数据里的模型 |
+| `context_window` | 否 | 模型上下文窗口，供 model-context 约束压缩预算 |
 | `max_steps` | 否 | 覆盖配置值 |
 | `allowed_tools` | 否 | 非空时只保留交集工具 |
 | `denied_tools` | 否 | 从交集或全集中移除工具 |
@@ -65,8 +67,16 @@
 ```
 
 `seqs` 是本 Turn 写入的 Session seq 列表。取消时保存已累计 assistant 正文，并写入 `turn_end(cancelled)`。
+同一批次还会写入一条 `role=user`、`meta.kind=turn_cancelled` 的提示 Fact。
+提示要求模型不要继续被取消的任务，避免下一轮误续写。
 
-`loop.turn` 写入 `turn_start` 后发生错误时，当前实现会写入 `turn_end(error)`。`meta.error` 保存原始错误。Browser Call 仍返回原始错误。
+`loop.turn` 写入 `turn_start` 后发生错误时，当前实现会写入 `turn_end(error)`。`meta.error` 保存原始错误，稳定码保存在 `meta.error_code`。Browser Call 仍返回原始错误。
+
+模型返回零个工具调用时按上游 `finish_reason` 判定终态：
+`length` 返回 `llm_output_truncated`，`content_filter` 返回 `llm_content_filtered`，
+`tool_calls` 或 `function_call` 却没有任何调用时返回 `llm_tool_calls_missing`。
+以上三种都写 `turn_end(error)`，并保留已产生的正文。
+`stop` 仍按 `completed` 记录，`turn_end.meta` 带 `tool_calls` 计数。
 
 ## 3. loop.cancel
 
@@ -120,20 +130,44 @@ flowchart LR
     A -->|session.append| S
     A -->|session.derive| S
     A -->|session.stream.update| S
-    A -.->|model-context.build| M[model-context]
-    A -->|llm.complete/cancel| L[llm-openai]
+    A -->|llm.complete| M[model-context]
+    M -->|Proceed| L[llm-openai]
     A -.->|tools.list/call| T[tools]
 ```
 
-`model-context` 和 `tools` 是弱依赖：能力缺失时回退到 `session.derive`，或跳过工具阶段。
-回退不是静默的：`request_header` 的 `meta` 会带上 `degraded`，内容是降级原因
-（`model-context unavailable: …` 或 `tools unavailable: …`）。这样调用方能从 Session 日志里看到本轮降级过。
+`model-context` 是 `llm.complete` 链上的可选消费者，agent 不再显式调用 `model-context.build`。
+agent 只发送基线：`session.derive` 加 `tools.list`。model-context 活跃时会写 system / runtime Facts，再从 Session 重新投影并替换内容区。
 
-Agent 每次 Turn 都调用 `session.info` 读取 Session 已绑定的 `workspace_id` 和规范路径。
+`tools` 是弱依赖：能力缺失时跳过工具阶段。
+回退不是静默的：`request_header` 的 `meta` 会带上 `degraded`，内容是降级原因（例如 `tools unavailable: …`）。
+
+`llm.complete` 的 `meta`：
+
+```json
+{
+  "session_id": "s-1",
+  "turn_id": "t-1",
+  "step_id": "t-1-s1",
+  "mode": "tool_calling",
+  "scheme": "tool_calling",
+  "workspace_id": "ws-1",
+  "workspace": "E:/project",
+  "model": "deepseek-chat",
+  "context_window": 65536
+}
+```
+
+`model` 与 `context_window` 来自 Session 元数据，并在 Turn 开始时通过 `llm.models.list` 解析。
+会话记录的模型仍在目录中时原样使用；已从目录移除时回退到当前默认模型，并在 `request_header.model_fallback_from`
+记录原模型名。目录不可用时保留 Session 值。`context_window` 供 model-context 约束压缩预算。
+本阶段 `mode` 与 `scheme` 同值。后续 agent 模式切片会改用独立的 mode。
+
+Agent 每次 Turn 都调用 `session.info` 读取 Session 已绑定的 `workspace_id`、规范路径和模型元数据。
 
 `workspace` 为空时直接使用 Session 值。显式给出时必须与 Session 值指向同一目录，否则返回 `bad_arguments`。Session 没有 Workspace 时同样返回 `bad_arguments`（消息为 `session workspace is required`）。
 
-Agent 在 `tools.call` 中传递 `session_id`、规范 `workspace` 和模型提供的 `call_id`。Provider 应以 `session_id` 重新解析 Workspace，不信任调用路径。
+Agent 在 `tools.call` 中传递七个字段：`name`、`arguments`、`session_id`、规范 `workspace`、`workspace_id`、`mode` 和模型提供的 `call_id`。
+Provider 应以 `session_id` 重新解析 Workspace，不信任调用路径。
 
 ## 6. Session Fact 序列
 
@@ -144,12 +178,16 @@ turn_start
 message(user)
 step_start
 request_header
+[model-context: message(system), message(runtime_context), context_snapshot]
 llm_usage
 message(assistant)
 message(tool)*
 step_end
 turn_end
 ```
+
+方括号内的 Fact 由 model-context 在 `llm.complete` 中写入，只有内容变化时才追加。
+`context_snapshot` 是模型实际输入的权威记录；`request_header` 是 agent 的基线摘要。
 
 `turn_id`、`step_id` 和 `plugin` 写入对应 Fact 的 `meta`。
 
@@ -158,9 +196,15 @@ turn_end
 | 字段 | 含义 |
 |---|---|
 | `step` | 当前步序号 |
-| `model_context_id` | `model-context.build` 返回的上下文标识；回退时为空 |
-| `token_estimate` | `model-context.build` 的估算；回退时为 0 |
-| `degraded` | 仅在回退时出现，说明降级原因 |
+| `mode` | 当前模式，本阶段等于 scheme |
+| `scheme` | 当前工具方案 |
+| `model` | 会话选择的模型；未选择时省略 |
+| `context_window` | 会话选择的模型窗口；未选择时省略 |
+| `token_estimate` | agent 基线消息与工具的估算；实际值以 `context_snapshot` 为准 |
+| `degraded` | 仅在工具不可用时出现 |
+
+`llm_usage` 的 `meta` 包含 `usage`、`model` 和 `context_window`。后两者来自 llm 的最终响应，表示实际执行的模型与窗口。
+用量口径是上游 API 返回的 `prompt_tokens/completion_tokens/total_tokens`，不是本地估算。
 
 `step_end` 的 `meta.reason` 取值：
 
@@ -171,7 +215,8 @@ turn_end
 | `cancelled` | 工具执行途中被取消，本步在此收口并结束 Turn |
 
 工具循环中途取消时，assistant Fact 已经记下了本步的全部 `tool_calls`，但只有执行到的那几个有了结果。
-因此此时写 `step_end(cancelled)` 并结束 Turn，不再写 `step_end(tool_calls)`——
+未执行的调用会补写 `role=tool` 的取消结果（`is_error=true`、`cancelled=true`），保证每个
+`tool_call_id` 都有对应结果；随后写 `step_end(cancelled)` 并结束 Turn，不再写 `step_end(tool_calls)`——
 否则 Session 里会留下没有对应结果的 `tool_call_id`，下游按 id 配对时会错。
 
 当前实现补充：
@@ -236,7 +281,10 @@ Agent 没有顶层 Component。Agent 不直接调用 `setData` 或 `runCommand`�
 | `input` 为空 | `bad_arguments` |
 | Session 创建或写入失败 | 返回错误 |
 | LLM 调用失败 | 返回 `llm_upstream` 或下游错误 |
-| 工具失败 | 写 tool error 和 `is_error`，继续 Turn |
+| 工具失败 | 写 `tool error [code]:` 和 `is_error`，`meta.error_code` 保存稳定码，继续 Turn |
+| 上游截断 | `llm_output_truncated`，写 `turn_end(error)` |
+| 上游内容过滤 | `llm_content_filtered`，写 `turn_end(error)` |
+| 声称工具调用但结果为空 | `llm_tool_calls_missing`，写 `turn_end(error)` |
 | 达到 `max_steps` | 最后一步仍有工具调用时写 `turn_end(max_steps)`；最后一步正常收束时写 `turn_end(completed)` |
 | 取消 | 中止 LLM Call；工具执行途中取消时先写 `step_end(cancelled)`，再写 `turn_end(cancelled)` |
 | `config.set` / `settings.save` 写盘失败 | 返回 `handler_error`，内存值已生效但未持久化 |

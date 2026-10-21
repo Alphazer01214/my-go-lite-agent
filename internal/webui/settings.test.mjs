@@ -79,6 +79,38 @@ test("normalizes settings get and save envelopes", () => {
 	});
 });
 
+test("normalizes list fields and keeps select values", () => {
+	const values = collectSettingsValues(
+		[
+			{
+				key: "models",
+				type: "list",
+				item_fields: [
+					{ key: "id", type: "string" },
+					{ key: "label", type: "string" },
+					{ key: "context_window", type: "number" },
+				],
+			},
+			{ key: "default_model", type: "select" },
+		],
+		{
+			models: [
+				{ id: "a", label: "Model A", context_window: "8192" },
+				{ id: "b", label: "Model B", context_window: "" },
+				{ id: "", label: "", context_window: "" },
+			],
+			default_model: "a",
+		},
+	);
+	assert.deepEqual(values, {
+		models: [
+			{ id: "a", label: "Model A", context_window: 8192 },
+			{ id: "b", label: "Model B", context_window: 0 },
+		],
+		default_model: "a",
+	});
+});
+
 test("renders settings fields and calls lifecycle hooks", () => {
 	const document = fakeDocument();
 	const root = document.createElement("div");

@@ -117,7 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /bridge/ui", s.serveUI)
 	mux.HandleFunc("POST /bridge/pick-directory", sameOriginHandler(s.servePickDirectory))
 	mux.HandleFunc("POST /bridge/call", sameOriginHandler(func(w http.ResponseWriter, r *http.Request) {
-		serveBrowserCall(w, r, s.backend)
+		serveBrowserCall(w, r, s.backend, s.PushDiagnostic)
 	}))
 	mux.HandleFunc("GET /plugins/{plugin}/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		servePluginResource(w, r, s.currentRegistry(), r.PathValue("plugin"), r.PathValue("path"))

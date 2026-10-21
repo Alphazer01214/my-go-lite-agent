@@ -11,15 +11,41 @@
 7. 示例隔离。项目整体文档只能把具体插件当非核心示例，不能把它写成项目组成部分。
 8. 不泄漏私有格式。插件内部类型不得直接成为平台公共契约。
 9. 标注状态。文档区分“当前实现”“目标契约”和“暂不实现”。
+10. 单一真源。一类事实只允许一个文档定义，其他文档引用不复制。
+11. 统一状态标注。非平台契约文档首行写明状态。设计稿用“当前实现”“目标契约”“暂不实现”三档，过程记录用 [docs/archive/progress/README.md](docs/archive/progress/README.md) 第 1 节的五档。
+12. 归档不删。过程文档写完就冻结。废止时在状态标注里写清取代者，不删除文件。
+13. 索引唯一。完整文档表只存在于 [README.md](README.md)。子目录 README 只放本目录内部索引。
+14. 代码地图不作真源。`docs/reference/project-map/` 只作导航，事实以代码和平台文档为准。
+15. 插件文档只写实现。`plugins/<name>/communication.md` 只保留当前实现，目标契约写在 `docs/design/plugins/`。
 
 ## 文档归属
 
 | 内容 | 归属 |
 |---|---|
-| Frame、路由、Manifest、WebUI 平台 | 根目录、`docs/` |
+| 术语 | [CONTEXT.md](CONTEXT.md) |
+| Frame、路由、Manifest、SDK、WebUI 平台 | `docs/platform/` |
+| 跨插件组合方案 | `docs/design/`，并明确涉及的插件 |
+| 插件设计稿（目标契约） | `docs/design/plugins/` |
+| Prompt 契约 | `docs/prompts/` |
 | 插件方法、payload、状态、组件 | `plugins/<name>/` |
 | 插件目录和状态总览 | `plugins/README.md` |
-| 跨插件组合方案 | 独立方案文档，并明确涉及的插件 |
+| 代码符号索引与调用图 | `docs/reference/project-map/` |
+| 过程记录、调试日志、决策留底 | `docs/archive/progress/` |
+| 参考材料 | `docs/research/` |
+| 测试规程与压力场景 | [PRESSURE.md](PRESSURE.md) |
+
+设计稿与实现文档冲突时，以实现文档为准，并在设计稿里标注状态。
+
+`docs/` 的目录按用途分，不按主题分：
+
+| 目录 | 用途 | 判定标准 |
+|---|---|---|
+| `docs/platform/` | 平台契约 | 照着它能实现 |
+| `docs/design/` | 目标契约 | 照着它能规划 |
+| `docs/prompts/` | Prompt 契约 | 独立体系，自成一类 |
+| `docs/reference/` | 易失导航 | 只指路，不定义事实 |
+| `docs/archive/` | 过程记录 | 写完就冻结，只增不改 |
+| `docs/research/` | 参考材料 | 外部资料，不作为依据 |
 
 ## 文档检查
 
@@ -33,3 +59,9 @@
 - 插件文档没有复制 Host 协议；
 - 图中模块名与代码目录一致；
 - 链接指向存在的文件。
+
+## 测试流程
+
+**创建副本可能影响对真实情况的判断，使用模拟方法可能无法定位全部问题**。
+涉及到具体测试/debug场景时，请直接在项目构建成果 `dist/` 下运行项目。
+允许直接使用隐私内容进行测试，**不要**在隔离环境中进行测试。

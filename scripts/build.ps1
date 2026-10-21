@@ -110,6 +110,8 @@ if ($missingPlugins.Count -gt 0) {
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
 $llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
 $agentDistCfg = Join-Path $dist "plugins\agent\config.json"
+$mcDistCfg = Join-Path $dist "plugins\model-context\config.json"
+$shellDistCfg = Join-Path $dist "plugins\shell-tools\config.json"
 $sessDistDir = Join-Path $dist "plugins\session\sessions"
 $sessionWorkspaceFile = Join-Path $sessDistDir "workspaces.json"
 $legacyWorkspaceFile = Join-Path $dist "plugins\workspace\workspaces.json"
@@ -118,6 +120,8 @@ $llmStash = $null
 $sessStash = $null
 $legacyWorkspaceStash = $null
 $agentStash = $null
+$mcStash = $null
+$shellStash = $null
 if (Test-Path $llmDistCfg) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
     $llmStash = Join-Path $stash "llm-config.json"
@@ -127,6 +131,16 @@ if (Test-Path $agentDistCfg) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
     $agentStash = Join-Path $stash "agent-config.json"
     Copy-Item $agentDistCfg $agentStash -Force
+}
+if (Test-Path $mcDistCfg) {
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $mcStash = Join-Path $stash "model-context-config.json"
+    Copy-Item $mcDistCfg $mcStash -Force
+}
+if (Test-Path $shellDistCfg) {
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $shellStash = Join-Path $stash "shell-config.json"
+    Copy-Item $shellDistCfg $shellStash -Force
 }
 if (Test-Path $sessDistDir) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
@@ -385,6 +399,16 @@ try {
         Copy-Item $agentStash $agentDistCfg -Force
         Write-Host "agent config: preserved dist config.json (schemes survive rebuilds)"
     }
+    if ($null -ne $mcStash -and -not (Test-Path $mcDistCfg)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $mcDistCfg) -Force | Out-Null
+        Copy-Item $mcStash $mcDistCfg -Force
+        Write-Host "model-context config: preserved dist config.json"
+    }
+    if ($null -ne $shellStash -and -not (Test-Path $shellDistCfg)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $shellDistCfg) -Force | Out-Null
+        Copy-Item $shellStash $shellDistCfg -Force
+        Write-Host "shell-tools config: preserved dist config.json"
+    }
     if ($null -ne $sessStash) {
         $sessTarget = Join-Path $dist "plugins\session\sessions"
         New-Item -ItemType Directory -Path $sessTarget -Force | Out-Null
@@ -426,6 +450,24 @@ try {
             New-Item -ItemType Directory -Path (Split-Path -Parent $agentDistCfg) -Force | Out-Null
             Copy-Item $agentExample $agentDistCfg -Force
             Write-Host "agent config: seeded default schemes (chat/tool_calling/coding)"
+        }
+    }
+    # Seed model-context config.json once; later rebuilds keep user edits.
+    if (-not (Test-Path $mcDistCfg)) {
+        $mcExample = Join-Path $root "plugins\model-context\config.example.json"
+        if (Test-Path $mcExample) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $mcDistCfg) -Force | Out-Null
+            Copy-Item $mcExample $mcDistCfg -Force
+            Write-Host "model-context config: seeded prompt sections and budget defaults"
+        }
+    }
+    # Seed shell-tools config.json once; later rebuilds keep user edits.
+    if (-not (Test-Path $shellDistCfg)) {
+        $shellExample = Join-Path $root "plugins\shell-tools\config.example.json"
+        if (Test-Path $shellExample) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $shellDistCfg) -Force | Out-Null
+            Copy-Item $shellExample $shellDistCfg -Force
+            Write-Host "shell-tools config: seeded interpreter policy"
         }
     }
 

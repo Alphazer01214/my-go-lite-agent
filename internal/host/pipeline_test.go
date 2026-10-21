@@ -1,6 +1,7 @@
 package host
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -34,6 +35,26 @@ func TestPipelineSelectsConsumersByPriority(t *testing.T) {
 	third, err := h.selectPipelineCandidate(state)
 	if err != nil || third.instanceID != "low" {
 		t.Fatalf("third = %#v, err = %v", third, err)
+	}
+}
+
+func TestNoActiveProviderError(t *testing.T) {
+	h := newTestHost("provider")
+	h.routes["llm.complete"] = "provider"
+	h.plugins["provider"].state = ProviderStateInactive
+
+	if err := h.noActiveProviderError("llm", "complete"); !errors.Is(err, ErrPluginNotReady) {
+		t.Fatalf("inactive provider error = %v, want plugin_not_ready", err)
+	}
+
+	h.plugins["provider"].state = ProviderStateActive
+	if err := h.noActiveProviderError("llm", "complete"); err != nil {
+		t.Fatalf("active provider error = %v, want nil", err)
+	}
+
+	delete(h.routes, "llm.complete")
+	if err := h.noActiveProviderError("llm", "complete"); !errors.Is(err, ErrPluginNotReady) {
+		t.Fatalf("missing provider error = %v, want plugin_not_ready", err)
 	}
 }
 

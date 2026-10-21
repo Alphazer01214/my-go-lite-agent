@@ -120,11 +120,15 @@ fi
 STASH="$(mktemp -d)"
 LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
 AGENT_DIST_CFG="$DIST/plugins/agent/config.json"
+MC_DIST_CFG="$DIST/plugins/model-context/config.json"
+SHELL_DIST_CFG="$DIST/plugins/shell-tools/config.json"
 SESS_DIST_DIR="$DIST/plugins/session/sessions"
 SESSION_WORKSPACE_FILE="$SESS_DIST_DIR/workspaces.json"
 LEGACY_WORKSPACE_FILE="$DIST/plugins/workspace/workspaces.json"
 [[ -f "$LLM_DIST_CFG" ]] && cp "$LLM_DIST_CFG" "$STASH/llm-config.json"
 [[ -f "$AGENT_DIST_CFG" ]] && cp "$AGENT_DIST_CFG" "$STASH/agent-config.json"
+[[ -f "$MC_DIST_CFG" ]] && cp "$MC_DIST_CFG" "$STASH/model-context-config.json"
+[[ -f "$SHELL_DIST_CFG" ]] && cp "$SHELL_DIST_CFG" "$STASH/shell-config.json"
 [[ -d "$SESS_DIST_DIR" ]] && cp -R "$SESS_DIST_DIR" "$STASH/sessions"
 [[ -f "$LEGACY_WORKSPACE_FILE" ]] && cp "$LEGACY_WORKSPACE_FILE" "$STASH/legacy-workspaces.json"
 
@@ -339,6 +343,16 @@ if [[ -f "$STASH/agent-config.json" && ! -f "$AGENT_DIST_CFG" ]]; then
   cp "$STASH/agent-config.json" "$AGENT_DIST_CFG"
   echo "agent config: preserved dist config.json (schemes survive rebuilds)"
 fi
+if [[ -f "$STASH/model-context-config.json" && ! -f "$MC_DIST_CFG" ]]; then
+  mkdir -p "$(dirname "$MC_DIST_CFG")"
+  cp "$STASH/model-context-config.json" "$MC_DIST_CFG"
+  echo "model-context config: preserved dist config.json"
+fi
+if [[ -f "$STASH/shell-config.json" && ! -f "$SHELL_DIST_CFG" ]]; then
+  mkdir -p "$(dirname "$SHELL_DIST_CFG")"
+  cp "$STASH/shell-config.json" "$SHELL_DIST_CFG"
+  echo "shell-tools config: preserved dist config.json"
+fi
 if [[ -d "$STASH/sessions" ]]; then
   mkdir -p "$DIST/plugins/session"
   cp -R "$STASH/sessions/." "$SESS_DIST_DIR/"
@@ -372,6 +386,8 @@ seed_dist_config() {
 }
 seed_dist_config "llm-openai" "$LLM_DIST_CFG"
 seed_dist_config "agent" "$AGENT_DIST_CFG"
+seed_dist_config "model-context" "$MC_DIST_CFG"
+seed_dist_config "shell-tools" "$SHELL_DIST_CFG"
 
 # ── docs ─────────────────────────────────────────────────────────────────────
 copy_dist_asset "README.md" "$DIST/"

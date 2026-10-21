@@ -139,3 +139,36 @@ func TestChatStateKeepsActiveTurnRunning(t *testing.T) {
 		t.Fatalf("active turn was modified: %#v", facts)
 	}
 }
+
+func TestCreatePersistsModel(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	created, err := p.create(context.Background(), createIn{
+		SessionID: "s1", Workspace: t.TempDir(),
+		Model: " deepseek-reasoner ", ContextWindow: 131072,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := p.info(infoIn{SessionID: created.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Model != "deepseek-reasoner" || info.ContextWindow != 131072 {
+		t.Fatalf("info=%+v", info)
+	}
+	facts, _, err := p.readFacts("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) == 0 || facts[0].Type != TypeSessionStart {
+		t.Fatalf("facts=%+v", facts)
+	}
+	var meta Meta
+	if err := json.Unmarshal(facts[0].Meta, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Model != "deepseek-reasoner" || meta.ContextWindow != 131072 {
+		t.Fatalf("meta=%+v", meta)
+	}
+}

@@ -51,6 +51,10 @@ type completeOut struct {
 	ToolCalls    []toolCall `json:"tool_calls,omitempty"`
 	FinishReason string     `json:"finish_reason"`
 	Usage        usage      `json:"usage"`
+	// Model and ContextWindow describe what actually ran. The caller records
+	// them so session audit does not have to guess the configured default.
+	Model         string `json:"model,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
 }
 
 type chunkText struct {
@@ -75,20 +79,44 @@ type llmCancelOut struct {
 	Cancelled bool   `json:"cancelled"`
 }
 
+type modelConfig struct {
+	ID            string `json:"id"`
+	Label         string `json:"label,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
 type config struct {
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
+	// Model is the legacy single-model field. It always mirrors DefaultModel
+	// at runtime and is still written so older config files stay readable.
+	Model        string        `json:"model,omitempty"`
+	Models       []modelConfig `json:"models,omitempty"`
+	DefaultModel string        `json:"default_model,omitempty"`
 }
 
 type configGetOut struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
+	BaseURL      string        `json:"base_url"`
+	APIKey       string        `json:"api_key"`
+	Model        string        `json:"model"`
+	Models       []modelConfig `json:"models"`
+	DefaultModel string        `json:"default_model"`
 }
 
 type configSetIn struct {
-	BaseURL string `json:"base_url,omitempty"`
-	APIKey  string `json:"api_key,omitempty"`
-	Model   string `json:"model,omitempty"`
+	BaseURL      string         `json:"base_url,omitempty"`
+	APIKey       string         `json:"api_key,omitempty"`
+	Model        string         `json:"model,omitempty"`
+	Models       *[]modelConfig `json:"models,omitempty"`
+	DefaultModel string         `json:"default_model,omitempty"`
+}
+
+type modelsListOut struct {
+	DefaultModel string        `json:"default_model"`
+	Models       []modelConfig `json:"models"`
+}
+
+type modelsSetIn struct {
+	Models       []modelConfig `json:"models"`
+	DefaultModel string        `json:"default_model,omitempty"`
 }

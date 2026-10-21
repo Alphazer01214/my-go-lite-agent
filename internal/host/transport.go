@@ -81,12 +81,9 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, err.Error())
 			return err
 		}
-		if h.declaresConsumedMethod(frame.Capability, frame.Method) {
-			err := fmt.Errorf("no active Consumer for %s.%s: %w",
-				frame.Capability, frame.Method, ErrRouteFailed)
-			h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeRouteFailed, err.Error())
-			return err
-		}
+		// 缺席即放行。声明了 consumes 但没有活跃 Consumer 时，跳过这一跳，
+		// 直接交给该 (capability, method) 的 Provider。只有连 Provider 都不存在，
+		// 才算方法缺失。
 		ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
 		if ownerPlugin == "" {
 			err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
@@ -116,12 +113,6 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		return err
 	}
 	return nil
-}
-
-func (h *Host) declaresConsumedMethod(capability, method string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.declaresConsumedMethodLocked(capability, method)
 }
 
 func isPipelineNoCandidate(err error) bool {
