@@ -6,7 +6,7 @@ const LA = {};
 
 LA.facts = [
   { k: '6', t: '平台模块', d: 'protocol、pluginsdk、host、plugin、webui、cmd' },
-  { k: '7', t: '已发布插件', d: 'agent、session、llm-openai、model-context、tools、file-tools、shell-tools' },
+  { k: '8', t: '已发布插件', d: 'agent、session、llm-openai、model-context、tools、file-tools、shell-tools、sandbox' },
   { k: 'v2', t: 'Frame 版本', d: '线协议与 Manifest 版本独立演进' },
   { k: '16 MiB', t: '单条 Frame 上限', d: '4 字节大端长度 + UTF-8 JSON body' },
   { k: '30', t: '稳定 error_code', d: 'protocol/errors.go 定义，Host 实际产出其中大部分' },
@@ -149,6 +149,7 @@ LA.pluginPos = {
   tools: { x: 760, y: 330 },
   'file-tools': { x: 680, y: 470 },
   'shell-tools': { x: 880, y: 470 },
+  'sandbox': { x: 760, y: 190 },
 };
 
 LA.plugins = [
@@ -229,6 +230,17 @@ LA.plugins = [
     provides: ['shell'], dependsOn: ['tools'], requires: ['tools'], priority: 0,
     methods: [['shell.execute', '工具名 shell_execute，RiskCritical']],
     mounts: [], note: '取消时终止进程树（Windows 用 Job Object，Unix 用进程组），这是实现细节不是注册方法。交互式终端与后台 Shell 未实现。' },
+
+  { name: 'sandbox', label: 'sandbox', caps: ['sandbox'], status: '当前实现',
+    color: 'var(--rose)', toggleable: true, core: false,
+    desc: '工具调用链上的权限裁决。只裁决，不执行工具。',
+    provides: ['sandbox'], dependsOn: ['tools'], requires: ['session', 'tools'], priority: 500,
+    methods: [['tools.call (Consumer, prio 500)', 'allow / modify / deny 三态裁决'],
+      ['file.write / replace / patch、shell.execute (Consumer)', '直连高危能力也过裁决'],
+      ['sandbox.check', '干跑一次裁决，不写审计'],
+      ['sandbox.list_rules / set_rule', '规则集读写，规则只升不降'],
+      ['sandbox.settings.get / save', '默认动作与审计保留天数']],
+    mounts: [], note: 'autostart 为 false，从插件中心启动后进链。缺席即放行是部署约定，不是平台保证。确认流与确认面板尚未实现。' },
 ];
 
 LA.edges = [
@@ -240,6 +252,7 @@ LA.edges = [
   { from: 'agent', to: 'model-context', kind: 'requires', label: '仅声明，不直连' },
   { from: 'model-context', to: 'session', kind: 'requires', label: 'session.derive / append', dip: 132 },
   { from: 'model-context', to: 'llm-openai', kind: 'pipeline', label: 'Proceed · prio 2000' },
+  { from: 'sandbox', to: 'tools', kind: 'pipeline', label: 'Proceed · prio 500' },
 ];
 
 LA.actors = [
@@ -483,7 +496,7 @@ LA.rules = [
 ];
 
 LA.nongoals = ['多用户', '远程访问', '跨设备同步', '插件市场', '任意第三方代码沙箱', '调度配额', '在线迁移', '实例状态恢复'];
-LA.removed = ['sandbox', 'web-tools', 'subagent'];
+LA.removed = ['web-tools', 'subagent'];
 LA.notImplemented = ['交互式终端', '后台 Shell'];
 
 LA.cmds = [

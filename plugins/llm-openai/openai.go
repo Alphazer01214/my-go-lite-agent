@@ -91,14 +91,15 @@ func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (co
 	if model == "" {
 		model = cfg.DefaultModel
 	}
-	if model == "" {
-		model = cfg.Model
-	}
-	if model == "" {
-		model = defaultModelID
+	// The model id routes the request: each catalog entry carries its own
+	// endpoint and key. An unknown id cannot be routed, so it is an error
+	// instead of a silent fallback to whatever the default provider is.
+	entry := findModel(cfg.Models, model)
+	if entry == nil {
+		return completeOut{}, errBadArguments(fmt.Sprintf("unknown model %q", model))
 	}
 	req := upstreamRequest{
-		Model:       model,
+		Model:       entry.ID,
 		Messages:    in.Messages,
 		Tools:       in.Tools,
 		Stream:      stream,
@@ -111,30 +112,30 @@ func (p *plugin) complete(ctx context.Context, in completeIn, emit emitFunc) (co
 		req.StreamOptions = &struct {
 			IncludeUsage bool `json:"include_usage"`
 		}{IncludeUsage: true}
-		out, err = p.completeStream(ctx, cfg, req, emit)
+		out, err = p.completeStream(ctx, entry.BaseURL, entry.APIKey, req, emit)
 	} else {
-		out, err = p.completeJSON(ctx, cfg, req)
+		out, err = p.completeJSON(ctx, entry.BaseURL, entry.APIKey, req)
 	}
 	if err != nil {
 		return completeOut{}, err
 	}
-	out.Model = model
-	out.ContextWindow = contextWindowFor(cfg.Models, model)
+	out.Model = entry.ID
+	out.ContextWindow = entry.ContextWindow
 	return out, nil
 }
 
-func (p *plugin) completeJSON(ctx context.Context, cfg config, req upstreamRequest) (completeOut, error) {
+func (p *plugin) completeJSON(ctx context.Context, baseURL, apiKey string, req upstreamRequest) (completeOut, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return completeOut{}, errHandler(err.Error())
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return completeOut{}, errUpstream(err.Error())
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(httpReq)
@@ -164,19 +165,19 @@ func (p *plugin) completeJSON(ctx context.Context, cfg config, req upstreamReque
 	return out, nil
 }
 
-func (p *plugin) completeStream(ctx context.Context, cfg config, req upstreamRequest, emit emitFunc) (completeOut, error) {
+func (p *plugin) completeStream(ctx context.Context, baseURL, apiKey string, req upstreamRequest, emit emitFunc) (completeOut, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return completeOut{}, errHandler(err.Error())
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return completeOut{}, errUpstream(err.Error())
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	if cfg.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := &http.Client{Timeout: 0} // stream until server closes
 	resp, err := client.Do(httpReq)

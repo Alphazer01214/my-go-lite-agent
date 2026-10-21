@@ -49,7 +49,7 @@
 
 **关于 `priority: 0`。** tools 是 `tools.call` 接缝的属主，不是消费者。
 它不在接缝的中间位置，因此优先级取链上最低值。
-当前提议的链序是 session 为 1000、sandbox 为 500、tools 为 0。
+链序是 sandbox 为 500、tools 为 0。session 的 1000 还没有落地，它当前不声明 `consumes`。
 链序机制见 [composition-model-context-tools-sandbox.md](../composition-model-context-tools-sandbox.md) 第 5 节。
 
 **关于 `provides` 与保留能力。** `tools` 与 `host` 是保留能力名。
@@ -309,20 +309,26 @@ sandbox 在 `file.write` 这类写键上仍能二次拦截，裁决不会被绕�
 ```mermaid
 sequenceDiagram
     participant A as agent
+    participant S as sandbox
     participant T as tools
     participant H as host
-    participant S as sandbox
     participant F as file-tools
-    A->>T: tools.call
-    T->>T: 查注册表与可用性判定
-    T->>H: 能力调用 file.read
-    H->>S: 接缝 file.read
+    A->>H: tools.call
+    H->>S: 接缝 tools.call
     S-->>H: Proceed
-    H->>F: file.read
+    H->>T: tools.call
+    T->>T: 查注册表与可用性判定
+    T->>H: 能力调用 file.write
+    H->>S: 接缝 file.write
+    S-->>H: Proceed
+    H->>F: file.write
     F-->>H: 工具结果
     H-->>T: 响应
     T-->>A: 工具结果
 ```
+
+sandbox 在 `tools.call` 与 `file.write` 这类写键上都参与。写键在链上被拒时，`tools.call` 这一跳就不会走到分发。
+只读键按 sandbox 的风险档位放行，不进它的消费清单。
 
 ## 6. 工具契约
 

@@ -56,7 +56,7 @@
 |---|---|---|
 | `messages` | 是 | OpenAI chat messages |
 | `tools` | 否 | function tools |
-| `model` | 否 | 本次请求使用的模型；省略时用 `default_model` |
+| `model` | 否 | 本次请求使用的模型 ID；省略时用 `default_model`。ID 决定路由到哪个端点，目录里没有的 ID 返回 `bad_arguments` |
 | `temperature` | 否 | 采样温度 |
 | `max_tokens` | 否 | 最大生成 token |
 | `stream` | 否 | nil 时默认 true |
@@ -90,6 +90,9 @@
 
 `model` 是实际使用的模型。`context_window` 取自模型目录，未知时为 `0`。
 流式模式下，Response 仍返回累计后的完整结果。Event 只用于实时增量。
+
+一次调用打到哪个供应商由模型 ID 决定：目录里每个模型自带 `base_url` 和 `api_key`，
+不同模型可以指向不同供应商。
 
 ## 3. llm.cancel
 
@@ -155,10 +158,13 @@ Event 使用 Request 的 id。`capability.method` 是 `llm.chunk`。
 非流式模式请求：
 
 ```text
-POST {base_url}/chat/completions
-Authorization: Bearer {api_key}
+POST {model.base_url}/chat/completions
+Authorization: Bearer {model.api_key}
 Content-Type: application/json
 ```
+
+`{model.base_url}` 与 `{model.api_key}` 取自本次请求所选模型的目录条目；
+密钥为空时不发送 `Authorization` 头。
 
 流式模式额外设置：
 
@@ -183,14 +189,24 @@ Accept: text/event-stream
     {
       "id": "deepseek-chat",
       "label": "DeepSeek Chat",
-      "context_window": 65536
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "api***key"
+    },
+    {
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "context_window": 128000,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-***oai"
     }
   ],
   "default_model": "deepseek-chat"
 }
 ```
 
-`model` 与 `default_model` 同值，保留旧字段供现有调用方读取。
+`models` 每项含自己的 `base_url` 与脱敏后的 `api_key`。
+顶层 `base_url`、`api_key`、`model` 是旧字段，镜像默认模型条目，保留给现有调用方读取。
 
 ### llm.config.set
 
@@ -205,16 +221,23 @@ Accept: text/event-stream
     {
       "id": "gpt-test",
       "label": "GPT Test",
-      "context_window": 131072
+      "context_window": 131072,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "new-secret"
     }
   ],
   "default_model": "gpt-test"
 }
 ```
 
-`models` 存在时整体替换模型目录；`model` 或 `default_model` 指向目录中不存在的 ID 时会补一条同名模型。
-空字符串不覆盖原值。每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。
-显式提供 `api_key` 时会写入内存并持久化到 `config.json`；清除密钥使用 `llm.settings.save`。
+`models` 存在时整体替换模型目录；`model` 或 `default_model` 指向目录中不存在的 ID 时会补一条同名条目，
+沿用此前默认条目的端点与密钥。顶层 `base_url`/`api_key` 是旧字段：`models` 存在时填给没有自己端点的条目，
+`models` 缺省时更新默认模型那一条。条目里显式写的端点永远优先。
+
+条目级 `api_key` 是三态字段：不传表示保留同 ID 条目的原密钥，空串表示清除，其它值覆盖；
+把 `llm.config.get` 读到的脱敏值原样传回等价于保留，脱敏值永不落盘。
+每次 `llm.complete` 在调用开始时捕获配置快照。配置修改不影响运行中的 Call，并从下一次 Call 开始生效。
+新值会写入 `config.json`；校验失败时不做任何修改。
 
 ### llm.models.list
 
@@ -233,7 +256,7 @@ Accept: text/event-stream
 }
 ```
 
-模型目录只描述同一个 `base_url` 下的模型；`api_key` 不出现在该方法的输出里。
+模型目录的每项只暴露 `id`、`label`、`context_window`；端点和密钥不出现在该方法的输出里。
 
 ### llm.models.set
 
@@ -245,12 +268,16 @@ Accept: text/event-stream
     {
       "id": "deepseek-chat",
       "label": "DeepSeek Chat",
-      "context_window": 65536
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "api***key"
     },
     {
-      "id": "deepseek-reasoner",
-      "label": "DeepSeek Reasoner",
-      "context_window": 65536
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "context_window": 128000,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-***oai"
     }
   ],
   "default_model": "deepseek-chat"
@@ -258,10 +285,12 @@ Accept: text/event-stream
 ```
 
 输出与 `llm.models.list` 相同。`models` 必须非空，ID 必须唯一；`default_model` 省略时取第一项，指向目录外时返回 `bad_arguments`。
+新 ID 必须自带 `base_url`；已存在的 ID 省略 `base_url` 时沿用原端点。`api_key` 三态规则与 `llm.config.set` 相同。
 
-旧配置只有 `model` 时，启动会迁移为单模型目录；`OPENAI_MODEL` 会覆盖默认模型，并在不在目录中时追加一项。
+旧配置只有 `model` 时，启动会迁移为单模型目录；旧的顶层 `base_url`/`api_key` 会填进没有自己端点的条目。
+`OPENAI_MODEL` 会覆盖默认模型，并在不在目录中时追加一项；`OPENAI_BASE_URL`/`OPENAI_API_KEY` 只覆盖默认模型那一条。
 
-`base_url` 在三条输入路径（`config.json`、环境变量、`llm.config.set`）上都会去掉首尾空白和末尾 `/`，
+每个条目的 `base_url` 在三条输入路径（`config.json`、环境变量、`llm.config.set`）上都会去掉首尾空白和末尾 `/`，
 因此不会拼出 `…/v1//chat/completions`。
 
 新值会写入插件目录下的 `config.json`，包括明文 `api_key`。写盘失败时返回 `handler_error`，
@@ -274,19 +303,29 @@ Accept: text/event-stream
 ```json
 {
   "values": {
-    "base_url": "https://api.deepseek.com/v1",
-    "api_key": { "configured": true },
-    "clear_api_key": false,
     "models": [
-      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+      {
+        "id": "deepseek-chat",
+        "label": "DeepSeek Chat",
+        "context_window": 65536,
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "api***key"
+      },
+      {
+        "id": "gpt-4o",
+        "label": "GPT-4o",
+        "context_window": 128000,
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-***oai"
+      }
     ],
     "default_model": "deepseek-chat"
   }
 }
 ```
 
-`api_key` 不回显明文，只报告是否已配置。`models` 用于设置页的模型目录行编辑器，
-`default_model` 用于联动下拉。
+`models` 是设置页的模型目录行编辑器：每行一个模型，各自带自己的端点和脱敏后的 `api_key`。
+脱敏值不回显明文，同时充当“保持不变”的占位符。`default_model` 用于联动下拉。
 
 ### llm.settings.save
 
@@ -295,19 +334,31 @@ Accept: text/event-stream
 ```json
 {
   "values": {
-    "base_url": "https://api.deepseek.com/v1",
-    "api_key": "new-secret",
-    "clear_api_key": false,
     "models": [
-      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+      {
+        "id": "deepseek-chat",
+        "label": "DeepSeek Chat",
+        "context_window": 65536,
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "api***key"
+      },
+      {
+        "id": "gpt-4o",
+        "label": "GPT-4o",
+        "context_window": 128000,
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-new-secret"
+      }
     ],
     "default_model": "deepseek-chat"
   }
 }
 ```
 
-- `api_key` 为空表示不修改；`clear_api_key=true` 时清空密钥，即使同时填写了新 Key。
-- `models` 必须非空，ID 必须唯一；`default_model` 为空时取第一项，指向目录外时返回 `bad_arguments`。
+- `models` 必须非空，ID 必须唯一；新 ID 必须自带 `base_url`，已存在的 ID 省略时沿用原端点。
+- 行内 `api_key` 三态规则与 `llm.config.set` 相同：不传保留，空串清除，其它值覆盖，
+  把读到的脱敏值传回等价于保留。改模型 ID 视为新条目，但脱敏值仍能匹配回原密钥。
+- `default_model` 为空时取第一项，指向目录外时返回 `bad_arguments`。
 - 保存会写入 `config.json`，包括明文 `api_key`；成功后 Host 派发 `liteagent:settings-saved`，
   `session-history` 重新读取 `llm.models.list` 刷新新会话模型下拉。
 
@@ -334,10 +385,12 @@ sequenceDiagram
 |---|---|
 | `messages` 为空 | `bad_arguments` |
 | JSON 解码失败 | `bad_arguments` |
+| `model` 不在目录中 | `bad_arguments` |
+| 目录校验失败（空目录、重复 ID、缺 `base_url`、负窗口） | `bad_arguments`（`llm.config.set` 为 `handler_error`） |
 | HTTP 建连或上游失败 | `llm_upstream` |
 | 上游非 2xx | `llm_upstream` |
 | JSON marshal 失败 | `handler_error` |
-| `llm.config.set` 写 `config.json` 失败 | `handler_error` |
+| 写 `config.json` 失败 | `handler_error` |
 
 Event 发送失败不影响最终 Response。当前实现会忽略 emit error。
 
@@ -369,5 +422,8 @@ llm-openai 没有 `setData` 或 `runCommand` 调用。`session-history` 只读�
 | `completeOut` | 最终输出 |
 | `chunkText` | content/reasoning delta |
 | `chunkToolCall` | tool call delta |
-| `config` | 磁盘和运行配置 |
+| `config` | 磁盘和运行配置；顶层 `base_url`/`api_key`/`model` 是旧字段 |
+| `modelConfig` | 模型目录条目：模型 + 自己的端点与密钥 |
+| `modelEntryIn` | 目录条目输入；`api_key` 是三态指针 |
+| `modelSummary` | `llm.models.list` 的目录摘要，不含端点与密钥 |
 | `configGetOut/configSetIn` | 配置方法 payload |

@@ -13,8 +13,9 @@
 | `tools` | 当前实现 | Tool 注册、Generation 感知发现与分发 |
 | `file-tools` | 当前实现 | Workspace 文件读写八件套 |
 | `shell-tools` | 当前实现 | 同步命令执行与进程树取消 |
+| `sandbox` | 当前实现 | 工具调用链上的权限裁决：allow、modify、deny |
 
-`sandbox`、`web-tools` 和 `subagent` 曾在本仓库实现或设计，随后从源码移除，代码保留在 git 历史。
+`web-tools` 和 `subagent` 曾在本仓库设计，随后从源码移除。
 
 ## 2. 跨插件通信
 
@@ -58,6 +59,9 @@ agent
 └── tools
     ├── file-tools（file）
     └── shell-tools（shell）
+
+sandbox（可选件，autostart: false）
+└── 消费 tools.call、file.write、file.replace、file.patch、shell.execute
 ```
 
 启动顺序由 Manifest `autostart` 和 `depends_on` 决定。`agent` 负责 Turn，`model-context` 负责把 system / runtime Facts 写入 Session 并投影模型输入，`llm-openai` 负责模型调用，`session` 负责持久化和 WebUI。
@@ -66,9 +70,11 @@ agent
 
 `agent` 对 `tools` 和 `model-context` 是弱依赖。缺少 model-context 时，agent 的 `session.derive + tools.list` 基线直接进入 llm-openai；缺少 tools 时跳过工具阶段。
 
+`sandbox` 是可选件。它的 `autostart` 是 `false`，从插件中心启动后进链，在链上时裁决 `tools.call` 与直连高危能力。缺席即放行，缺席是部署约定。
+
 ## 6. 未实现能力
 
-Sandbox、Web 工具和 Subagent 插件不在当前源码。交互式终端和后台 Shell 也未实现。
+Web 工具和 Subagent 插件不在当前源码。交互式终端和后台 Shell 也未实现。sandbox 的确认流、确认面板与 Prompt 贡献也未实现。
 
 ## 7. 构建清单
 
@@ -77,8 +83,9 @@ Sandbox、Web 工具和 Subagent 插件不在当前源码。交互式终端和�
 ```text
 core: agent session llm-openai model-context tools file-tools shell-tools
 tools:（空）
+optional: sandbox
 ```
 
-`core` 是 autostart 根插件。`tools` 留给后续的非 autostart Tool Provider。清单只收录 `plugins/<name>/` 下已有 `plugin.json` 的插件。没有 `plugin.json` 的目录不是可挂载插件，构建脚本会跳过并告警，不会进入 dist。
+`core` 是 autostart 根插件。`tools` 留给后续的非 autostart Tool Provider。`optional` 是随发行版交付但不随 Host 启动的插件。清单只收录 `plugins/<name>/` 下已有 `plugin.json` 的插件。没有 `plugin.json` 的目录不是可挂载插件，构建脚本会跳过并告警，不会进入 dist。
 
 后续新增插件时，再同步修改清单和本目录。构建流程见 [docs/platform/build.md](../docs/platform/build.md)。

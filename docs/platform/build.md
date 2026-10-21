@@ -60,8 +60,9 @@ powershell -File scripts\build.ps1 -List
 | `plugin:tools` | 插件可执行 | `dist/plugins/tools/tools` |
 | `plugin:file-tools` | 插件可执行 | `dist/plugins/file-tools/file-tools` |
 | `plugin:shell-tools` | 插件可执行 | `dist/plugins/shell-tools/shell-tools` |
+| `plugin:sandbox` | 插件可执行 | `dist/plugins/sandbox/sandbox` |
 
-清单分两组：`core` 是 autostart 根插件；`tools` 供后续加入非 autostart 的 Tool Provider，当前为空。没有 `plugin.json` 的目录不是可挂载插件，脚本跳过并汇总告警，不会进入 dist。
+清单分三组：`core` 是 autostart 根插件；`tools` 供后续加入非 autostart 的 Tool Provider，当前为空；`optional` 是随发行版交付但不随 Host 启动的插件，从插件中心手动启动后生效。没有 `plugin.json` 的目录不是可挂载插件，脚本跳过并汇总告警，不会进入 dist。
 
 ## 4. 产物布局
 
@@ -95,6 +96,13 @@ dist/
 │   │   ├── plugin.json
 │   │   ├── config.json         解释器策略
 │   │   ├── config.example.json
+│   │   └── README.md
+│   ├── sandbox/                可选件，不随 Host 启动
+│   │   ├── sandbox             插件可执行
+│   │   ├── plugin.json
+│   │   ├── config.json         风险档与默认动作
+│   │   ├── config.example.json
+│   │   ├── rules.json          规则集，运行期写入
 │   │   └── README.md
 │   └── session/
 │       ├── session             插件可执行
@@ -144,6 +152,8 @@ flowchart LR
 | agent 配置（scheme 选择） | `dist/plugins/agent/config.json` |
 | model-context 配置 | `dist/plugins/model-context/config.json` |
 | shell-tools 解释器策略 | `dist/plugins/shell-tools/config.json` |
+| sandbox 风险档与默认动作 | `dist/plugins/sandbox/config.json` |
+| sandbox 规则集 | `dist/plugins/sandbox/rules.json` |
 | 会话记录 | `dist/plugins/session/sessions/` |
 | Workspace Registry | `dist/plugins/session/sessions/workspaces.json` |
 
@@ -188,7 +198,7 @@ node --test internal/webui/*.test.mjs   # 无 node 时告警跳过
 把一个插件加入发布布局的步骤：
 
 1. 在 `plugins/<name>/` 提供 `plugin.json` 和 `main.go`；
-2. 在 `scripts/shipped-plugins.conf` 的 `core` 或 `tools` 组追加名字；
+2. 在 `scripts/shipped-plugins.conf` 的 `core`、`tools` 或 `optional` 组追加名字；
 3. 执行 `bash scripts/build.sh`，确认产物出现在 `dist/plugins/<name>/`；
 4. 同步 `plugins/README.md` 第 7 节的清单。
 

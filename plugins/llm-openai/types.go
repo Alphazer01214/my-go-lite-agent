@@ -79,44 +79,77 @@ type llmCancelOut struct {
 	Cancelled bool   `json:"cancelled"`
 }
 
+// modelConfig is one catalog entry: a model plus the OpenAI-compatible
+// endpoint that serves it. Each entry carries its own base_url and api_key so
+// models from different providers sit side by side in one catalog.
 type modelConfig struct {
+	ID            string `json:"id"`
+	Label         string `json:"label,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+	BaseURL       string `json:"base_url,omitempty"`
+	APIKey        string `json:"api_key,omitempty"`
+}
+
+// modelSummary is the catalog view for consumers that only pick a model (the
+// session dropdown, the agent). Endpoints and keys never leave the plugin on
+// llm.models.list.
+type modelSummary struct {
 	ID            string `json:"id"`
 	Label         string `json:"label,omitempty"`
 	ContextWindow int    `json:"context_window,omitempty"`
 }
 
+// modelEntryIn is one catalog entry on an input payload. APIKey is a pointer
+// so three states survive decoding: an absent field keeps the key stored under
+// the same model id, an empty string clears it, any other value replaces it.
+// A masked echo (the value config.get and settings.get hand out) counts as
+// "keep", so a caller can round-trip what it read without knowing the key.
+type modelEntryIn struct {
+	ID            string  `json:"id"`
+	Label         string  `json:"label,omitempty"`
+	ContextWindow int     `json:"context_window,omitempty"`
+	BaseURL       string  `json:"base_url,omitempty"`
+	APIKey        *string `json:"api_key,omitempty"`
+}
+
 type config struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	// Model is the legacy single-model field. It always mirrors DefaultModel
-	// at runtime and is still written so older config files stay readable.
+	// BaseURL, APIKey and Model are legacy. They are read from pre-multi-provider
+	// config files as defaults for entries that carry no endpoint of their own,
+	// and llm.config.get mirrors the default entry into them for old callers.
+	// They are not written anymore: saveConfig persists the catalog shape.
+	BaseURL      string        `json:"base_url,omitempty"`
+	APIKey       string        `json:"api_key,omitempty"`
 	Model        string        `json:"model,omitempty"`
 	Models       []modelConfig `json:"models,omitempty"`
 	DefaultModel string        `json:"default_model,omitempty"`
 }
 
 type configGetOut struct {
-	BaseURL      string        `json:"base_url"`
-	APIKey       string        `json:"api_key"`
-	Model        string        `json:"model"`
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+	// Models carries the per-model endpoint; api_key entries are masked.
 	Models       []modelConfig `json:"models"`
 	DefaultModel string        `json:"default_model"`
 }
 
 type configSetIn struct {
-	BaseURL      string         `json:"base_url,omitempty"`
-	APIKey       string         `json:"api_key,omitempty"`
-	Model        string         `json:"model,omitempty"`
-	Models       *[]modelConfig `json:"models,omitempty"`
-	DefaultModel string         `json:"default_model,omitempty"`
+	// Legacy top-level endpoint fields. With `models` present they fill entries
+	// that carry no endpoint of their own; without `models` they update the
+	// default model's entry.
+	BaseURL      string          `json:"base_url,omitempty"`
+	APIKey       string          `json:"api_key,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	Models       *[]modelEntryIn `json:"models,omitempty"`
+	DefaultModel string          `json:"default_model,omitempty"`
 }
 
 type modelsListOut struct {
-	DefaultModel string        `json:"default_model"`
-	Models       []modelConfig `json:"models"`
+	DefaultModel string         `json:"default_model"`
+	Models       []modelSummary `json:"models"`
 }
 
 type modelsSetIn struct {
-	Models       []modelConfig `json:"models"`
-	DefaultModel string        `json:"default_model,omitempty"`
+	Models       []modelEntryIn `json:"models"`
+	DefaultModel string         `json:"default_model,omitempty"`
 }

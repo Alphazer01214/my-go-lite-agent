@@ -1,8 +1,9 @@
 # sandbox
 
-> 状态：目标契约。插件尚未实现，当前实现没有这个能力。
+> 状态：当前实现三态裁决（allow、modify、deny）、规则集与审计。确认流、确认面板与 Prompt 贡献仍是目标契约。
 > 涉及能力：`sandbox`
 > 依赖：弱依赖 `session`、`tools`；消费 `tools.call`、`file.write`、`file.replace`、`file.patch`、`shell.execute`
+> 当前实现的契约见 [plugins/sandbox/communication.md](../../../plugins/sandbox/communication.md)。本文是目标契约。
 
 本文是 `sandbox` 插件的设计稿。它描述裁决语义、确认流、规则模型、审计口径和界面契约。
 
@@ -27,6 +28,8 @@
 | `deny` | 短路返回，不进下一跳 |
 | `confirm` | 短路返回确认请求，等待人决策 |
 
+**当前实现三态。** `allow`、`modify` 与 `deny` 已落地。`confirm` 依赖确认流，暂不实现。
+
 裁决方在链上的位置决定它看到的是真实调用。
 它排在 `session` 之后、`tools` 之前，所以它看到的是已记录但未执行的调用。
 
@@ -42,7 +45,7 @@
 
 ## 3. Manifest
 
-**目标契约。**
+**当前实现。** 与目标契约的差异是 `autostart`：当前实现是 `false`。
 
 ```json
 {
@@ -50,8 +53,8 @@
   "version": "0.1.0",
   "protocol": 1,
   "entry": "sandbox",
-  "description": "Permission adjudication on tool seams: allow, modify, deny, confirm",
-  "autostart": true,
+  "description": "Permission adjudication on tool seams: allow, modify, deny",
+  "autostart": false,
   "priority": 500,
   "provides": ["sandbox"],
   "consumes": [
@@ -89,6 +92,13 @@
   }
 }
 ```
+
+**关于 `autostart: false`。**
+
+当前实现的确认流还没有落地，而 50 以上的风险档按 `deny` 执行。
+随发行版交付的默认策略会挡住写文件与命令执行。
+所以插件不作为启动根：从插件中心启动它之后才进链。
+确认流落地后把 `autostart` 改回 `true`，默认策略不用改。
 
 **关于 `priority: 500`。**
 
@@ -343,6 +353,11 @@
 更新一个不存在的 `rule_id` 时返回 `sandbox_rule_not_found`。
 只升不降的校验失败时返回 `sandbox_rule_invalid`，见第 4.5 节。
 
+**当前实现补了一个 `delete` 字段。**
+本节固定了删除的行为，却没有给删除方法。
+当前实现把删除挂在同一个方法上：`delete` 为 `true` 时删除 `rule_id` 指名的规则，
+此时不需要 `action` 与 `scope`。
+
 ### 4.5 规则模型
 
 **规则的形式。**
@@ -424,11 +439,27 @@
 这样「收窄」是可判定的。
 把 `path_glob` 从 `E:/**` 改成 `E:/project/**` 是收窄，允许。
 
+**当前实现用保守近似判包含关系。**
+
+| 情况 | 当前实现的判定 |
+|---|---|
+| 两侧都不约束该字段 | 相等 |
+| 只有一侧约束该字段 | 不约束的那侧更宽 |
+| 两侧都是字面量 | 相同才覆盖 |
+| 一侧是字面量，一侧是通配 | 通配那侧覆盖 |
+| 两侧都是通配 | 比字面前缀，前缀更短的那侧更宽 |
+
+判不出来的关系按不覆盖处理，所以新规则不会被宽规则挤掉。
+更严的规则永远不受这个近似影响：动作更严时不受范围比较约束。
+
 **为什么需要单调性。** 规则文件是共享资产。
 一个人写宽规则，另一个人写的拒绝规则就会被冲掉。
 单调性让既有的拒绝不会被更宽的规则覆盖。
 
 ### 4.6 确认流
+
+**暂不实现。** 确认流依赖 `confirm` 动作与确认面板，两者都还没有落地。
+本节保留目标契约，供后续批次使用。
 
 **为什么不能挂起。**
 
@@ -602,32 +633,28 @@ sandbox 不提供工具。它也不调用工具。
 
 工具注册表的 `risk` 是 0 到 100 的整数，由提供方声明。
 
-| 范围 | 含义 | 默认动作 |
-|---:|---|---|
-| 0 到 19 | 只读或无副作用 | `allow` |
-| 20 到 49 | 可逆的本地修改 | `allow` |
-| 50 到 79 | 显著的本地修改 | `allow` |
-| 80 到 100 | 任意执行或破坏 | `confirm` |
+| 范围 | 含义 | 目标动作 | 当前动作 |
+|---:|---|---|---|
+| 0 到 19 | 只读或无副作用 | `allow` | `allow` |
+| 20 到 49 | 可逆的本地修改 | `allow` | `allow` |
+| 50 到 79 | 显著的本地修改 | `confirm` | `deny` |
+| 80 到 100 | 任意执行或破坏 | `confirm` | `deny` |
 
-默认动作由 `default_action` 配置项整体覆盖。
+目标动作由 `default_action` 配置项整体覆盖。
 覆盖后所有未命中规则的调用都用同一个动作。
 
 sandbox 通过 `tools.list` 查注册表里的 `risk`。
-查不到时按保守值处理，把未知工具当作风险 50。
+查不到时按保守值处理，把未知工具当作风险 70。
 
-**待定：风险分段与默认动作。**
+**已定：风险分段与默认动作。**
 
-上表把 50 到 79 的「显著的本地修改」也归到 `allow`，而 `confirm` 只覆盖 80 以上。
-这带来两处说不通：
+50 到 79 与 80 到 100 的目标动作都是 `confirm`，未知工具的兜底风险是 70。
+两者都落在确认档，所以未知工具与写操作、命令执行一样要人确认。
 
-- 查不到工具时说的「保守值」是 50，但 50 落在 `allow` 档，保守的说法不成立。
-- `git.commit` 风险 60、`git-tools` 的写操作也落在 `allow` 档，裁决形同虚设。
-
-四态动作是 `allow`、`modify`、`deny`、`confirm`。`modify` 的定义是改写载荷后放行，
-不适合当「显著的本地修改」的默认动作。
-
-分段与默认动作的最终映射要一起定：哪些档位走 `allow`、哪些走 `confirm`、哪些走 `deny`，
-以及未知工具的兜底风险值。未定之前，本表按原样保留。
+**当前实现把确认档按 `deny` 执行。**
+确认流还没有落地，`confirm` 档没有可落地的返回形态。
+当前实现只接受 `allow` 与 `deny` 两种动作，所以这两档按 `deny` 执行。
+确认流落地后把两档改成 `confirm` 即可，规则与代码都不用动。
 
 ### 6.2 裁决方缺席时的兜底
 
@@ -748,13 +775,14 @@ the user's confirmation before they run.
 | `decision` | 四态动作之一 |
 | `rule_id` | 命中的规则。没有规则命中时为空串 |
 | `reason` | 判定依据 |
-| `risk` | 工具风险值。查不到时为 0 |
+| `risk` | 工具风险值。查不到时为 70 |
 | `arguments_digest` | 参数摘要。不记参数原文 |
 | `confirm_token` | 有确认令牌时给出。没有时为空串 |
+| `turn_id`、`step_id` | 当前接缝载荷不带这两个字段，所以是空串 |
 
 ### 8.2 为什么记在会话事实里
 
-**目标契约。**
+**当前实现。**
 
 审计条目写会话事实，不写插件自己的存储。理由有三条。
 
@@ -815,9 +843,9 @@ the user's confirmation before they run.
 
 ## 9. WebUI
 
-**目标契约。**
+**暂不实现。** sandbox 当前没有 Component，也不贡献任何槽位。
 
-sandbox 拥有一个 Component。
+目标契约是让 sandbox 拥有一个 Component。
 
 | Component | Mount | Slot | 职责 |
 |---|---|---|---|
@@ -889,25 +917,29 @@ sandbox 缺席时，组件不挂载。
 
 ## 10. 错误码
 
-**目标契约。** 插件级错误码，前缀 `sandbox_`。
+**当前实现。** 插件级错误码，前缀 `sandbox_`。
 
 | 错误码 | 形态 | 场景 |
 |---|---|---|
-| `sandbox_denied` | 协议错误 | 裁决结果为 `deny`，调用被拒 |
-| `sandbox_confirm_required` | 协议错误 | 裁决结果为 `confirm`，需要人决策 |
-| `sandbox_confirm_token_invalid` | 协议错误 | 令牌不存在、已用掉或不属于该调用 |
-| `sandbox_confirm_expired` | 协议错误 | 令牌已过期 |
+| `sandbox_denied` | 工具结果包络的 `meta.code` | 裁决结果为 `deny`，调用被拒 |
+| `sandbox_confirm_required` | 协议错误 | 裁决结果为 `confirm`，需要人决策。暂不实现 |
+| `sandbox_confirm_token_invalid` | 协议错误 | 令牌不存在、已用掉或不属于该调用。暂不实现 |
+| `sandbox_confirm_expired` | 协议错误 | 令牌已过期。暂不实现 |
 | `sandbox_rule_invalid` | 协议错误 | 规则字段非法，或违反只升不降的约束 |
-| `sandbox_rule_not_found` | 协议错误 | 更新一个不存在的规则 |
+| `sandbox_rule_not_found` | 协议错误 | 更新或删除一个不存在的规则 |
 
 平台级错误码见 [00-conventions.md](00-conventions.md) 第 6 节。
 本插件复用 `bad_arguments` 与 `handler_error`。
 
+**已定：拒绝的返回形态。**
+
+拒绝返回工具结果包络，`is_error` 为 `true`，`meta.code` 是 `sandbox_denied`。
+它不是协议错误。模型要能读到拒绝原因，所以原因进包络正文与 `meta`。
+`confirm` 落地后沿用同一形态。
+
 ## 11. 配置
 
-**目标契约。**
-
-配置文件在插件目录下的 `config.json`：
+**当前实现。** 配置文件在插件目录下的 `config.json`：
 
 ```json
 {
@@ -916,10 +948,9 @@ sandbox 缺席时，组件不挂载。
   "audit_retention_days": 30,
   "rules_file": "rules.json",
   "risk_bands": [
-    {"max_risk": 19, "action": "allow"},
     {"max_risk": 49, "action": "allow"},
-    {"max_risk": 79, "action": "allow"},
-    {"max_risk": 100, "action": "confirm"}
+    {"max_risk": 79, "action": "deny"},
+    {"max_risk": 100, "action": "deny"}
   ]
 }
 ```
@@ -927,7 +958,7 @@ sandbox 缺席时，组件不挂载。
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | `default_action` | `allow` | 未命中规则时的动作 |
-| `confirm_ttl_seconds` | 300 | 确认令牌的有效期 |
+| `confirm_ttl_seconds` | 300 | 确认令牌的有效期。暂不实现 |
 | `audit_retention_days` | 30 | 审计条目的保留天数 |
 | `rules_file` | `rules.json` | 规则文件路径，相对插件工作目录 |
 | `risk_bands` | 见上 | 风险分段到动作的映射 |
@@ -936,6 +967,11 @@ sandbox 缺席时，组件不挂载。
 
 `confirm_ttl_seconds` 的取值范围是 30 到 3600。
 超出范围时回落默认值，不报错。
+
+`risk_bands` 的动作当前只接受 `allow` 与 `deny`。
+`confirm` 档的目标映射见第 6.1 节，确认流落地后放开。
+
+`rules_file` 只能是插件目录下的文件名。
 
 **Settings 入口。** 用标准设置方法，形态见 [manifest.md](../../platform/manifest.md) 第 4 节。
 
@@ -1042,6 +1078,9 @@ sandbox 缺席时，组件不挂载。
 | 强制拦截 | 平台不保证调用一定过裁决，缺席即跳过 |
 | 审计的独立查询界面 | 审计条目只能在会话追踪视图里看 |
 | 多用户 | 规则文件按插件实例隔离，没有账号概念 |
+| 确认动作 | `confirm` 与确认令牌没有实现，确认档当前按 `deny` 执行 |
+| 确认面板 | 右栏组件没有实现，右槽当前由 `session` 独占 |
+| Prompt 贡献 | 动态轨的 `policy` 节没有实现 |
 
 **目标契约。**
 

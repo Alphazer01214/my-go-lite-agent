@@ -47,6 +47,7 @@ done
 # and the line would be skipped).
 CORE_PLUGINS=()
 TOOLS_PLUGINS=()
+OPTIONAL_PLUGINS=()
 while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in
     core:*)
@@ -57,9 +58,13 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       __rest="${line#tools:}"
       TOOLS_PLUGINS=($__rest)
       ;;
+    optional:*)
+      __rest="${line#optional:}"
+      OPTIONAL_PLUGINS=($__rest)
+      ;;
   esac
 done < "$ROOT/scripts/shipped-plugins.conf"
-SHIPPED_PLUGINS=(${CORE_PLUGINS[@]+"${CORE_PLUGINS[@]}"} ${TOOLS_PLUGINS[@]+"${TOOLS_PLUGINS[@]}"})
+SHIPPED_PLUGINS=(${CORE_PLUGINS[@]+"${CORE_PLUGINS[@]}"} ${TOOLS_PLUGINS[@]+"${TOOLS_PLUGINS[@]}"} ${OPTIONAL_PLUGINS[@]+"${OPTIONAL_PLUGINS[@]}"})
 
 # Listed in the conf but not a mountable plugin yet (no plugin.json). Warn once
 # instead of once per target; a missing plugin never aborts the build.
@@ -122,6 +127,8 @@ LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
 AGENT_DIST_CFG="$DIST/plugins/agent/config.json"
 MC_DIST_CFG="$DIST/plugins/model-context/config.json"
 SHELL_DIST_CFG="$DIST/plugins/shell-tools/config.json"
+SANDBOX_DIST_CFG="$DIST/plugins/sandbox/config.json"
+SANDBOX_DIST_RULES="$DIST/plugins/sandbox/rules.json"
 SESS_DIST_DIR="$DIST/plugins/session/sessions"
 SESSION_WORKSPACE_FILE="$SESS_DIST_DIR/workspaces.json"
 LEGACY_WORKSPACE_FILE="$DIST/plugins/workspace/workspaces.json"
@@ -129,6 +136,8 @@ LEGACY_WORKSPACE_FILE="$DIST/plugins/workspace/workspaces.json"
 [[ -f "$AGENT_DIST_CFG" ]] && cp "$AGENT_DIST_CFG" "$STASH/agent-config.json"
 [[ -f "$MC_DIST_CFG" ]] && cp "$MC_DIST_CFG" "$STASH/model-context-config.json"
 [[ -f "$SHELL_DIST_CFG" ]] && cp "$SHELL_DIST_CFG" "$STASH/shell-config.json"
+[[ -f "$SANDBOX_DIST_CFG" ]] && cp "$SANDBOX_DIST_CFG" "$STASH/sandbox-config.json"
+[[ -f "$SANDBOX_DIST_RULES" ]] && cp "$SANDBOX_DIST_RULES" "$STASH/sandbox-rules.json"
 [[ -d "$SESS_DIST_DIR" ]] && cp -R "$SESS_DIST_DIR" "$STASH/sessions"
 [[ -f "$LEGACY_WORKSPACE_FILE" ]] && cp "$LEGACY_WORKSPACE_FILE" "$STASH/legacy-workspaces.json"
 
@@ -353,6 +362,16 @@ if [[ -f "$STASH/shell-config.json" && ! -f "$SHELL_DIST_CFG" ]]; then
   cp "$STASH/shell-config.json" "$SHELL_DIST_CFG"
   echo "shell-tools config: preserved dist config.json"
 fi
+if [[ -f "$STASH/sandbox-config.json" && ! -f "$SANDBOX_DIST_CFG" ]]; then
+  mkdir -p "$(dirname "$SANDBOX_DIST_CFG")"
+  cp "$STASH/sandbox-config.json" "$SANDBOX_DIST_CFG"
+  echo "sandbox config: preserved dist config.json"
+fi
+if [[ -f "$STASH/sandbox-rules.json" && ! -f "$SANDBOX_DIST_RULES" ]]; then
+  mkdir -p "$(dirname "$SANDBOX_DIST_RULES")"
+  cp "$STASH/sandbox-rules.json" "$SANDBOX_DIST_RULES"
+  echo "sandbox rules: preserved dist rules.json"
+fi
 if [[ -d "$STASH/sessions" ]]; then
   mkdir -p "$DIST/plugins/session"
   cp -R "$STASH/sessions/." "$SESS_DIST_DIR/"
@@ -388,6 +407,7 @@ seed_dist_config "llm-openai" "$LLM_DIST_CFG"
 seed_dist_config "agent" "$AGENT_DIST_CFG"
 seed_dist_config "model-context" "$MC_DIST_CFG"
 seed_dist_config "shell-tools" "$SHELL_DIST_CFG"
+seed_dist_config "sandbox" "$SANDBOX_DIST_CFG"
 
 # ── docs ─────────────────────────────────────────────────────────────────────
 copy_dist_asset "README.md" "$DIST/"

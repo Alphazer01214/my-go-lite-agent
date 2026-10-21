@@ -33,6 +33,7 @@
 | [2026-10-20-p0-write-lock-fix.md](2026-10-20-p0-write-lock-fix.md) | SDK 写锁拆分与本地超时 |
 | [2026-10-20-phase2-p1-fix.md](2026-10-20-phase2-p1-fix.md) | 流式 outbox、失败 Turn 可见性、工作区口径 |
 | [2026-10-20-p2-fix.md](2026-10-20-p2-fix.md) | 取消通知 Fact、慢连接关闭、错误文本清理 |
+| [2026-10-21-sandbox-adjudication-implementation.md](2026-10-21-sandbox-adjudication-implementation.md) | sandbox 首批：三态裁决、规则集、审计与四个决策点 |
 
 ### 2.2 部分有效的记录
 

@@ -32,6 +32,9 @@ const (
 	TypeContextCompaction = "context_compaction"
 	TypeContextSnapshot   = "context_snapshot"
 	TypeSessionMeta       = "session_meta"
+	// TypeSandboxDecision is written by the sandbox plugin. It carries no
+	// message, so it never enters the model context.
+	TypeSandboxDecision = "sandbox_decision"
 )
 
 const (

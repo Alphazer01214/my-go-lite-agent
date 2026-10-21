@@ -8,6 +8,7 @@ sessions/
 # Local secrets — never commit real keys (keep *.example.json)
 plugins/**/config.json
 plugins/tools/registry.json
+plugins/sandbox/rules.json
 plugins/session/sessions/workspaces.json
 **/config.local.json
 .env

@@ -1,6 +1,6 @@
 # llm-openai
 
-> 状态：当前实现。多 provider 适配、重试退避、提示缓存标记为目标契约。
+> 状态：当前实现。按模型路由到不同端点已实现；Anthropic 风格端点、重试退避、提示缓存标记为目标契约。
 > 涉及能力：`llm`
 > 依赖：无。`requires` 与 `depends_on` 均为空数组。
 
@@ -59,34 +59,23 @@
     "save": { "capability": "llm", "method": "settings.save" },
     "schema": [
       {
-        "key": "base_url",
-        "label": "Base URL",
-        "type": "string",
-        "required": true,
-        "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
-      },
-      {
-        "key": "api_key",
-        "label": "API Key",
-        "type": "secret",
-        "description": "留空保持不变；保存后以明文写入插件目录的 config.json。"
-      },
-      {
-        "key": "clear_api_key",
-        "label": "清除已保存的 API Key",
-        "type": "boolean",
-        "description": "保存时清除当前密钥；若同时填写新 Key，以清除为准。"
-      },
-      {
         "key": "models",
         "label": "模型目录",
         "type": "list",
         "required": true,
-        "description": "每行一个模型。上下文窗口用于上下文用量和压缩预算；留空按 0 处理。",
+        "description": "每行一个模型，各自绑定端点与密钥，可同时配置多个供应商。上下文窗口用于上下文用量和压缩预算；留空按 0 处理。API Key 显示为脱敏值：保持不变则不修改，留空表示清除。",
         "item_fields": [
           { "key": "id", "label": "模型 ID", "type": "string", "required": true },
           { "key": "label", "label": "显示名", "type": "string" },
-          { "key": "context_window", "label": "上下文窗口", "type": "number", "min": 0 }
+          { "key": "context_window", "label": "上下文窗口", "type": "number", "min": 0 },
+          {
+            "key": "base_url",
+            "label": "Base URL",
+            "type": "string",
+            "required": true,
+            "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
+          },
+          { "key": "api_key", "label": "API Key", "type": "secret" }
         ]
       },
       {
@@ -122,15 +111,15 @@
 
 `get` 与 `save` 各指向一个能力方法。读取走 `llm.settings.get`，保存走 `llm.settings.save`。
 
-`schema` 的五个字段对应第 11 节的配置项。
+`schema` 的两个字段对应第 11 节的配置项。
 
 | key | 控件 | 语义 |
 |---|---|---|
-| `base_url` | string | 端点地址。必填 |
-| `api_key` | secret | 密钥。留空表示不修改 |
-| `clear_api_key` | boolean | 保存时清除密钥。优先级高于填写新密钥 |
-| `models` | list | 模型目录。必填，至少一项 |
+| `models` | list | 模型目录。每行一个模型，含 ID、显示名、上下文窗口、Base URL、API Key。必填，至少一项 |
 | `default_model` | select | 默认模型。选项来自 `models` 列表 |
+
+目录行自带端点与密钥，所以不同供应商的模型可以并存。`api_key` 行是脱敏回显：
+保持脱敏值不变则保留原密钥，清空则清除，填新值则覆盖。
 
 **`commands` 段。** 声明一个命令面 `/llm-openai config [get|set k=v]`。
 
@@ -190,7 +179,7 @@
 | `call_id` | 否 | string | 调用方给的业务标识。`llm.cancel` 按它定位 |
 | `messages` | 是 | array | OpenAI 形状的消息数组。空数组返回 `bad_arguments` |
 | `tools` | 否 | array | function 工具定义数组 |
-| `model` | 否 | string | 本次使用的模型。缺省时用默认模型 |
+| `model` | 否 | string | 本次使用的模型 ID。ID 决定路由到哪个端点。缺省时用默认模型，不在目录中时返回 `bad_arguments` |
 | `temperature` | 否 | number | 采样温度。指针类型，能区分 0 与未填 |
 | `max_tokens` | 否 | number | 最大生成 token。0 表示不下发该字段 |
 | `stream` | 否 | boolean | 缺省为 true。指针类型，能区分 false 与未填 |
@@ -241,6 +230,7 @@
 | 载荷为空 | `bad_arguments` |
 | 载荷 JSON 解析失败 | `bad_arguments` |
 | `messages` 为空 | `bad_arguments` |
+| `model` 不在目录中 | `bad_arguments` |
 | 上游请求建连失败 | `llm_upstream` |
 | 上游返回非 2xx | `llm_upstream` |
 | 上游响应解析失败 | `llm_upstream` |
@@ -250,9 +240,11 @@
 
 配置快照在调用开始时捕获。运行中的调用继续用旧快照，修改从下一次调用起生效。
 
-模型解析顺序是请求里的 `model`、`default_model`、旧字段 `model`、内置默认 `deepseek-chat`。
+模型解析是两级：请求里的 `model`，缺省时用 `default_model`。解析出的 ID 必须在目录里；
+不在目录中返回 `bad_arguments`，不静默回退到别的供应商。目录、端点、密钥在同一次快照里读出。
 
-上游请求头固定带 `Content-Type: application/json`。密钥非空时加 `Authorization: Bearer`。流式额外加 `Accept: text/event-stream`。
+上游请求打到所选模型条目的 `base_url` 下的 `/chat/completions`，每个条目各带自己的端点与密钥。
+请求头固定带 `Content-Type: application/json`。条目密钥非空时加 `Authorization: Bearer`。流式额外加 `Accept: text/event-stream`。
 
 流式请求不设总超时。非流式请求超时 5 分钟。
 
@@ -297,7 +289,13 @@
   "api_key": "api***key",
   "model": "deepseek-chat",
   "models": [
-    { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "api***key"
+    }
   ],
   "default_model": "deepseek-chat"
 }
@@ -305,10 +303,10 @@
 
 | 字段 | 说明 |
 |---|---|
-| `base_url` | 当前端点地址 |
-| `api_key` | 脱敏后的密钥。长度不超过 8 时全掩码，否则保留首尾各 3 位 |
+| `base_url` | 旧字段。镜像默认模型条目的端点 |
+| `api_key` | 旧字段。镜像默认模型条目的脱敏密钥。长度不超过 8 时全掩码，否则保留首尾各 3 位 |
 | `model` | 与 `default_model` 同值。为兼容旧调用方保留 |
-| `models` | 模型目录 |
+| `models` | 模型目录。每项含自己的 `base_url` 与脱敏后的 `api_key` |
 | `default_model` | 默认模型 ID |
 
 **错误码。** 无。
@@ -323,7 +321,13 @@
   "api_key": "new-secret",
   "model": "gpt-test",
   "models": [
-    { "id": "gpt-test", "label": "GPT Test", "context_window": 131072 }
+    {
+      "id": "gpt-test",
+      "label": "GPT Test",
+      "context_window": 131072,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "new-secret"
+    }
   ],
   "default_model": "gpt-test"
 }
@@ -331,11 +335,14 @@
 
 | 字段 | 必填 | 类型 | 说明 |
 |---|---|---|---|
-| `base_url` | 否 | string | 非空时覆盖。写入前归一化 |
-| `api_key` | 否 | string | 非空时覆盖。空串不修改 |
+| `base_url` | 否 | string | 旧字段。`models` 存在时填给没有自己端点的条目；缺省时更新默认模型条目。写入前归一化 |
+| `api_key` | 否 | string | 旧字段。语义同上，非空时生效 |
 | `model` | 否 | string | 旧字段。当 `default_model` 缺省时用作候选 |
 | `models` | 否 | array | 存在时整体替换目录。显式传空数组报错 |
 | `default_model` | 否 | string | 缺省时取旧字段，再缺省时保留当前值 |
+
+目录条目字段：`id`、`label`、`context_window`、`base_url`、`api_key`。条目级 `api_key` 是三态：
+不传保留同 ID 条目的原密钥，空串清除，其它值覆盖；把读到的脱敏值原样传回等价于保留。
 
 **输出。** 与 `llm.config.get` 相同。
 
@@ -344,14 +351,15 @@
 | 场景 | 错误码 |
 |---|---|
 | 载荷为空或 JSON 解析失败 | `bad_arguments` |
-| `models` 为空数组、ID 为空、ID 重复、`context_window` 为负 | `handler_error` |
+| `models` 为空数组、ID 为空、ID 重复、新 ID 缺 `base_url`、`context_window` 为负 | `handler_error` |
 | 写 `config.json` 失败 | `handler_error` |
 
 **当前实现细节。**
 
-`models` 校验失败时，内存里的 `base_url` 与 `api_key` 已经改掉，但文件没有写。方法返回 `handler_error`。
+校验失败时不做任何修改：内存和文件都保持原样。方法返回 `handler_error`。
 
-`default_model` 指向目录外的 ID 时，本方法补一条同名模型条目，不报错。这与 `llm.models.set` 不同，后者直接返回 `bad_arguments`。
+`default_model` 指向目录外的 ID 时，本方法补一条同名条目，沿用此前默认条目的端点与密钥，不报错。
+这与 `llm.models.set` 不同，后者直接返回 `bad_arguments`。
 
 ### 4.5 llm.models.list
 
@@ -375,7 +383,8 @@
 
 **错误码。** 无。
 
-**当前实现细节。** 输出里没有 `api_key`。这是 `session-history` 读取模型下拉用的方法。
+**当前实现细节。** 输出里没有 `base_url` 也没有 `api_key`：端点和密钥不出该方法。
+这是 `session-history` 读取模型下拉用的方法。
 
 ### 4.6 llm.models.set
 
@@ -384,8 +393,20 @@
 ```json
 {
   "models": [
-    { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 },
-    { "id": "deepseek-reasoner", "label": "DeepSeek Reasoner", "context_window": 65536 }
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "api***key"
+    },
+    {
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "context_window": 128000,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-***oai"
+    }
   ],
   "default_model": "deepseek-chat"
 }
@@ -394,6 +415,8 @@
 | 字段 | 必填 | 类型 | 说明 |
 |---|---|---|---|
 | `models` | 是 | array | 目录内容。必须非空，ID 必须唯一 |
+| `models[].base_url` | 新 ID 必填 | string | 该模型的端点。已存在的 ID 缺省时沿用原端点 |
+| `models[].api_key` | 否 | string | 三态：不传保留，空串清除，其它值覆盖 |
 | `default_model` | 否 | string | 省略时取第一项 |
 
 **输出。** 与 `llm.models.list` 相同。
@@ -405,11 +428,13 @@
 | 载荷为空或 JSON 解析失败 | `bad_arguments` |
 | `models` 为空数组 | `bad_arguments` |
 | 模型 ID 为空或重复 | `bad_arguments` |
+| 新 ID 缺 `base_url` | `bad_arguments` |
 | `context_window` 为负 | `bad_arguments` |
 | `default_model` 指向目录外 | `bad_arguments` |
 | 写 `config.json` 失败 | `handler_error` |
 
 **当前实现细节。** 目录与默认值都没变时直接返回，不重写 `config.json`。
+目录条目里的密钥三态规则与 `llm.config.set` 相同，脱敏值永不落盘。
 
 ### 4.7 llm.settings.get
 
@@ -420,11 +445,14 @@
 ```json
 {
   "values": {
-    "base_url": "https://api.deepseek.com/v1",
-    "api_key": { "configured": true },
-    "clear_api_key": false,
     "models": [
-      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+      {
+        "id": "deepseek-chat",
+        "label": "DeepSeek Chat",
+        "context_window": 65536,
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "api***key"
+      }
     ],
     "default_model": "deepseek-chat"
   }
@@ -433,10 +461,8 @@
 
 | 字段 | 说明 |
 |---|---|
-| `values.base_url` | 当前端点地址 |
-| `values.api_key.configured` | 密钥是否已配置。永不回显明文 |
-| `values.clear_api_key` | 恒为 false。读取不产生清除意图 |
-| `values.models` | 模型目录 |
+| `values.models` | 模型目录。每行含自己的 `base_url` 与脱敏后的 `api_key` |
+| `values.models[].api_key` | 脱敏值。永不回显明文，同时充当“保持不变”的占位符 |
 | `values.default_model` | 默认模型 ID |
 
 **错误码。** 无。
@@ -448,11 +474,14 @@
 ```json
 {
   "values": {
-    "base_url": "https://api.deepseek.com/v1",
-    "api_key": "new-secret",
-    "clear_api_key": false,
     "models": [
-      { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 }
+      {
+        "id": "deepseek-chat",
+        "label": "DeepSeek Chat",
+        "context_window": 65536,
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "api***key"
+      }
     ],
     "default_model": "deepseek-chat"
   }
@@ -461,10 +490,9 @@
 
 | 字段 | 必填 | 类型 | 说明 |
 |---|---|---|---|
-| `values.base_url` | 否 | string | 非空时覆盖 |
-| `values.api_key` | 否 | string | 空表示不修改 |
-| `values.clear_api_key` | 否 | boolean | true 时清空密钥，优先于填写的 `api_key` |
 | `values.models` | 是 | array | 目录内容。必须非空，ID 必须唯一 |
+| `values.models[].base_url` | 新 ID 必填 | string | 该模型的端点。已存在的 ID 缺省时沿用原端点 |
+| `values.models[].api_key` | 否 | string | 三态：不传保留，空串清除，其它值覆盖，脱敏值等价于保留 |
 | `values.default_model` | 否 | string | 省略时取第一项 |
 
 **输出。**
@@ -478,11 +506,12 @@
 | 场景 | 错误码 |
 |---|---|
 | 载荷为空或 JSON 解析失败 | `bad_arguments` |
-| `models` 为空数组、ID 为空或重复、`context_window` 为负 | `bad_arguments` |
+| `models` 为空数组、ID 为空或重复、新 ID 缺 `base_url`、`context_window` 为负 | `bad_arguments` |
 | `default_model` 指向目录外 | `bad_arguments` |
 | 写 `config.json` 失败 | `handler_error` |
 
 **当前实现细节。** 保存成功后由 Host 派发 `liteagent:settings-saved`。`session-history` 据此重新读 `llm.models.list`，刷新新会话的模型下拉。
+改模型 ID 视为新条目，但脱敏回显仍能匹配回原密钥，改名不丢密钥。
 
 ### 4.9 取消语义
 
@@ -588,8 +617,8 @@ flowchart LR
 
 | 错误码 | 类别 | 触发场景 |
 |---|---|---|
-| `bad_arguments` | 平台级 | 载荷为空、JSON 解析失败、`messages` 为空、参数校验失败 |
-| `handler_error` | 平台级 | 请求体序列化失败、写配置文件失败、目录校验失败 |
+| `bad_arguments` | 平台级 | 载荷为空、JSON 解析失败、`messages` 为空、模型不在目录中、参数校验失败 |
+| `handler_error` | 平台级 | 请求体序列化失败、写配置文件失败、`llm.config.set` 目录校验失败 |
 | `llm_upstream` | 插件级 | 建连失败、非 2xx、响应解析失败 |
 
 **当前实现细节。**
@@ -609,11 +638,21 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 
 ```json
 {
-  "base_url": "https://api.deepseek.com/v1",
-  "api_key": "",
   "models": [
-    { "id": "deepseek-chat", "label": "DeepSeek Chat", "context_window": 65536 },
-    { "id": "deepseek-reasoner", "label": "DeepSeek Reasoner", "context_window": 65536 }
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": ""
+    },
+    {
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "context_window": 128000,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": ""
+    }
   ],
   "default_model": "deepseek-chat"
 }
@@ -621,11 +660,14 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `base_url` | string | 端点地址。缺省 `https://api.deepseek.com/v1` |
-| `api_key` | string | 密钥。缺省空 |
-| `models` | array | 模型目录。缺省一条 `deepseek-chat` |
+| `models` | array | 模型目录。缺省一条 `deepseek-chat`，端点为内置默认 |
+| `models[].id` | string | 模型 ID。路由键 |
+| `models[].label` | string | 显示名。缺省用 ID |
+| `models[].context_window` | number | 上下文窗口。0 表示未知 |
+| `models[].base_url` | string | 该模型的 OpenAI-compatible 端点。缺省 `https://api.deepseek.com/v1` |
+| `models[].api_key` | string | 该模型的密钥。缺省空 |
 | `default_model` | string | 默认模型 ID |
-| `model` | string | 旧字段。启动时迁移进目录 |
+| `base_url` / `api_key` / `model` | string | 旧字段。只读：启动时迁移进条目，`llm.config.get` 时镜像默认条目，不再写盘 |
 
 **启动优先级。**
 
@@ -633,25 +675,37 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 环境变量 → config.json → 内置默认值
 ```
 
-| 环境变量 | 字段 |
+| 环境变量 | 作用 |
 |---|---|
-| `OPENAI_BASE_URL` | `base_url` |
-| `OPENAI_API_KEY` | `api_key` |
-| `OPENAI_MODEL` | `default_model` |
+| `OPENAI_MODEL` | 指定默认模型。目录里没有这个 ID 时追加一条 |
+| `OPENAI_BASE_URL` | 覆盖默认模型条目的 `base_url` |
+| `OPENAI_API_KEY` | 覆盖默认模型条目的 `api_key` |
 
-环境变量在配置文件之后覆盖。`OPENAI_MODEL` 生效时，如果目录里没有这个 ID，插件追加一条。
+环境变量在配置文件之后覆盖。一组环境变量只描述一个端点，所以只作用于默认模型那一条；
+其余条目仍按各自端点路由。要配多个供应商，用 `config.json` 或设置页。
+
+**迁移。** 旧的单端点配置（顶层 `base_url` + `api_key` + 不带端点的 `models`）启动时自动迁移：
+顶层端点和密钥填进没有自己端点的条目。旧字段只有 `model` 时迁移成单模型目录。
+下一次写盘就落成新形状，顶层旧字段不再出现。
 
 **归一化规则。**
 
-`base_url` 在三条输入路径上都做同样处理：去首尾空白，去末尾斜杠。这样不会拼出 `…/v1//chat/completions`。
+每条的 `base_url` 在三条输入路径上都做同样处理：去首尾空白，去末尾斜杠。这样不会拼出 `…/v1//chat/completions`。
 
 **模型目录。**
 
-目录只描述同一个 `base_url` 下的模型。它不含端点字段，也不含密钥。
+目录是路由表：模型 ID 决定请求打到哪个端点、用哪个密钥。不同供应商的模型并存于同一个目录，
+同一供应商的多个模型重复填写端点即可。
 
 `context_window` 为 0 表示未知。上下文用量和压缩预算拿不到模型窗口时，只能靠组装插件的配置上限兜底。
 
 启动时的归一化是宽容的。ID 为空或重复的条目被丢弃，`label` 为空时用 ID 补齐，`context_window` 为负时按 0 处理。
+三个修改方法（`llm.models.set`、`llm.settings.save`、`llm.config.set`）则按第 4 节的错误表拒绝坏条目。
+
+**密钥三态。**
+
+条目级 `api_key` 在三个修改方法里是三态字段：不传保留同 ID 条目的原密钥，空串清除，其它值覆盖。
+把读到的脱敏值原样传回等价于保留，脱敏值永不落盘；改模型 ID 时脱敏回显仍能匹配回原密钥。
 
 **默认模型。**
 
@@ -659,9 +713,9 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 |---|---|
 | `llm.models.set` | 返回 `bad_arguments` |
 | `llm.settings.save` | 返回 `bad_arguments` |
-| `llm.config.set` | 补一条同名模型条目 |
+| `llm.config.set` | 补一条同名条目，沿用此前默认条目的端点与密钥 |
 
-**目标契约。** 端点目前是单值。`base_url` 支持多端点与按模型路由到不同端点，属于多 provider 适配的一部分，见第 14.2 节。
+**目标契约。** 端点已经支持多端点与按模型路由到不同端点。Anthropic 风格端点的协议适配属于多 provider 适配的剩余部分，见第 14.2 节。
 
 ## 12. 测试要求
 
@@ -676,7 +730,7 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 | 稳定错误码 | 每个错误码都有对应用例 |
 | 配置持久化 | 写入、脱敏、失败路径 |
 | 事件载荷 | 三种 channel 的字段与顺序 |
-| 纯函数 | 归一化、脱敏、模型校验 |
+| 纯函数 | 归一化、脱敏、模型校验、密钥三态解析 |
 | 取消路径 | 在途命中、不在途、取消先于注册 |
 | 降级路径 | 无。本插件没有弱依赖 |
 
@@ -689,7 +743,9 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 | 取消竞态 | 取消先到，随后注册的同名调用立即中止 |
 | 工具调用合并 | 按 index 合并，参数按顺序追加 |
 | 密钥脱敏 | 短密钥全掩码，长密钥保留首尾各 3 位 |
-| 目录校验 | 空目录、重复 ID、负窗口 |
+| 密钥三态 | 不传保留、空串清除、脱敏值回显保留，改 ID 不丢密钥 |
+| 目录校验 | 空目录、重复 ID、缺端点、负窗口 |
+| 多供应商路由 | 模型 ID 命中哪个条目就打到哪个端点、带哪个密钥 |
 | 默认模型 | 三个方法三种不同表现 |
 | 端点归一化 | 文件、环境变量、设置页三条路径 |
 
@@ -710,10 +766,10 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 
 | 项 | 检查方式 |
 |---|---|
-| 上游地址正确 | 请求打到 `{base_url}/chat/completions`，无双斜杠 |
+| 上游地址正确 | 请求打到所选模型条目的 `{base_url}/chat/completions`，无双斜杠 |
 | 流式能聚合 | 累计结果与 Response 一致 |
 | 取消能落地 | 在途请求被中止，返回 `cancelled: true` |
-| 密钥不回显 | `llm.settings.get` 只报 `configured` |
+| 密钥不回显 | `llm.settings.get` 只给脱敏值 |
 | 配置可持久化 | 重启后端点、密钥、目录都还在 |
 
 ## 14. 未实现
@@ -736,7 +792,7 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 
 | 项 | 内容 | 落点 |
 |---|---|---|
-| 多 provider 适配 | 支持 Anthropic 风格端点。请求形状、鉴权头、事件格式都不同 | `llm.complete` 的上游分支 |
+| 多 provider 适配 | 支持 Anthropic 风格端点。按模型路由到不同端点已实现，剩下的差异在请求形状、鉴权头、事件格式 | `llm.complete` 的上游分支 |
 | 重试与退避 | 建连失败与 5xx 按次数上限重试，间隔递增。当前一次失败即返回 `llm_upstream` | `llm.complete` 的上游分支 |
 | 提示缓存的显式标记 | 在请求里标出可缓存前缀的边界。当前没有这个字段 | `llm.complete` 的请求体 |
 
@@ -749,8 +805,10 @@ agent 另有三个 `llm_` 开头的码，前缀重叠的情况见同一节的待
 | Go 类型 | 角色 |
 |---|---|
 | `plugin` | 插件实例。持有配置、在途表、取消缓冲表 |
-| `config` | 磁盘与运行配置 |
-| `modelConfig` | 模型目录项 |
+| `config` | 磁盘与运行配置。顶层 `base_url`/`api_key`/`model` 是只读旧字段 |
+| `modelConfig` | 模型目录条目：模型 + 自己的端点与密钥 |
+| `modelEntryIn` | 目录条目输入。`api_key` 是三态指针 |
+| `modelSummary` | `llm.models.list` 的摘要项，不含端点与密钥 |
 | `completeIn` / `completeOut` | `llm.complete` 载荷 |
 | `chatMessage` | 模型消息 |
 | `tool` / `toolFunction` | 工具描述 |

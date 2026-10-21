@@ -1,16 +1,18 @@
 {
-  "base_url": "https://api.deepseek.com/v1",
-  "api_key": "",
   "models": [
     {
       "id": "deepseek-chat",
       "label": "DeepSeek Chat",
-      "context_window": 65536
+      "context_window": 65536,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": ""
     },
     {
-      "id": "deepseek-reasoner",
-      "label": "DeepSeek Reasoner",
-      "context_window": 65536
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "context_window": 128000,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": ""
     }
   ],
   "default_model": "deepseek-chat"

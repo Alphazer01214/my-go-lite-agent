@@ -46,7 +46,8 @@ foreach ($line in Get-Content (Join-Path $PSScriptRoot "shipped-plugins.conf")) 
 }
 $corePlugins = @($groups["core"] | Where-Object { $_ })
 $toolsPlugins = @($groups["tools"] | Where-Object { $_ })
-$shippedPlugins = @($corePlugins + $toolsPlugins | Where-Object { $_ })
+$optionalPlugins = @($groups["optional"] | Where-Object { $_ })
+$shippedPlugins = @($corePlugins + $toolsPlugins + $optionalPlugins | Where-Object { $_ })
 
 # Listed in the conf but not a mountable plugin yet (no plugin.json). Warn once
 # instead of once per target; a missing plugin never aborts the build.
@@ -112,6 +113,8 @@ $llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
 $agentDistCfg = Join-Path $dist "plugins\agent\config.json"
 $mcDistCfg = Join-Path $dist "plugins\model-context\config.json"
 $shellDistCfg = Join-Path $dist "plugins\shell-tools\config.json"
+$sandboxDistCfg = Join-Path $dist "plugins\sandbox\config.json"
+$sandboxDistRules = Join-Path $dist "plugins\sandbox\rules.json"
 $sessDistDir = Join-Path $dist "plugins\session\sessions"
 $sessionWorkspaceFile = Join-Path $sessDistDir "workspaces.json"
 $legacyWorkspaceFile = Join-Path $dist "plugins\workspace\workspaces.json"
@@ -122,6 +125,8 @@ $legacyWorkspaceStash = $null
 $agentStash = $null
 $mcStash = $null
 $shellStash = $null
+$sandboxStash = $null
+$sandboxRulesStash = $null
 if (Test-Path $llmDistCfg) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
     $llmStash = Join-Path $stash "llm-config.json"
@@ -141,6 +146,16 @@ if (Test-Path $shellDistCfg) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
     $shellStash = Join-Path $stash "shell-config.json"
     Copy-Item $shellDistCfg $shellStash -Force
+}
+if (Test-Path $sandboxDistCfg) {
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $sandboxStash = Join-Path $stash "sandbox-config.json"
+    Copy-Item $sandboxDistCfg $sandboxStash -Force
+}
+if (Test-Path $sandboxDistRules) {
+    New-Item -ItemType Directory -Path $stash -Force | Out-Null
+    $sandboxRulesStash = Join-Path $stash "sandbox-rules.json"
+    Copy-Item $sandboxDistRules $sandboxRulesStash -Force
 }
 if (Test-Path $sessDistDir) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
@@ -409,6 +424,16 @@ try {
         Copy-Item $shellStash $shellDistCfg -Force
         Write-Host "shell-tools config: preserved dist config.json"
     }
+    if ($null -ne $sandboxStash -and -not (Test-Path $sandboxDistCfg)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistCfg) -Force | Out-Null
+        Copy-Item $sandboxStash $sandboxDistCfg -Force
+        Write-Host "sandbox config: preserved dist config.json"
+    }
+    if ($null -ne $sandboxRulesStash -and -not (Test-Path $sandboxDistRules)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistRules) -Force | Out-Null
+        Copy-Item $sandboxRulesStash $sandboxDistRules -Force
+        Write-Host "sandbox rules: preserved dist rules.json"
+    }
     if ($null -ne $sessStash) {
         $sessTarget = Join-Path $dist "plugins\session\sessions"
         New-Item -ItemType Directory -Path $sessTarget -Force | Out-Null
@@ -468,6 +493,15 @@ try {
             New-Item -ItemType Directory -Path (Split-Path -Parent $shellDistCfg) -Force | Out-Null
             Copy-Item $shellExample $shellDistCfg -Force
             Write-Host "shell-tools config: seeded interpreter policy"
+        }
+    }
+    # Seed sandbox config.json once; later rebuilds keep user edits.
+    if (-not (Test-Path $sandboxDistCfg)) {
+        $sandboxExample = Join-Path $root "plugins\sandbox\config.example.json"
+        if (Test-Path $sandboxExample) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistCfg) -Force | Out-Null
+            Copy-Item $sandboxExample $sandboxDistCfg -Force
+            Write-Host "sandbox config: seeded risk bands and rule file name"
         }
     }
 

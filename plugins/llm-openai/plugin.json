@@ -12,34 +12,23 @@
     "save": { "capability": "llm", "method": "settings.save" },
     "schema": [
       {
-        "key": "base_url",
-        "label": "Base URL",
-        "type": "string",
-        "required": true,
-        "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
-      },
-      {
-        "key": "api_key",
-        "label": "API Key",
-        "type": "secret",
-        "description": "留空保持不变；保存后以明文写入插件目录的 config.json。"
-      },
-      {
-        "key": "clear_api_key",
-        "label": "清除已保存的 API Key",
-        "type": "boolean",
-        "description": "保存时清除当前密钥；若同时填写新 Key，以清除为准。"
-      },
-      {
         "key": "models",
         "label": "模型目录",
         "type": "list",
         "required": true,
-        "description": "每行一个模型。上下文窗口用于上下文用量和压缩预算；留空按 0 处理。",
+        "description": "每行一个模型，各自绑定端点与密钥，可同时配置多个供应商。上下文窗口用于上下文用量和压缩预算；留空按 0 处理。API Key 显示为脱敏值：保持不变则不修改，留空表示清除。",
         "item_fields": [
           { "key": "id", "label": "模型 ID", "type": "string", "required": true },
           { "key": "label", "label": "显示名", "type": "string" },
-          { "key": "context_window", "label": "上下文窗口", "type": "number", "min": 0 }
+          { "key": "context_window", "label": "上下文窗口", "type": "number", "min": 0 },
+          {
+            "key": "base_url",
+            "label": "Base URL",
+            "type": "string",
+            "required": true,
+            "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
+          },
+          { "key": "api_key", "label": "API Key", "type": "secret" }
         ]
       },
       {

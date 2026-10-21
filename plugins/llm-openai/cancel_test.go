@@ -22,7 +22,10 @@ func TestCancelAbortsUpstreamStream(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	p := newPlugin()
-	p.cfg.BaseURL = server.URL
+	// Route the default model at the stub server.
+	p.mu.Lock()
+	p.cfg.Models[0].BaseURL = server.URL
+	p.mu.Unlock()
 	done := make(chan error, 1)
 	go func() {
 		_, err := p.complete(context.Background(), completeIn{

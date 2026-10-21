@@ -1,0 +1,47 @@
+{
+  "name": "sandbox",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "sandbox",
+  "autostart": false,
+  "priority": 500,
+  "provides": ["sandbox"],
+  "consumes": [
+    { "capability": "tools", "method": "call" },
+    { "capability": "file", "method": "write" },
+    { "capability": "file", "method": "replace" },
+    { "capability": "file", "method": "patch" },
+    { "capability": "shell", "method": "execute" }
+  ],
+  "requires": ["session", "tools"],
+  "depends_on": ["tools"],
+  "settings": {
+    "get": { "capability": "sandbox", "method": "settings.get" },
+    "save": { "capability": "sandbox", "method": "settings.save" },
+    "schema": [
+      {
+        "key": "default_action",
+        "label": "Default action",
+        "type": "select",
+        "required": true,
+        "description": "未命中任何规则时使用的动作。",
+        "options": [
+          { "value": "allow", "label": "Allow everything not matched by a rule" },
+          { "value": "deny", "label": "Deny everything not matched by a rule" }
+        ]
+      },
+      {
+        "key": "audit_retention_days",
+        "label": "Audit retention (days)",
+        "type": "number",
+        "required": true,
+        "description": "内存审计缓冲保留天数。会话事实日志不由本插件裁剪。"
+      }
+    ]
+  },
+  "commands": [
+    { "name": "rules", "description": "List adjudication rules", "usage": "/sandbox rules" },
+    { "name": "check", "description": "Dry-run one tool call", "usage": "/sandbox check <tool> <json>" }
+  ],
+  "description": "Permission adjudication on tool seams: allow, modify, deny"
+}

@@ -28,12 +28,12 @@
 | [05-tools.md](05-tools.md) | tools | `tools` | 当前实现 |
 | [06-file-tools.md](06-file-tools.md) | file-tools | `file` | 当前实现 |
 | [07-shell-tools.md](07-shell-tools.md) | shell-tools | `shell` | 当前实现 |
+| [08-sandbox.md](08-sandbox.md) | sandbox | `sandbox` | 当前实现，三态裁决 |
 
 ### 1.3 计划新增插件
 
 | 文档 | 插件 | 能力 | 优先级 |
 |---|---|---|---|
-| [08-sandbox.md](08-sandbox.md) | sandbox | `sandbox` | 高 |
 | [09-subagent.md](09-subagent.md) | subagent | `subagent` | 高 |
 | [10-memory.md](10-memory.md) | memory | `memory` | 中 |
 | [11-skills.md](11-skills.md) | skills | `skills` | 中 |
@@ -96,13 +96,12 @@ flowchart TB
 | 接缝 | 参与方 | 语义 | 状态 |
 |---|---|---|---|
 | `llm.complete` | model-context → llm-openai | 组装在最前，下游看到真实模型输入 | 当前实现 |
-| `tools.call` | agent → tools | Provider 分发；无策略 Consumer | 当前实现 |
+| `tools.call` | agent → sandbox → tools | 记录、裁决、分发 | 当前实现，sandbox 缺席时退化为 agent → tools |
 | `file.read` 等 | tools → file-tools | tools 按 `target_capability` 转发 | 当前实现 |
 | `shell.execute` | tools → shell-tools | 同上 | 当前实现 |
 | `loop.turn` | agent | 发起方 | 当前实现 |
-| `tools.call` | sandbox → tools | 记录、裁决、分发 | 目标契约 |
-| `file.read` 等 | sandbox → file-tools | 直连高危能力也过裁决 | 目标契约 |
-| `shell.execute` | sandbox → shell-tools | 同上 | 目标契约 |
+| `file.write` 等 | tools → sandbox → file-tools | 直连高危能力也过裁决 | 当前实现 |
+| `shell.execute` | tools → sandbox → shell-tools | 同上 | 当前实现 |
 | `loop.turn` | subagent → agent | 子代理经这里起独立会话 | 目标契约 |
 
 链序按插件顶层 `priority` 递减。`priority` 是插件级单值，Manifest 的 `consumes[]` 条目不带独立 priority。
@@ -116,9 +115,9 @@ flowchart TB
 | agent | 0（缺省） | 发起方 | 无（不声明 `consumes`） |
 | file-tools | 0（缺省） | Provider | 无（tools 转发） |
 | shell-tools | 0（缺省） | Provider | 无（tools 转发） |
-| sandbox | 500 | Consumer | 目标契约：`tools.call`、`file.write`、`file.replace`、`file.patch`、`shell.execute` |
+| sandbox | 500 | Consumer | 当前实现：`tools.call`、`file.write`、`file.replace`、`file.patch`、`shell.execute` |
 
-目标契约里的 sandbox 消费 5 个键。其余设计稿提到的 `file.read`、`web.fetch`、`git.commit`、`git.checkout`、`terminal.write` 不在 sandbox 的消费清单内，落地前需先收敛。
+sandbox 消费 5 个键。其余设计稿提到的 `file.read`、`web.fetch`、`git.commit`、`git.checkout`、`terminal.write` 不在 sandbox 的消费清单内，落地前需先收敛。
 
 ## 4. 插槽分配
 
@@ -175,6 +174,8 @@ sandbox 排在第一批落地，它要占 `right` 槽，而 `right` 已被 sessi
 ```text
 第一批：sandbox
   理由：它决定工具调用要不要过检查。其余插件都可以在无裁决状态下先跑。
+  状态：三态裁决、规则集与审计已落地。确认流与确认面板未落地。
+        插件是可选件，autostart 为 false，从插件中心启动后进链。
 
 第二批：task、skills
   理由：两者都是纯增量，不改动现有调用链。

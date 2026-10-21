@@ -1,0 +1,10 @@
+{
+  "default_action": "allow",
+  "risk_bands": [
+    { "max_risk": 49, "action": "allow" },
+    { "max_risk": 79, "action": "deny" },
+    { "max_risk": 100, "action": "deny" }
+  ],
+  "rules_file": "rules.json",
+  "audit_retention_days": 30
+}

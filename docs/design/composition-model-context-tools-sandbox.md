@@ -1,6 +1,6 @@
 # 消费链组合方案：model-context、tools、sandbox
 
-> 状态：model-context、tools、file-tools、shell-tools 已实现；sandbox 仍为方案阶段。本文是跨插件组合方案。
+> 状态：model-context、tools、file-tools、shell-tools、sandbox 三态裁决已实现；确认流、确认面板与 `policy` 轨节仍是方案阶段。本文是跨插件组合方案。
 > 涉及插件：`agent`、`llm-openai`、`session`、`model-context`、`tools`、`sandbox`。
 > 消费链机制为当前实现；插件设计为目标契约；未决点见第 9 节。
 > 术语见 [CONTEXT.md](../../CONTEXT.md)，约束见 [CONSTRAINT.md](../../CONSTRAINT.md)。
@@ -187,6 +187,13 @@ flowchart TB
 | 无 tools | `tools.call` 返回 `method_not_found`，agent 跳过工具阶段 |
 | 无 tool provider | `tools.list` 为空，模型不带工具 |
 
+**当前实现的 sandbox 是可选件。** 它的 `autostart` 是 `false`，不在链上时按「无 sandbox」处理。
+从插件中心启动它之后才进链。
+
+**已知的链外入口。** Host 发起的调用直接解析路由属主，不装配消费链。
+浏览器桥走的就是这条路径，所以浏览器发起的 `tools.call` 不经 `tools.call` 这一跳。
+插件发起的调用都经 `handleRequest`，链完整。直连高危接缝由 tools 分发触发，仍经链。
+
 ## 6. 插件设计（目标契约）
 
 三个插件彼此不知晓对方，也不知晓 agent。
@@ -233,6 +240,9 @@ Tool Provider 以弱依赖注册，例如 file-tools、shell-tools、web-tools�
 | 定位 | 只裁决，不执行。执行始终在 tools 与 Tool Provider |
 | 审计 | 决定可写入自身存储或 session 事实 |
 
+**当前实现三态。** `allow`、`modify` 与 `deny` 已落地，`confirm` 依赖确认流，暂不实现。
+50 以上的风险档当前按 `deny` 执行，见 [plugins/sandbox/communication.md](../../plugins/sandbox/communication.md)。
+
 四态动作：
 
 | 动作 | 行为 |
@@ -242,7 +252,7 @@ Tool Provider 以弱依赖注册，例如 file-tools、shell-tools、web-tools�
 | deny | 短路返回，不进下一跳 |
 | confirm | 返回待确认，等待放行 |
 
-deny 与 confirm 的返回形态未定，见 9.3 与 9.4。
+deny 与 confirm 的返回形态见 9.3 与 9.4。
 
 ## 7. payload 契约（目标契约）
 
@@ -280,8 +290,8 @@ Tool Definition 的公开与隐藏字段之分见 6.2。
 | 编号 | 内容 | 状态与倾向 |
 |---|---|---|
 | 9.1 | 消息真源归属 | 已定：归 session；model-context 只写 system / runtime / summary / snapshot Facts，再派生 |
-| 9.2 | `meta` 字段集与填写方 | 已定：agent 填 `session_id`、`turn_id`、`step_id`、`mode`、`scheme`、`workspace_id`、`workspace`；消费者只读 |
-| 9.3 | deny 与 confirm 的返回形态 | 待定：sandbox 首版只做 allow/deny |
+| 9.2 | `meta` 字段集与填写方 | 部分已定：agent 填 `session_id`、`turn_id`、`step_id`、`mode`、`scheme`、`workspace_id`、`workspace`；消费者只读。当前 `tools.call` 载荷仍是扁平字段，sandbox 沿用扁平字段 |
+| 9.3 | deny 与 confirm 的返回形态 | 已定：deny 返回工具结果包络，`is_error` 为 `true`，`meta.code` 是 `sandbox_denied`。confirm 落地后沿用同一形态 |
 | 9.4 | confirm 由谁续跑 | 候选：agent；本轮不实现 |
 | 9.5 | `consumes[].priority` 的落法 | 暂缓：当前插件级 2000/1000/500/0 已够用 |
 | 9.6 | tool call 的发起方 | 已定：agent 发起 `tools.call`，Step 循环留在 agent |
@@ -325,3 +335,4 @@ Generation、Context Call、Cancel Frame、Proceed、Model Context Snapshot 沿�
 | Tool 注册、Generation 与分发 | `plugins/tools/main.go`、`plugins/tools/registry.go`、`plugins/tools/host.go` |
 | 文件工具 | `plugins/file-tools/main.go` 及各方法文件 |
 | 命令工具 | `plugins/shell-tools/main.go`、`runner.go` |
+| 权限裁决 | `plugins/sandbox/main.go`、`rules.go`、`policy.go`、`risk.go`、`store.go`、`audit.go` |

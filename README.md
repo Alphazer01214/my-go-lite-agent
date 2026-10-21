@@ -6,7 +6,7 @@ Host 与 Plugin 是两个独立层次。项目整体文档只定义平台契约�
 
 ## 当前状态
 
-当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 当前发布 `agent`、`llm-openai`、`session`、`model-context`、`tools`、`file-tools` 和 `shell-tools` 七个插件。
+当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 当前发布 `agent`、`llm-openai`、`session`、`model-context`、`tools`、`file-tools`、`shell-tools` 和 `sandbox` 八个插件。
 
 Workspace Registry 由 Session 插件拥有。Session 创建后绑定 Workspace；历史列表按 Workspace 过滤，多会话标签按 Workspace 恢复。Agent 从 Session 解析规范 Workspace，拒绝调用方传入的不一致路径。
 
@@ -14,7 +14,9 @@ model-context 把 system prompt 与 runtime context 写成 Session Facts，再�
 
 消费链上的缺席即放行。插件声明了 `consumes` 但没有活跃实例时，Host 跳过这一跳，调用直接交给该键的 Provider。平台不提供强制拦截。
 
-Sandbox、Web 工具和 Subagent 插件已从当前源码移除，代码保留在 git 历史。设计稿保留在 [docs/design/plugins/README.md](docs/design/plugins/README.md)，作为路线图。
+sandbox 在 `tools.call` 与直连高危能力上做权限裁决，当前实现 allow、modify、deny 三态。它是可选件，`autostart` 是 `false`，从插件中心启动后进链。
+
+Web 工具和 Subagent 插件已从当前源码移除。设计稿保留在 [docs/design/plugins/README.md](docs/design/plugins/README.md)，作为路线图。
 
 WebUI 平台契约已形成文档。具体插件的 UI 和通信契约只写在对应插件目录。
 

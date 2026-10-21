@@ -36,9 +36,12 @@ func newPlugin() *plugin {
 	return p
 }
 
+// loadConfig builds the runtime catalog from config.json and the environment.
+// Every model carries its own endpoint, so one catalog can hold models from
+// several providers. Legacy single-endpoint files migrate on the way in: the
+// top-level base_url and api_key fill entries that carry none of their own.
 func loadConfig() config {
-	cfg := config{
-		BaseURL:      defaultBaseURL,
+	file := config{
 		Model:        defaultModelID,
 		DefaultModel: defaultModelID,
 		Models:       []modelConfig{{ID: defaultModelID, Label: defaultModelID}},
@@ -46,50 +49,55 @@ func loadConfig() config {
 	if data, err := os.ReadFile(configFile); err == nil {
 		var c config
 		if json.Unmarshal(data, &c) == nil {
-			if c.BaseURL != "" {
-				cfg.BaseURL = c.BaseURL
-			}
-			if c.APIKey != "" {
-				cfg.APIKey = c.APIKey
-			}
-			cfg.Models = c.Models
-			cfg.DefaultModel = c.DefaultModel
-			if c.Model != "" {
-				cfg.Model = c.Model
+			// The file wins over the built-in defaults wholesale; normalizeConfig
+			// fills whatever it left empty.
+			file = c
+			if file.Model == "" {
+				file.Model = defaultModelID
 			}
 		}
 	}
-	// env wins at startup
-	if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
-		cfg.BaseURL = v
-	}
-	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-		cfg.APIKey = v
-	}
+	cfg := normalizeConfig(file)
+
+	// env wins at startup. One base URL and one key cannot describe several
+	// providers, so they address the default model's entry only.
+	models := append([]modelConfig(nil), cfg.Models...)
+	def := cfg.DefaultModel
 	if v := strings.TrimSpace(os.Getenv("OPENAI_MODEL")); v != "" {
-		cfg.Model = v
-		cfg.DefaultModel = v
-		cfg.Models = ensureModel(cfg.Models, v)
+		def = v
+		if !hasModel(models, v) {
+			models = append(models, modelConfig{ID: v, Label: v})
+		}
 	}
-	return normalizeConfig(cfg)
+	if entry := findModel(models, def); entry != nil {
+		if v := normalizeBaseURL(os.Getenv("OPENAI_BASE_URL")); v != "" {
+			entry.BaseURL = v
+		}
+		if v := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); v != "" {
+			entry.APIKey = v
+		}
+	}
+	return normalizeConfig(config{Models: models, DefaultModel: def})
 }
 
-// normalizeConfig folds the legacy single-model field into a catalog and
-// repairs whatever the file left inconsistent. Loading stays lenient: a bad
-// entry is dropped instead of preventing the plugin from starting.
+// normalizeConfig folds the legacy single-endpoint fields into per-model
+// endpoints and repairs whatever the file left inconsistent. Loading stays
+// lenient: a bad entry is dropped instead of preventing the plugin from
+// starting. The legacy top-level fields end up mirroring the default entry so
+// llm.config.get keeps its old shape.
 func normalizeConfig(c config) config {
-	c.BaseURL = normalizeBaseURL(c.BaseURL)
-	if c.BaseURL == "" {
-		c.BaseURL = defaultBaseURL
+	legacyBase := normalizeBaseURL(c.BaseURL)
+	if legacyBase == "" {
+		legacyBase = defaultBaseURL
 	}
-	models := sanitizeModels(c.Models)
+	models := sanitizeModels(c.Models, legacyBase, strings.TrimSpace(c.APIKey))
 	legacy := strings.TrimSpace(c.Model)
 	if len(models) == 0 {
 		id := legacy
 		if id == "" {
 			id = defaultModelID
 		}
-		models = []modelConfig{{ID: id, Label: id}}
+		models = []modelConfig{{ID: id, Label: id, BaseURL: legacyBase, APIKey: strings.TrimSpace(c.APIKey)}}
 	}
 	def := strings.TrimSpace(c.DefaultModel)
 	if def == "" && hasModel(models, legacy) {
@@ -98,13 +106,18 @@ func normalizeConfig(c config) config {
 	if def == "" || !hasModel(models, def) {
 		def = models[0].ID
 	}
+	entry := findModel(models, def)
 	c.Models = models
 	c.DefaultModel = def
 	c.Model = def
+	c.BaseURL = entry.BaseURL
+	c.APIKey = entry.APIKey
 	return c
 }
 
-func sanitizeModels(in []modelConfig) []modelConfig {
+// sanitizeModels trims and dedupes entries, filling an entry's missing
+// endpoint from the legacy top-level values (or the built-in default).
+func sanitizeModels(in []modelConfig, legacyBase, legacyKey string) []modelConfig {
 	out := make([]modelConfig, 0, len(in))
 	seen := make(map[string]bool, len(in))
 	for _, model := range in {
@@ -119,62 +132,112 @@ func sanitizeModels(in []modelConfig) []modelConfig {
 		if model.ContextWindow < 0 {
 			model.ContextWindow = 0
 		}
+		model.BaseURL = normalizeBaseURL(model.BaseURL)
+		if model.BaseURL == "" {
+			model.BaseURL = legacyBase
+		}
+		if model.BaseURL == "" {
+			model.BaseURL = defaultBaseURL
+		}
+		model.APIKey = strings.TrimSpace(model.APIKey)
+		if model.APIKey == "" {
+			model.APIKey = strings.TrimSpace(legacyKey)
+		}
 		seen[model.ID] = true
 		out = append(out, model)
 	}
 	return out
 }
 
-func validateModels(in []modelConfig) ([]modelConfig, error) {
+// validateModels normalizes input entries against the stored catalog. Unlike
+// sanitizeModels it refuses to guess: a new model id must carry its own
+// endpoint. An entry that leaves base_url empty keeps the endpoint stored
+// under the same id, so a metadata-only update does not have to resend it.
+func validateModels(in []modelEntryIn, old []modelConfig) ([]modelConfig, error) {
 	if len(in) == 0 {
 		return nil, fmt.Errorf("models must not be empty")
 	}
 	out := make([]modelConfig, 0, len(in))
 	seen := make(map[string]bool, len(in))
-	for _, model := range in {
-		model.ID = strings.TrimSpace(model.ID)
-		if model.ID == "" {
+	for _, entry := range in {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
 			return nil, fmt.Errorf("model id is required")
 		}
-		if seen[model.ID] {
-			return nil, fmt.Errorf("duplicate model id %q", model.ID)
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate model id %q", id)
 		}
-		if model.ContextWindow < 0 {
-			return nil, fmt.Errorf("model %q context_window must not be negative", model.ID)
+		if entry.ContextWindow < 0 {
+			return nil, fmt.Errorf("model %q context_window must not be negative", id)
 		}
-		model.Label = strings.TrimSpace(model.Label)
-		if model.Label == "" {
-			model.Label = model.ID
+		label := strings.TrimSpace(entry.Label)
+		if label == "" {
+			label = id
 		}
-		seen[model.ID] = true
-		out = append(out, model)
+		base := normalizeBaseURL(entry.BaseURL)
+		if base == "" {
+			if prev := findModel(old, id); prev != nil {
+				base = prev.BaseURL
+			}
+		}
+		if base == "" {
+			return nil, fmt.Errorf("model %q base_url is required", id)
+		}
+		seen[id] = true
+		out = append(out, modelConfig{
+			ID:            id,
+			Label:         label,
+			ContextWindow: entry.ContextWindow,
+			BaseURL:       base,
+			APIKey:        resolveAPIKey(entry.APIKey, id, old),
+		})
 	}
 	return out, nil
 }
 
-func ensureModel(models []modelConfig, id string) []modelConfig {
-	if hasModel(models, id) {
-		return models
+// resolveAPIKey turns one input api_key into the stored key. Absent keeps the
+// key stored under the same id, "" clears it, and any other value is the new
+// key. A masked echo — anything containing the mask marker — is never stored:
+// it keeps the key it was made from, matched against the whole previous
+// catalog so a renamed row does not lose its key. A masked value that matches
+// nothing clears the key rather than persisting a placeholder.
+func resolveAPIKey(in *string, id string, old []modelConfig) string {
+	if in == nil {
+		return apiKeyFor(old, id)
 	}
-	return append(models, modelConfig{ID: id, Label: id})
+	v := strings.TrimSpace(*in)
+	if v == "" {
+		return ""
+	}
+	if !strings.Contains(v, "***") {
+		return v
+	}
+	for _, model := range old {
+		if model.APIKey != "" && maskKey(model.APIKey) == v {
+			return model.APIKey
+		}
+	}
+	return ""
+}
+
+func apiKeyFor(models []modelConfig, id string) string {
+	if entry := findModel(models, id); entry != nil {
+		return entry.APIKey
+	}
+	return ""
+}
+
+func findModel(models []modelConfig, id string) *modelConfig {
+	for i := range models {
+		if models[i].ID == id {
+			return &models[i]
+		}
+	}
+	return nil
 }
 
 func hasModel(models []modelConfig, id string) bool {
-	for _, model := range models {
-		if model.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func contextWindowFor(models []modelConfig, id string) int {
-	for _, model := range models {
-		if model.ID == id {
-			return model.ContextWindow
-		}
-	}
-	return 0
+	return findModel(models, id) != nil
 }
 
 // normalizeBaseURL is applied on every input path (file, env, config.set) so
@@ -264,6 +327,18 @@ func maskKey(k string) string {
 	return k[:3] + "***" + k[len(k)-3:]
 }
 
+// maskedModels copies the catalog with every key masked. The masked value is
+// what llm.config.get and llm.settings.get hand out; a caller that sends it
+// back unchanged keeps the stored key.
+func maskedModels(models []modelConfig) []modelConfig {
+	out := make([]modelConfig, 0, len(models))
+	for _, model := range models {
+		model.APIKey = maskKey(model.APIKey)
+		out = append(out, model)
+	}
+	return out
+}
+
 // configSet applies immediately. Running calls keep their captured snapshot.
 func (p *plugin) configSet(in configSetIn) (configGetOut, error) {
 	p.mu.Lock()
@@ -279,7 +354,7 @@ func (p *plugin) getConfigLocked() configGetOut {
 		BaseURL:      p.cfg.BaseURL,
 		APIKey:       maskKey(p.cfg.APIKey),
 		Model:        p.cfg.DefaultModel,
-		Models:       append([]modelConfig(nil), p.cfg.Models...),
+		Models:       maskedModels(p.cfg.Models),
 		DefaultModel: p.cfg.DefaultModel,
 	}
 }
@@ -291,16 +366,23 @@ func (p *plugin) modelsList() modelsListOut {
 }
 
 func (p *plugin) modelsListLocked() modelsListOut {
-	return modelsListOut{
-		DefaultModel: p.cfg.DefaultModel,
-		Models:       append([]modelConfig(nil), p.cfg.Models...),
+	models := make([]modelSummary, 0, len(p.cfg.Models))
+	for _, model := range p.cfg.Models {
+		models = append(models, modelSummary{
+			ID:            model.ID,
+			Label:         model.Label,
+			ContextWindow: model.ContextWindow,
+		})
 	}
+	return modelsListOut{DefaultModel: p.cfg.DefaultModel, Models: models}
 }
 
 // modelsSet replaces the whole catalog. Unlike config.set, a model that is not
 // listed is an error here: the manager UI is authoritative about the list.
 func (p *plugin) modelsSet(in modelsSetIn) (modelsListOut, error) {
-	models, err := validateModels(in.Models)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	models, err := validateModels(in.Models, p.cfg.Models)
 	if err != nil {
 		return modelsListOut{}, errBadArguments(err.Error())
 	}
@@ -311,15 +393,11 @@ func (p *plugin) modelsSet(in modelsSetIn) (modelsListOut, error) {
 	if !hasModel(models, def) {
 		return modelsListOut{}, errBadArguments("default_model is not in models")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	// A no-op save must not rewrite config.json unnecessarily.
 	if p.cfg.DefaultModel == def && sameModels(p.cfg.Models, models) {
 		return p.modelsListLocked(), nil
 	}
-	p.cfg.Models = models
-	p.cfg.DefaultModel = def
-	p.cfg.Model = def
+	p.cfg = normalizeConfig(config{Models: models, DefaultModel: def})
 	if err := saveConfig(p.cfg); err != nil {
 		return modelsListOut{}, errHandler(err.Error())
 	}
@@ -338,57 +416,102 @@ func sameModels(a, b []modelConfig) bool {
 	return true
 }
 
+// applyLocked merges one config.set payload. The payload stays lenient where
+// the manager methods are strict: a default outside the catalog becomes a new
+// entry that inherits the previous default's endpoint, and the legacy top-level
+// base_url/api_key fill entries that carry none of their own. Nothing is
+// applied when validation fails.
 func (p *plugin) applyLocked(in configSetIn) error {
-	if in.BaseURL != "" {
-		p.cfg.BaseURL = normalizeBaseURL(in.BaseURL)
-	}
-	if in.APIKey != "" {
-		p.cfg.APIKey = in.APIKey
-	}
-	// Copy before appending: a completion that captured the previous config
-	// holds the old slice and must not see a shared backing array change.
-	models := append([]modelConfig(nil), p.cfg.Models...)
+	old := p.cfg.Models
+	models := append([]modelConfig(nil), old...)
 	if in.Models != nil {
-		normalized, err := validateModels(*in.Models)
+		normalized, err := validateModels(inheritEndpoint(*in.Models, in.BaseURL, in.APIKey), old)
 		if err != nil {
 			return err
 		}
 		models = normalized
 	}
 	candidate := strings.TrimSpace(in.DefaultModel)
-	legacy := strings.TrimSpace(in.Model)
 	if candidate == "" {
-		candidate = legacy
-	}
-	if candidate != "" && !hasModel(models, candidate) {
-		models = append(models, modelConfig{ID: candidate, Label: candidate})
+		candidate = strings.TrimSpace(in.Model)
 	}
 	if candidate == "" {
 		candidate = p.cfg.DefaultModel
 	}
 	if !hasModel(models, candidate) {
-		candidate = models[0].ID
+		// A default outside the catalog becomes a new entry that inherits the
+		// previous default's endpoint, so `config.set model=x` keeps working.
+		entry := modelConfig{
+			ID:      candidate,
+			Label:   candidate,
+			BaseURL: normalizeBaseURL(in.BaseURL),
+			APIKey:  strings.TrimSpace(in.APIKey),
+		}
+		if entry.BaseURL == "" || entry.APIKey == "" {
+			if prev := findModel(old, p.cfg.DefaultModel); prev != nil {
+				if entry.BaseURL == "" {
+					entry.BaseURL = prev.BaseURL
+				}
+				if entry.APIKey == "" {
+					entry.APIKey = prev.APIKey
+				}
+			}
+		}
+		models = append(models, entry)
+	} else if in.Models == nil && (in.BaseURL != "" || strings.TrimSpace(in.APIKey) != "") {
+		// Legacy shape: one endpoint for the catalog is expressed as an update
+		// to the default model's entry.
+		entry := findModel(models, candidate)
+		if in.BaseURL != "" {
+			entry.BaseURL = normalizeBaseURL(in.BaseURL)
+		}
+		if key := strings.TrimSpace(in.APIKey); key != "" {
+			entry.APIKey = key
+		}
 	}
-	p.cfg.Models = models
-	p.cfg.DefaultModel = candidate
-	p.cfg.Model = candidate
+	p.cfg = normalizeConfig(config{Models: models, DefaultModel: candidate})
 	return saveConfig(p.cfg)
 }
 
+// inheritEndpoint fills input entries that carry no endpoint of their own with
+// the payload's legacy top-level base_url/api_key. An entry that does state its
+// endpoint always wins, so one payload can mix several providers.
+func inheritEndpoint(in []modelEntryIn, baseURL, apiKey string) []modelEntryIn {
+	baseURL = normalizeBaseURL(baseURL)
+	key := strings.TrimSpace(apiKey)
+	if baseURL == "" && key == "" {
+		return in
+	}
+	out := append([]modelEntryIn(nil), in...)
+	for i := range out {
+		if out[i].BaseURL == "" {
+			out[i].BaseURL = baseURL
+		}
+		if out[i].APIKey == nil && key != "" {
+			out[i].APIKey = &key
+		}
+	}
+	return out
+}
+
+// saveConfig persists the multi-provider shape: one entry per model with its
+// own endpoint and key. The legacy top-level fields are not written; they only
+// exist as migration input and as llm.config.get mirrors.
 func saveConfig(c config) error {
-	persisted := c
-	persisted.Models = sanitizeModels(persisted.Models)
+	persisted := config{
+		Models:       sanitizeModels(c.Models, "", ""),
+		DefaultModel: c.DefaultModel,
+	}
 	if len(persisted.Models) == 0 {
 		id := strings.TrimSpace(persisted.DefaultModel)
 		if id == "" {
 			id = defaultModelID
 		}
-		persisted.Models = []modelConfig{{ID: id, Label: id}}
+		persisted.Models = []modelConfig{{ID: id, Label: id, BaseURL: defaultBaseURL}}
 	}
 	if persisted.DefaultModel == "" || !hasModel(persisted.Models, persisted.DefaultModel) {
 		persisted.DefaultModel = persisted.Models[0].ID
 	}
-	persisted.Model = persisted.DefaultModel
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return err
