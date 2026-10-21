@@ -104,6 +104,22 @@ func (p *plugin) queryMessages(ctx context.Context, contextID, sessionID string)
 	return out.Facts, nil
 }
 
+// sessionOrigin lets the assembler append the configured subagent prompt only
+// for delegated sessions. Session metadata stays free of prompt text.
+func (p *plugin) sessionOrigin(ctx context.Context, contextID, sessionID string) (string, []string) {
+	raw, err := p.call(ctx, contextID, "session", "info", mustJSON(map[string]string{"session_id": sessionID}))
+	if err != nil {
+		return "", []string{"session_info_unavailable"}
+	}
+	var out struct {
+		Origin string `json:"origin,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", []string{"session_info_unavailable"}
+	}
+	return out.Origin, nil
+}
+
 func parseDerivedMeta(raw json.RawMessage) derivedMeta {
 	var meta derivedMeta
 	if len(raw) > 0 {
@@ -164,14 +180,18 @@ func findFallbackSystem(view deriveOut) *derivedMessage {
 	return nil
 }
 
-func (p *plugin) assemble(meta completeMeta, view deriveOut) (assembly, error) {
+func (p *plugin) assemble(meta completeMeta, view deriveOut, origin string) (assembly, error) {
 	vars := map[string]string{
 		"workspace":    meta.Workspace,
 		"workspace_id": meta.WorkspaceID,
 		"mode":         meta.Mode,
 		"scheme":       meta.Scheme,
 	}
-	prompt, sections, err := renderPrompt(p.cfg.PromptSections, vars)
+	configured := p.cfg.PromptSections
+	if strings.TrimSpace(origin) == "subagent" {
+		configured = append(append([]promptSection(nil), configured...), p.cfg.SubagentSections...)
+	}
+	prompt, sections, err := renderPrompt(configured, vars)
 	if err != nil {
 		return assembly{}, err
 	}
@@ -309,7 +329,8 @@ func (p *plugin) prepare(
 	if err != nil {
 		return prepared{}, err
 	}
-	asm, err := p.assemble(meta, view)
+	origin, originWarnings := p.sessionOrigin(ctx, contextID, meta.SessionID)
+	asm, err := p.assemble(meta, view, origin)
 	if err != nil {
 		return prepared{}, err
 	}
@@ -325,6 +346,7 @@ func (p *plugin) prepare(
 	}
 
 	warnings := append([]string(nil), asm.Warnings...)
+	warnings = append(warnings, originWarnings...)
 	view, compactWarnings, err := p.enforceBudget(ctx, contextID, meta, tools, view)
 	if err != nil {
 		return prepared{}, err
@@ -1042,7 +1064,9 @@ func (p *plugin) build(ctx context.Context, contextID string, in buildIn) (build
 		Mode: in.Mode, Scheme: in.Scheme, Workspace: in.Workspace, WorkspaceID: in.WorkspaceID,
 		Model: in.Model, ContextWindow: in.ContextWindow,
 	}
-	asm, err := p.assemble(meta, view)
+	origin, originWarnings := p.sessionOrigin(ctx, contextID, in.SessionID)
+	warnings = append(warnings, originWarnings...)
+	asm, err := p.assemble(meta, view, origin)
 	if err != nil {
 		return buildOut{}, err
 	}

@@ -31,7 +31,7 @@ func TestCreateBindsSessionToWorkspaceAndFiltersHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := p.list(first.WorkspaceID)
+	list, err := p.list(first.WorkspaceID, true)
 	if err != nil {
 		t.Fatal(err)
 	}

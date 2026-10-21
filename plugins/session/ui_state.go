@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -38,6 +39,16 @@ type chatMessageUI struct {
 	Truncated  bool            `json:"truncated,omitempty"`
 	Source     string          `json:"source,omitempty"`
 	Kind       string          `json:"kind,omitempty"`
+}
+
+type subagentUI struct {
+	ChildSessionID string `json:"child_session_id"`
+	State          string `json:"state"`
+	StartedTS      int64  `json:"started_ts,omitempty"`
+	EndedTS        int64  `json:"ended_ts,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	TurnCount      int    `json:"turn_count,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 type chatTurnUI struct {
@@ -94,24 +105,28 @@ type chatRequestUI struct {
 }
 
 type chatStateUI struct {
-	SessionID     string           `json:"session_id"`
-	Name          string           `json:"name,omitempty"`
-	WorkspaceID   string           `json:"workspace_id,omitempty"`
-	Workspace     string           `json:"workspace,omitempty"`
-	Model         string           `json:"model,omitempty"`
-	ContextWindow int              `json:"context_window,omitempty"`
-	Revision      int              `json:"revision"`
-	ThroughSeq    int              `json:"through_seq"`
-	FirstSeq      int              `json:"first_seq,omitempty"`
-	HasMore       bool             `json:"has_more,omitempty"`
-	Messages      []chatMessageUI  `json:"messages"`
-	Turn          chatTurnUI       `json:"turn"`
-	Turns         []chatTurnInfoUI `json:"turns"`
-	Usage         chatUsageUI      `json:"usage"`
-	Context       *chatContextUI   `json:"context,omitempty"`
-	Request       *chatRequestUI   `json:"request,omitempty"`
-	Stream        *streamSnapshot  `json:"stream,omitempty"`
-	Error         string           `json:"error,omitempty"`
+	SessionID       string           `json:"session_id"`
+	Name            string           `json:"name,omitempty"`
+	WorkspaceID     string           `json:"workspace_id,omitempty"`
+	Workspace       string           `json:"workspace,omitempty"`
+	Model           string           `json:"model,omitempty"`
+	ContextWindow   int              `json:"context_window,omitempty"`
+	Origin          string           `json:"origin,omitempty"`
+	ParentSessionID string           `json:"parent_session_id,omitempty"`
+	ReadOnly        bool             `json:"read_only,omitempty"`
+	Subagents       []subagentUI     `json:"subagents,omitempty"`
+	Revision        int              `json:"revision"`
+	ThroughSeq      int              `json:"through_seq"`
+	FirstSeq        int              `json:"first_seq,omitempty"`
+	HasMore         bool             `json:"has_more,omitempty"`
+	Messages        []chatMessageUI  `json:"messages"`
+	Turn            chatTurnUI       `json:"turn"`
+	Turns           []chatTurnInfoUI `json:"turns"`
+	Usage           chatUsageUI      `json:"usage"`
+	Context         *chatContextUI   `json:"context,omitempty"`
+	Request         *chatRequestUI   `json:"request,omitempty"`
+	Stream          *streamSnapshot  `json:"stream,omitempty"`
+	Error           string           `json:"error,omitempty"`
 }
 
 // chatAppendUI is the live delta for one append batch. AfterSeq is the last
@@ -124,6 +139,7 @@ type chatAppendUI struct {
 	ThroughSeq int               `json:"through_seq"`
 	Messages   []chatMessageUI   `json:"messages"`
 	Turn       *chatTurnAppendUI `json:"turn,omitempty"`
+	Subagents  []subagentUI      `json:"subagents,omitempty"`
 }
 
 // chatTurnAppendUI carries only fields the append can prove. It deliberately
@@ -585,7 +601,7 @@ func (p *plugin) effectiveID(requested, workspaceID string) string {
 	if id != "" && p.isOpen(id) {
 		return id
 	}
-	list, err := p.list(workspaceID)
+	list, err := p.list(workspaceID, false)
 	if err != nil || len(list.Sessions) == 0 {
 		return ""
 	}
@@ -635,7 +651,7 @@ func (p *plugin) state(ctx context.Context, in stateIn) (stateOut, error) {
 		WorkspaceID: workspaceID, SelectedWorkspaceID: selectedWorkspaceID,
 		Workspaces: workspaces,
 	}}
-	list, err := p.list(workspaceID)
+	list, err := p.list(workspaceID, false)
 	if err != nil {
 		return stateOut{}, err
 	}
@@ -751,6 +767,70 @@ func (p *plugin) publishAfterAppend(ctx context.Context, sessionID string, facts
 	}
 }
 
+type subagentFactMeta struct {
+	ChildSessionID string `json:"child_session_id"`
+	State          string `json:"state"`
+	StartedTS      int64  `json:"started_ts,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	TurnCount      int    `json:"turn_count,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+func (p *plugin) subagentsForSession(sessionID string) []subagentUI {
+	facts, _, err := p.readFacts(sessionID)
+	if err != nil {
+		return nil
+	}
+	return subagentsFromFacts(facts)
+}
+
+func subagentsFromFacts(facts []Fact) []subagentUI {
+	byID := make(map[string]*subagentUI)
+	order := make([]string, 0, 2)
+	for _, fact := range facts {
+		if fact.Type != TypeSubagentSpawned && fact.Type != TypeSubagentFinished {
+			continue
+		}
+		var meta subagentFactMeta
+		if len(fact.Meta) > 0 {
+			_ = json.Unmarshal(fact.Meta, &meta)
+		}
+		if meta.ChildSessionID == "" {
+			continue
+		}
+		entry := byID[meta.ChildSessionID]
+		if entry == nil {
+			entry = &subagentUI{
+				ChildSessionID: meta.ChildSessionID, State: "running",
+				StartedTS: meta.StartedTS,
+			}
+			if entry.StartedTS == 0 {
+				entry.StartedTS = fact.Timestamp
+			}
+			byID[meta.ChildSessionID] = entry
+			order = append(order, meta.ChildSessionID)
+		}
+		if fact.Type == TypeSubagentFinished {
+			entry.State = meta.State
+			entry.EndedTS = fact.Timestamp
+			entry.DurationMS = meta.DurationMS
+			entry.TurnCount = meta.TurnCount
+			entry.Error = meta.Error
+		}
+	}
+	out := make([]subagentUI, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byID[id])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StartedTS != out[j].StartedTS {
+			return out[i].StartedTS < out[j].StartedTS
+		}
+		return out[i].ChildSessionID < out[j].ChildSessionID
+	})
+	return out
+}
+
 func appendedFacts(ins []factIn, seqs []int, timestamp int64) []Fact {
 	facts := make([]Fact, 0, len(ins))
 	for i, in := range ins {
@@ -825,9 +905,17 @@ func (p *plugin) publishChatAppend(ctx context.Context, sessionID string, facts 
 		}
 		messages = append(messages, chatMessageFromFact(fact))
 	}
+	var subagents []subagentUI
+	for _, fact := range facts {
+		if fact.Type == TypeSubagentSpawned || fact.Type == TypeSubagentFinished {
+			subagents = p.subagentsForSession(sessionID)
+			break
+		}
+	}
 	state := chatAppendUI{
 		SessionID: sessionID, Revision: p.nextUIRevision(), AfterSeq: afterSeq,
 		ThroughSeq: throughSeq, Messages: messages, Turn: turnAppendFromFacts(facts),
+		Subagents: subagents,
 	}
 	payload, err := json.Marshal(state)
 	if err != nil {
@@ -1135,7 +1223,7 @@ func (p *plugin) publishHistory(ctx context.Context) {
 	if current, ok := p.selectedWorkspace(); ok {
 		workspaceID = current.WorkspaceID
 	}
-	out, err := p.list(workspaceID)
+	out, err := p.list(workspaceID, false)
 	if err != nil {
 		return
 	}
@@ -1280,14 +1368,14 @@ func (p *plugin) chatStateInternal(ctx context.Context, sessionID string, allowR
 	}
 	turnOwner := ""
 	state := chatStateUI{
-		SessionID:     sessionID,
-		Name:          meta.Name,
-		WorkspaceID:   meta.WorkspaceID,
-		Workspace:     meta.Workspace,
-		Model:         meta.Model,
-		ContextWindow: meta.ContextWindow,
-		Messages:      make([]chatMessageUI, 0, len(facts)),
-		Turn:          chatTurnUI{Status: "idle"},
+		SessionID: sessionID, Name: meta.Name,
+		WorkspaceID: meta.WorkspaceID, Workspace: meta.Workspace,
+		Model: meta.Model, ContextWindow: meta.ContextWindow,
+		Origin: meta.Origin, ParentSessionID: meta.ParentSessionID,
+		ReadOnly:  meta.Origin == "subagent",
+		Subagents: subagentsFromFacts(facts),
+		Messages:  make([]chatMessageUI, 0, len(facts)),
+		Turn:      chatTurnUI{Status: "idle"},
 	}
 	var usage chatUsageUI
 	var latestUsageModel string

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "protocol": 1,
   "entry": "sandbox",
-  "autostart": false,
+  "autostart": true,
   "priority": 500,
   "provides": ["sandbox"],
   "consumes": [

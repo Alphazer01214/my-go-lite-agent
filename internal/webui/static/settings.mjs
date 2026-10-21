@@ -6,6 +6,29 @@ export function settingsValuesFromResponse(payload) {
 	return isObject(payload?.values) ? payload.values : {};
 }
 
+// Settings are plugin methods: a stopped plugin has no route owner, so the
+// renderer must not call settings.get for it. Unknown state stays available
+// for callers that do not track lifecycle.
+export function pluginSettingsAvailability(plugin) {
+	if (!plugin || plugin.missing) {
+		return { available: false, message: "插件缺失，无法读取设置" };
+	}
+	switch (plugin.state) {
+		case undefined:
+		case "":
+		case "active":
+			return { available: true };
+		case "loading":
+			return { available: false, message: "插件加载中，稍后可读取设置" };
+		case "stopping":
+			return { available: false, message: "插件停止中，停止完成后可重新启动" };
+		case "failed":
+			return { available: false, message: "插件启动失败，请先在“插件”页签重新启动" };
+		default:
+			return { available: false, message: "插件未启动，启动后可编辑设置" };
+	}
+}
+
 function normalizeListItem(field, rawItem) {
 	const item = {};
 	let hasValue = false;
@@ -274,8 +297,11 @@ export function renderSettingsList(document, root, plugins, handlers = {}) {
 	}
 
 	for (const plugin of entries) {
+		const availability = handlers.availability?.(plugin) ?? { available: true };
 		const section = document.createElement("section");
-		section.className = "settings-plugin";
+		section.className = availability.available
+			? "settings-plugin"
+			: "settings-plugin settings-plugin-unavailable";
 
 		const header = document.createElement("div");
 		header.className = "settings-plugin-header";
@@ -325,18 +351,24 @@ export function renderSettingsList(document, root, plugins, handlers = {}) {
 		const actions = document.createElement("div");
 		actions.className = "settings-actions";
 		const status = document.createElement("span");
-		status.className = "settings-status settings-status-info";
-		status.textContent = "加载中…";
+		status.className = availability.available
+			? "settings-status settings-status-info"
+			: "settings-status settings-status-muted";
+		status.textContent = availability.available
+			? "加载中…"
+			: availability.message || "插件未启动";
 		actions.append(status);
 		const save = document.createElement("button");
 		save.type = "submit";
 		save.className = "settings-save";
 		save.textContent = "保存";
+		save.disabled = !availability.available;
 		actions.append(save);
 		form.append(actions);
 
 		form.addEventListener("submit", (event) => {
 			event.preventDefault();
+			if (!availability.available) return;
 			const raw = {};
 			for (const field of plugin.settings.schema) {
 				if (field.type === "list") {
@@ -351,6 +383,6 @@ export function renderSettingsList(document, root, plugins, handlers = {}) {
 		});
 		section.append(form);
 		root.append(section);
-		handlers.onLoad?.(plugin, form);
+		if (availability.available) handlers.onLoad?.(plugin, form);
 	}
 }

@@ -96,7 +96,7 @@ func main() {
 				return nil, err
 			}
 		}
-		return p.list(in.WorkspaceID)
+		return p.list(in.WorkspaceID, in.IncludeSubagents)
 	})).WithInfo("list", "list sessions"))
 
 	s.Register("session", "info", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {

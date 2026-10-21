@@ -172,6 +172,7 @@ func sameDefinition(left, right Definition) bool {
 		left.Description == right.Description &&
 		string(left.InputSchema) == string(right.InputSchema) &&
 		left.Risk == right.Risk &&
+		left.ParallelSafe == right.ParallelSafe &&
 		left.TargetCapability == right.TargetCapability &&
 		left.TargetMethod == right.TargetMethod &&
 		equalStrings(left.Tags, right.Tags)
@@ -289,6 +290,7 @@ func validateDefinition(in RegisterInput) (Definition, error) {
 		Description:      in.Description,
 		InputSchema:      in.InputSchema,
 		Risk:             in.Risk,
+		ParallelSafe:     in.ParallelSafe,
 		Tags:             tags,
 		TargetCapability: in.TargetCapability,
 		TargetMethod:     in.TargetMethod,

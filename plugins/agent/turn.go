@@ -319,12 +319,12 @@ func (p *plugin) buildModelContext(ctx context.Context, in turnIn, scheme string
 	if err != nil {
 		return modelContextOut{}, err
 	}
-	_, tools, degraded, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
+	specs, tools, degraded, toolErr := p.collectTools(ctx, scheme, in.AllowedTools, in.DeniedTools)
 	if toolErr != nil {
 		return modelContextOut{}, toolErr
 	}
 	return modelContextOut{
-		Messages: messages, Tools: tools, Degraded: degraded,
+		Messages: messages, Tools: tools, ToolSpecs: specs, Degraded: degraded,
 		TokenEstimate: estimateContextTokens(messages, tools),
 	}, nil
 }
@@ -527,6 +527,7 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int, 
 			return out, contextErr
 		}
 		msgs, tools := contextOut.Messages, contextOut.Tools
+		specs := contextOut.ToolSpecs
 
 		headerMeta := map[string]any{
 			"step": step, "mode": scheme, "scheme": scheme,
@@ -796,63 +797,75 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int, 
 			seqs = append(seqs, appended...)
 			return nil
 		}
-		for index, tc := range llmOut.ToolCalls {
-			if st.isCancelled() || st.ctx.Err() != nil {
-				if st.ctx.Err() != nil {
-					st.markCancelled()
-				}
-				out.Cancelled = true
-				cancelledMidTools = true
-				if err := appendCancelledToolResults(index); err != nil {
-					return out, err
-				}
-				break
-			}
-			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments,
-				in.SessionID, in.Workspace, in.WorkspaceID, scheme, tc.ID)
-			content := result.Content
-			toolMeta := map[string]any{
-				"tool_name": tc.Function.Name, "is_error": result.IsError,
-				"truncated": result.Truncated,
-			}
-			if result.Meta != nil {
-				toolMeta["tool_meta"] = result.Meta
-			}
-			if callErr != nil {
-				errCode := pluginsdk.Code(callErr)
-				if errCode != "" {
-					content = fmt.Sprintf("tool error [%s]: %s", errCode, callErr.Error())
-					toolMeta["error_code"] = errCode
-				} else {
-					content = "tool error: " + callErr.Error()
-				}
-				toolMeta["is_error"] = true
-				toolMeta["wire_error"] = callErr.Error()
-			}
-			appendCtx := st.ctx
-			cancelled := st.isCancelled() || st.ctx.Err() != nil
-			var releaseAppend context.CancelFunc
-			if cancelled {
-				appendCtx, releaseAppend = finalizeContext(st.ctx)
-			}
-			s, err = p.appendFacts(appendCtx, in.SessionID, []map[string]any{{
-				"type": "message", "role": "tool", "content": content, "tool_call_id": tc.ID,
-				"meta": appendMeta(stepID, toolMeta),
-			}})
-			if releaseAppend != nil {
-				releaseAppend()
-			}
+		if !st.isCancelled() && st.ctx.Err() == nil && p.canRunToolsParallel(specs, llmOut.ToolCalls) {
+			cancelled, parallelSeqs, err := p.runToolCallsParallel(st, in, scheme, llmOut.ToolCalls)
 			if err != nil {
 				return out, err
 			}
-			seqs = append(seqs, s...)
+			seqs = append(seqs, parallelSeqs...)
 			if cancelled {
 				out.Cancelled = true
 				cancelledMidTools = true
-				if err := appendCancelledToolResults(index + 1); err != nil {
+			}
+		} else {
+			for index, tc := range llmOut.ToolCalls {
+				if st.isCancelled() || st.ctx.Err() != nil {
+					if st.ctx.Err() != nil {
+						st.markCancelled()
+					}
+					out.Cancelled = true
+					cancelledMidTools = true
+					if err := appendCancelledToolResults(index); err != nil {
+						return out, err
+					}
+					break
+				}
+				result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments,
+					in.SessionID, in.Workspace, in.WorkspaceID, scheme, tc.ID)
+				content := result.Content
+				toolMeta := map[string]any{
+					"tool_name": tc.Function.Name, "is_error": result.IsError,
+					"truncated": result.Truncated,
+				}
+				if result.Meta != nil {
+					toolMeta["tool_meta"] = result.Meta
+				}
+				if callErr != nil {
+					errCode := pluginsdk.Code(callErr)
+					if errCode != "" {
+						content = fmt.Sprintf("tool error [%s]: %s", errCode, callErr.Error())
+						toolMeta["error_code"] = errCode
+					} else {
+						content = "tool error: " + callErr.Error()
+					}
+					toolMeta["is_error"] = true
+					toolMeta["wire_error"] = callErr.Error()
+				}
+				appendCtx := st.ctx
+				cancelled := st.isCancelled() || st.ctx.Err() != nil
+				var releaseAppend context.CancelFunc
+				if cancelled {
+					appendCtx, releaseAppend = finalizeContext(st.ctx)
+				}
+				s, err = p.appendFacts(appendCtx, in.SessionID, []map[string]any{{
+					"type": "message", "role": "tool", "content": content, "tool_call_id": tc.ID,
+					"meta": appendMeta(stepID, toolMeta),
+				}})
+				if releaseAppend != nil {
+					releaseAppend()
+				}
+				if err != nil {
 					return out, err
 				}
-				break
+				seqs = append(seqs, s...)
+				if cancelled {
+					out.Cancelled = true
+					cancelledMidTools = true
+					if err := appendCancelledToolResults(index + 1); err != nil {
+						return out, err
+					}
+					break
+				}
 			}
 		}
 		if cancelledMidTools {
@@ -907,4 +920,102 @@ func (p *plugin) runTurn(st *turnState, in turnIn, scheme string, maxSteps int, 
 	}
 	out.Seqs = seqs
 	return out, nil
+}
+
+type toolCallOutcome struct {
+	content string
+	meta    map[string]any
+}
+
+// canRunToolsParallel only enables a batch when every call declares itself
+// safe. Unsafe tools keep the existing serial path.
+func (p *plugin) canRunToolsParallel(specs []toolSpec, calls []toolCall) bool {
+	cfg := p.snapshot()
+	if cfg.ToolParallelism != "auto" || len(calls) < 2 || cfg.MaxParallelTools < 2 {
+		return false
+	}
+	byName := make(map[string]toolSpec, len(specs))
+	for _, spec := range specs {
+		byName[spec.Name] = spec
+	}
+	for _, call := range calls {
+		spec, ok := byName[call.Function.Name]
+		if !ok || !spec.ParallelSafe {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *plugin) runToolCallsParallel(st *turnState, in turnIn, scheme string, calls []toolCall) (bool, []int, error) {
+	limit := p.snapshot().MaxParallelTools
+	if limit < 2 {
+		limit = 2
+	}
+	outcomes := make([]toolCallOutcome, len(calls))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(i int, tc toolCall) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			result, callErr := p.callTool(st.ctx, tc.Function.Name, tc.Function.Arguments,
+				in.SessionID, in.Workspace, in.WorkspaceID, scheme, tc.ID)
+			content := result.Content
+			toolMeta := map[string]any{
+				"tool_name": tc.Function.Name, "is_error": result.IsError,
+				"truncated": result.Truncated,
+			}
+			if result.Meta != nil {
+				toolMeta["tool_meta"] = result.Meta
+			}
+			if callErr != nil {
+				if code := pluginsdk.Code(callErr); code != "" {
+					content = fmt.Sprintf("tool error [%s]: %s", code, callErr.Error())
+					toolMeta["error_code"] = code
+				} else {
+					content = "tool error: " + callErr.Error()
+				}
+				toolMeta["is_error"] = true
+				toolMeta["wire_error"] = callErr.Error()
+			}
+			outcomes[i] = toolCallOutcome{content: content, meta: toolMeta}
+		}(i, tc)
+	}
+	wg.Wait()
+
+	seqs := make([]int, 0, len(calls))
+	cancelled := false
+	for i, tc := range calls {
+		appendCtx := st.ctx
+		var release context.CancelFunc
+		if st.isCancelled() || st.ctx.Err() != nil {
+			cancelled = true
+			appendCtx, release = finalizeContext(st.ctx)
+		}
+		meta := map[string]any{"turn_id": st.turnID, "plugin": "agent"}
+		if st.stepID != "" {
+			meta["step_id"] = st.stepID
+		}
+		for key, value := range outcomes[i].meta {
+			meta[key] = value
+		}
+		appended, err := p.appendFacts(appendCtx, in.SessionID, []map[string]any{{
+			"type": "message", "role": "tool", "content": outcomes[i].content,
+			"tool_call_id": tc.ID, "meta": meta,
+		}})
+		if release != nil {
+			release()
+		}
+		if err != nil {
+			return cancelled, seqs, err
+		}
+		seqs = append(seqs, appended...)
+	}
+	if st.isCancelled() || st.ctx.Err() != nil {
+		cancelled = true
+	}
+	return cancelled, seqs, nil
 }

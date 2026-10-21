@@ -41,6 +41,7 @@ type promptSection struct {
 
 type config struct {
 	PromptSections      []promptSection `json:"prompt_sections,omitempty"`
+	SubagentSections    []promptSection `json:"subagent_sections,omitempty"`
 	SystemPrompt        string          `json:"system_prompt,omitempty"`
 	MaxContextTokens    int             `json:"max_context_tokens,omitempty"`
 	CompactThreshold    float64         `json:"compact_threshold,omitempty"`

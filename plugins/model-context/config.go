@@ -1,11 +1,18 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 )
+
+// config.example.json is both the customization template and the shipped
+// default. config.json remains the user override and is gitignored.
+//
+//go:embed config.example.json
+var shippedConfig []byte
 
 func defaultPromptSections() []promptSection {
 	return []promptSection{
@@ -28,15 +35,27 @@ func defaultConfig() config {
 }
 
 func loadConfig() config {
-	cfg := defaultConfig()
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return cfg
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "model-context: read %s: %v\n", configFile, err)
+		}
+		return shippedOrDefault()
 	}
 	var raw config
 	if err := json.Unmarshal(data, &raw); err != nil {
 		fmt.Fprintf(os.Stderr, "model-context: read %s: %v\n", configFile, err)
-		return cfg
+		return shippedOrDefault()
+	}
+	return normalizeConfig(raw)
+}
+
+// A missing or broken config.json must not silently fall back to the minimal
+// built-in prompt; the embedded example is the shipped default.
+func shippedOrDefault() config {
+	var raw config
+	if err := json.Unmarshal(shippedConfig, &raw); err != nil {
+		return defaultConfig()
 	}
 	return normalizeConfig(raw)
 }
@@ -49,6 +68,9 @@ func normalizeConfig(raw config) config {
 		cfg.PromptSections = []promptSection{{
 			Name: "system_prompt", Order: 0, Text: raw.SystemPrompt,
 		}}
+	}
+	if len(raw.SubagentSections) > 0 {
+		cfg.SubagentSections = raw.SubagentSections
 	}
 	if raw.MaxContextTokens != 0 {
 		if raw.MaxContextTokens < 0 {

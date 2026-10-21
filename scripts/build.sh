@@ -49,6 +49,7 @@ CORE_PLUGINS=()
 TOOLS_PLUGINS=()
 OPTIONAL_PLUGINS=()
 while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%$'\r'}"
   case "$line" in
     core:*)
       __rest="${line#core:}"
@@ -165,6 +166,8 @@ extra_input_paths() {
   if [[ "$pkg" == ./plugins/* ]]; then
     local name="${pkg#./plugins/}"
     [[ -f "$ROOT/plugins/$name/plugin.json" ]] && echo "$ROOT/plugins/$name/plugin.json"
+    # model-context go:embeds config.example.json as the shipped prompt default.
+    [[ -f "$ROOT/plugins/$name/config.example.json" ]] && echo "$ROOT/plugins/$name/config.example.json"
   fi
   return 0
 }

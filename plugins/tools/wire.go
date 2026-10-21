@@ -33,6 +33,7 @@ type Definition struct {
 	Description      string          `json:"description"`
 	InputSchema      json.RawMessage `json:"input_schema"`
 	Risk             int             `json:"risk"`
+	ParallelSafe     bool            `json:"parallel_safe,omitempty"`
 	Tags             []string        `json:"tags,omitempty"`
 	SourcePlugin     string          `json:"source_plugin,omitempty"`
 	TargetCapability string          `json:"target_capability"`
@@ -73,6 +74,7 @@ type RegisterInput struct {
 	TargetCapability string          `json:"target_capability"`
 	TargetMethod     string          `json:"target_method"`
 	Risk             int             `json:"risk"`
+	ParallelSafe     bool            `json:"parallel_safe,omitempty"`
 	Tags             []string        `json:"tags,omitempty"`
 }
 

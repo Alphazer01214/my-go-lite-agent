@@ -35,6 +35,10 @@ const (
 	// TypeSandboxDecision is written by the sandbox plugin. It carries no
 	// message, so it never enters the model context.
 	TypeSandboxDecision = "sandbox_decision"
+	// Written by the subagent plugin: the parent-side start and finish markers.
+	// Both are host facts and never enter model context.
+	TypeSubagentSpawned  = "subagent_spawned"
+	TypeSubagentFinished = "subagent_finished"
 )
 
 const (
@@ -184,7 +188,8 @@ type deriveOut struct {
 }
 
 type listIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty"`
+	WorkspaceID      string `json:"workspace_id,omitempty"`
+	IncludeSubagents bool   `json:"include_subagents,omitempty"`
 }
 
 type listOut struct {
@@ -196,6 +201,9 @@ type sessionSummary struct {
 	Name             string `json:"name,omitempty"`
 	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Workspace        string `json:"workspace,omitempty"`
+	ParentSessionID  string `json:"parent_session_id,omitempty"`
+	Origin           string `json:"origin,omitempty"`
+	DelegationDepth  int    `json:"delegation_depth,omitempty"`
 	FactCount        int    `json:"fact_count"`
 	CreatedTimestamp int64  `json:"created_ts"`
 	LastTimestamp    int64  `json:"last_ts"`

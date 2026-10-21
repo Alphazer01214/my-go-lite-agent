@@ -282,3 +282,19 @@ func TestCallRejectsStaleGeneration(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestSyncPreservesParallelSafe(t *testing.T) {
+	sdk := &fakeToolsSDK{snapshot: activeSnapshot("file-tools", "file", "read", 1)}
+	p := newTestToolsPlugin(sdk)
+	def := testDefinition("file_read", "file", "read", RiskLow)
+	def.ParallelSafe = true
+	if _, err := p.sync(context.Background(), &pluginsdk.Request{
+		From: "file-tools", Payload: syncPayload(t, def),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := p.reg.get("file_read")
+	if !ok || !entry.definition.ParallelSafe {
+		t.Fatalf("parallel_safe was not preserved: %+v", entry)
+	}
+}

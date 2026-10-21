@@ -31,7 +31,9 @@ Agent 不保存 UI State，也不直接渲染消息。
 ```json
 {
   "default_scheme": "tool_calling",
-  "max_steps": 128
+  "max_steps": 128,
+  "tool_parallelism": "serial",
+  "max_parallel_tools": 4
 }
 ```
 
@@ -39,6 +41,8 @@ Agent 不保存 UI State，也不直接渲染消息。
 |---|---|---|
 | `default_scheme` | `tool_calling` | 只有 `chat` 和 `tool_calling` 有区别：`chat` 不给模型挂工具，其余取值按 `tool_calling` 处理 |
 | `max_steps` | `128` | 单 Turn 最大 Step 数 |
+| `tool_parallelism` | `serial` | `serial` 串行执行工具；`auto` 仅在整批工具都声明 `parallel_safe` 时并发 |
+| `max_parallel_tools` | `4` | `auto` 模式下的并发上限，取值 1 到 16 |
 
 运行中的 Turn 使用开始时的配置快照。`config.set` 立即生效，并立即写入 `config.json`。
 写盘失败时返回 `handler_error`：内存里的新值仍然生效，但没有持久化。

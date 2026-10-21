@@ -24,6 +24,7 @@ Provider 启动时调用 `tools.sync`。运行期动态增删使用 `register` /
   "description": "Read a workspace file.",
   "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
   "risk": 10,
+  "parallel_safe": true,
   "tags": ["fs", "read"],
   "source_plugin": "file-tools",
   "target_capability": "file",
@@ -38,13 +39,14 @@ Provider 启动时调用 `tools.sync`。运行期动态增删使用 `register` /
 | `description` | 1 到 8192 字节 |
 | `input_schema` | object schema，最多 64 KiB |
 | `risk` | 0 到 100 的整数，越高越危险 |
+| `parallel_safe` | 可选。只读或无共享状态时为 `true`，允许 agent 的 `auto` 模式并发 |
 | `tags` | 最多 16 个，供 agent 模式筛选 |
 | `source_plugin` | Host 注入的 `from`，注册方不能设置 |
 | `target_capability` | 目标 Capability，不能是 `host` 或 `tools` |
 | `target_method` | 目标方法 |
 | `source_generation` | tools 填写，用于识别陈旧工具 |
 
-`source_plugin`、`target_capability`、`target_method`、`source_generation` 和 `tags` 不发送给模型。
+`source_plugin`、`parallel_safe`、`target_capability`、`target_method`、`source_generation` 和 `tags` 不发送给模型。
 
 ### Risk
 

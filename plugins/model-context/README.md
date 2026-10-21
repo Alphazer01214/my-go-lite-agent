@@ -13,14 +13,13 @@
 
 ## 配置
 
-`config.json` 缺省时使用内置值：
+`config.json` 是自定义入口；文件不存在时使用内嵌的 [config.example.json](config.example.json)。内嵌默认值就是完整的静态八节：`identity`、`persona`、`system_semantics`、`task_policy`、`tool_discipline`、`communication`、`output_format`、`safety`。
 
 ```json
 {
   "prompt_sections": [
-    { "name": "identity", "order": -1000, "text": "You are an AI agent powered by LiteAgent." },
-    { "name": "persona", "order": 0, "text": "You are a coding agent. Your working directory is {{workspace}}." },
-    { "name": "policy", "order": 500, "text": "Use tools when they are needed..." }
+    { "name": "identity", "order": -1000, "text": "..." },
+    { "name": "persona", "order": -900, "text": "..." }
   ],
   "max_context_tokens": 60000,
   "compact_threshold": 0.8,
@@ -30,6 +29,10 @@
   "snapshot_memory_limit": 128
 }
 ```
+
+Prompt 文本只放在 `prompt_sections`。子会话的追加 prompt 放在 `subagent_sections`；当会话 `origin=subagent` 时由 model-context 追加，subagent 插件本身不保存 prompt 文本。
+
+工作区、模式、方案与 AGENTS.md 由运行时上下文提供，不要写回静态节，否则前缀缓存无法命中。
 
 变量只支持 `{{workspace}}`、`{{workspace_id}}`、`{{mode}}`、`{{scheme}}`。未知变量返回 `bad_arguments`，不调用模型。
 

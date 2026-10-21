@@ -102,7 +102,7 @@ flowchart TB
 | `loop.turn` | agent | 发起方 | 当前实现 |
 | `file.write` 等 | tools → sandbox → file-tools | 直连高危能力也过裁决 | 当前实现 |
 | `shell.execute` | tools → sandbox → shell-tools | 同上 | 当前实现 |
-| `loop.turn` | subagent → agent | 子代理经这里起独立会话 | 目标契约 |
+| `loop.turn` | subagent → agent | 子代理经这里起独立会话 | 当前实现 |
 
 链序按插件顶层 `priority` 递减。`priority` 是插件级单值，Manifest 的 `consumes[]` 条目不带独立 priority。
 
@@ -181,7 +181,7 @@ sandbox 排在第一批落地，它要占 `right` 槽，而 `right` 已被 sessi
   理由：两者都是纯增量，不改动现有调用链。
 
 第三批：subagent、memory
-  理由：两者都要改会话记录格式与动态轨。
+  subagent v2 已实现；memory 仍待实现。两者都要改会话记录格式与动态轨。
 
 第四批：web-tools、mcp
   理由：两者都扩展工具面，需要工具契约先稳定。
@@ -210,7 +210,7 @@ sandbox 排在第一批落地，它要占 `right` 槽，而 `right` 已被 sessi
 | 登记项 | 登记在哪 | 谁依赖 |
 |---|---|---|
 | 动态轨节名 `policy`、`task` | Prompt 分节词表 | sandbox、task |
-| 事实类型 `sandbox_decision`、`memory_item`、`task_item`、`subagent_spawned` | session 的类型词汇表 | sandbox、memory、task、subagent |
+| 事实类型 `sandbox_decision`、`memory_item`、`task_item`、`subagent_spawned`、`subagent_finished` | session 的类型词汇表 | sandbox、memory、task、subagent |
 | 规则作用域 `command_pattern` 与工具入参保留键 `confirm_token` | 工具契约与规则 Schema | sandbox、全部工具提供方 |
 
 ## 9. 与现有插件文档的关系

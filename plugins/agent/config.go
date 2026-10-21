@@ -14,7 +14,10 @@ import (
 const configFile = "config.json"
 
 func defaultConfig() config {
-	return config{DefaultScheme: schemeToolCalling, MaxSteps: 128}
+	return config{
+		DefaultScheme: schemeToolCalling, MaxSteps: 128,
+		ToolParallelism: "serial", MaxParallelTools: 4,
+	}
 }
 
 type plugin struct {
@@ -49,8 +52,10 @@ func loadConfig() config {
 		return cfg
 	}
 	var raw struct {
-		DefaultScheme string `json:"default_scheme"`
-		MaxSteps      int    `json:"max_steps"`
+		DefaultScheme    string `json:"default_scheme"`
+		MaxSteps         int    `json:"max_steps"`
+		ToolParallelism  string `json:"tool_parallelism"`
+		MaxParallelTools int    `json:"max_parallel_tools"`
 	}
 	if json.Unmarshal(data, &raw) != nil {
 		return cfg
@@ -60,6 +65,12 @@ func loadConfig() config {
 	}
 	if raw.MaxSteps > 0 {
 		cfg.MaxSteps = raw.MaxSteps
+	}
+	if raw.ToolParallelism == "serial" || raw.ToolParallelism == "auto" {
+		cfg.ToolParallelism = raw.ToolParallelism
+	}
+	if raw.MaxParallelTools >= 1 && raw.MaxParallelTools <= 16 {
+		cfg.MaxParallelTools = raw.MaxParallelTools
 	}
 	return cfg
 }

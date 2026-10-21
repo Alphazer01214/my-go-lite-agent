@@ -541,7 +541,7 @@ func (p *plugin) derive(in deriveIn) (deriveOut, error) {
 	return projectMessages(facts, full), nil
 }
 
-func (p *plugin) list(workspaceID string) (listOut, error) {
+func (p *plugin) list(workspaceID string, includeSubagents bool) (listOut, error) {
 	p.mu.RLock()
 	ids := make([]string, 0, len(p.reg))
 	for id := range p.reg {
@@ -559,12 +559,18 @@ func (p *plugin) list(workspaceID string) (listOut, error) {
 		if workspaceID != "" && meta.WorkspaceID != workspaceID {
 			continue
 		}
+		if !includeSubagents && meta.Origin == "subagent" {
+			continue
+		}
 		count, lastTS := st.counts()
 		out.Sessions = append(out.Sessions, sessionSummary{
 			SessionID:        st.id,
 			Name:             meta.Name,
 			WorkspaceID:      meta.WorkspaceID,
 			Workspace:        meta.Workspace,
+			ParentSessionID:  meta.ParentSessionID,
+			Origin:           meta.Origin,
+			DelegationDepth:  meta.DelegationDepth,
 			FactCount:        count,
 			CreatedTimestamp: meta.CreatedTimestamp,
 			LastTimestamp:    lastTS,

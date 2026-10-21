@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
 	collectSettingsValues,
+	pluginSettingsAvailability,
 	renderSettingsList,
 	settingsValuesFromResponse,
 } from "./static/settings.mjs";
@@ -144,6 +145,47 @@ test("renders settings fields and calls lifecycle hooks", () => {
 	assert.equal(form.elements.namedItem("token").type, "password");
 	assert.equal(form.elements.namedItem("enabled").type, "checkbox");
 	assert.match(form.querySelector(".settings-status").textContent, /加载中/);
+});
+
+test("maps plugin lifecycle states to settings availability", () => {
+	assert.deepEqual(pluginSettingsAvailability({ state: "active" }), { available: true });
+	assert.deepEqual(pluginSettingsAvailability({}), { available: true });
+	assert.equal(pluginSettingsAvailability({ state: "inactive" }).available, false);
+	assert.match(pluginSettingsAvailability({ state: "loading" }).message, /加载中/);
+	assert.match(pluginSettingsAvailability({ state: "stopping" }).message, /停止中/);
+	assert.match(pluginSettingsAvailability({ state: "failed" }).message, /启动失败/);
+	assert.match(pluginSettingsAvailability({ missing: true }).message, /缺失/);
+});
+
+test("does not load settings or allow saving while the plugin is inactive", () => {
+	const document = fakeDocument();
+	const root = document.createElement("div");
+	const calls = [];
+	renderSettingsList(document, root, [
+		{
+			name: "sandbox",
+			state: "inactive",
+			settings: {
+				get: { capability: "sandbox", method: "settings.get" },
+				save: { capability: "sandbox", method: "settings.save" },
+				schema: [{ key: "default_action", label: "Default action", type: "string" }],
+			},
+		},
+	], {
+		availability: pluginSettingsAvailability,
+		onLoad(plugin, form) {
+			calls.push(["load", plugin.name, form]);
+		},
+		onSave(plugin, values, form) {
+			calls.push(["save", plugin.name, values, form]);
+		},
+	});
+
+	assert.deepEqual(calls, []);
+	const section = root.children[0];
+	assert.match(section.className, /settings-plugin-unavailable/);
+	assert.equal(section.querySelector(".settings-save").disabled, true);
+	assert.match(section.querySelector(".settings-status").textContent, /插件未启动/);
 });
 
 test("renders a stable empty settings state", () => {

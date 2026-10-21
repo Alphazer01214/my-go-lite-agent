@@ -56,7 +56,7 @@ func newPlugin() *plugin { return &plugin{} }
 func definitions() []Definition {
 	return []Definition{
 		{
-			Name: "file_read", Risk: RiskLow, TargetCapability: "file", TargetMethod: "read",
+			Name: "file_read", Risk: RiskLow, ParallelSafe: true, TargetCapability: "file", TargetMethod: "read",
 			Tags:        []string{"fs", "read"},
 			Description: "Read UTF-8 text from a file inside the workspace. Supports a line range and byte limit.",
 			InputSchema: json.RawMessage(`{
@@ -89,7 +89,7 @@ func definitions() []Definition {
 			}`),
 		},
 		{
-			Name: "file_list", Risk: RiskLow, TargetCapability: "file", TargetMethod: "list",
+			Name: "file_list", Risk: RiskLow, ParallelSafe: true, TargetCapability: "file", TargetMethod: "list",
 			Tags:        []string{"fs", "read"},
 			Description: "List files and directories inside the workspace without following symlinked directories.",
 			InputSchema: json.RawMessage(`{
@@ -105,7 +105,7 @@ func definitions() []Definition {
 			}`),
 		},
 		{
-			Name: "file_stat", Risk: RiskLow, TargetCapability: "file", TargetMethod: "stat",
+			Name: "file_stat", Risk: RiskLow, ParallelSafe: true, TargetCapability: "file", TargetMethod: "stat",
 			Tags:        []string{"fs", "read"},
 			Description: "Inspect one workspace path, including type, size, mode, mtime and optional SHA-256.",
 			InputSchema: json.RawMessage(`{
@@ -116,7 +116,7 @@ func definitions() []Definition {
 			}`),
 		},
 		{
-			Name: "file_search", Risk: RiskLow, TargetCapability: "file", TargetMethod: "search",
+			Name: "file_search", Risk: RiskLow, ParallelSafe: true, TargetCapability: "file", TargetMethod: "search",
 			Tags:        []string{"fs", "read"},
 			Description: "Search UTF-8 workspace text using a literal string or Go regular expression.",
 			InputSchema: json.RawMessage(`{
@@ -137,7 +137,7 @@ func definitions() []Definition {
 			}`),
 		},
 		{
-			Name: "file_glob", Risk: RiskLow, TargetCapability: "file", TargetMethod: "glob",
+			Name: "file_glob", Risk: RiskLow, ParallelSafe: true, TargetCapability: "file", TargetMethod: "glob",
 			Tags:        []string{"fs", "read"},
 			Description: "Find workspace files by glob. Supports *, ? and ** and returns sorted relative paths.",
 			InputSchema: json.RawMessage(`{

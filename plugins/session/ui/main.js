@@ -149,6 +149,58 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-bottom: 1px solid var(--session-border, #d5dbe1);
 }
 .chat-tabs:empty { display: none; }
+.subagent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.subagent-bar[hidden] { display: none; }
+.subagent-label {
+  color: var(--session-muted-text, #5c6875);
+  font-size: 12px;
+}
+.subagent-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--session-surface, #ffffff);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.subagent-entry:hover { border-color: var(--session-accent, #147d64); }
+.subagent-state { color: var(--session-accent, #147d64); }
+.subagent-id { color: var(--session-muted-text, #5c6875); }
+.readonly-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid #f0d9b5;
+  border-radius: 6px;
+  background: #fdf3e7;
+  color: #8a5a17;
+  font-size: 12px;
+}
+.readonly-banner[hidden] { display: none; }
+.back-parent {
+  padding: 2px 8px;
+  border: 1px solid #d8b98a;
+  border-radius: 4px;
+  color: #8a5a17;
+  background: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
 .chat-tab {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1472,6 +1524,11 @@ class SessionChat extends HTMLElement {
 		this.shadowRoot.innerHTML = `
         <style>${styles}</style>
         <div class="chat-tabs" role="tablist" aria-label="打开的对话"></div>
+        <div class="subagent-bar" hidden></div>
+        <div class="readonly-banner" hidden>
+          <span>子代理会话 · 只读</span>
+          <button type="button" class="back-parent">返回父会话</button>
+        </div>
         <div class="workspace-row">
           <label for="workspace">工作区</label>
           <code class="workspace-path"></code>
@@ -1491,6 +1548,10 @@ class SessionChat extends HTMLElement {
         <div class="error" aria-live="polite"></div>
       `;
 		this.tabs = this.shadowRoot.querySelector(".chat-tabs");
+		this.subagentBar = this.shadowRoot.querySelector(".subagent-bar");
+		this.readonlyBanner = this.shadowRoot.querySelector(".readonly-banner");
+		this.backParent = this.shadowRoot.querySelector(".back-parent");
+		this.composer = this.shadowRoot.querySelector(".composer");
 		this.workspacePath = this.shadowRoot.querySelector(".workspace-path");
 		this.workspaceWarning = this.shadowRoot.querySelector(".workspace-warning");
 		this.input = this.shadowRoot.querySelector("textarea");
@@ -1530,6 +1591,10 @@ class SessionChat extends HTMLElement {
 		this.resyncPromise = null;
 		this.loadingEarlier = false;
 
+		this.backParent.addEventListener("click", () => {
+			const pane = this.activePane();
+			if (pane?.parent_session_id) this.selectSession(pane.parent_session_id);
+		});
 		this.sendButton.addEventListener("click", () => this.send());
 		this.cancelButton.addEventListener("click", () => this.cancel());
 		this.scrollLatest.addEventListener("click", () => this.scrollToBottom());
@@ -1764,11 +1829,13 @@ class SessionChat extends HTMLElement {
 		pane.through_seq = Number(payload.through_seq) || expected;
 		if (Number.isFinite(payload.revision)) pane.revision = payload.revision;
 		if (payload.turn) pane.turn = { ...(pane.turn || {}), ...payload.turn };
+		if (Array.isArray(payload.subagents)) pane.subagents = payload.subagents;
 		this.state.panes = [...this.panes.values()];
 		this.reconcileDraft(sessionId);
 		this.renderTabs();
 		if (sessionId === this.selectedId) {
 			this.renderWorkspace();
+			this.renderSubagents();
 			const oldHeight = trimmed ? this.messages.scrollHeight : 0;
 			const oldTop = trimmed ? this.messages.scrollTop : 0;
 			this.renderMessages();
@@ -1850,13 +1917,16 @@ class SessionChat extends HTMLElement {
 
 	updateControls() {
 		const pane = this.activePane();
+		const readOnly = pane?.read_only === true;
 		const running = pane?.turn?.status === "running";
 		const busy = !pane || this.busy.has(this.selectedId) || running;
 		const cancelRequested = pane?.turn?.cancel_requested === true;
+		this.readOnly = readOnly;
+		this.composer.hidden = readOnly;
 		// The composer stays usable while generating: only sending is gated,
 		// so the next message can be drafted during a long turn.
-		this.input.disabled = !pane;
-		this.sendButton.disabled = busy || this.input.value.trim() === "" || !pane?.workspace;
+		this.input.disabled = !pane || readOnly;
+		this.sendButton.disabled = busy || readOnly || this.input.value.trim() === "" || !pane?.workspace;
 		this.sendButton.title = !pane?.workspace
 			? "请先设置工作区"
 			: "";
@@ -2327,7 +2397,37 @@ class SessionChat extends HTMLElement {
 		if (!this.messages) return;
 		this.renderTabs();
 		this.renderWorkspace();
+		this.renderSubagents();
+		this.renderReadonly();
 		this.renderMessages();
+	}
+
+	renderSubagents() {
+		const pane = this.activePane();
+		const items = pane?.read_only ? [] : (Array.isArray(pane?.subagents) ? pane.subagents : []);
+		this.subagentBar.replaceChildren();
+		this.subagentBar.hidden = items.length === 0;
+		if (items.length === 0) return;
+		const label = el("span", "subagent-label", "子代理");
+		this.subagentBar.append(label);
+		for (const item of items) {
+			const button = el("button", "subagent-entry");
+			button.type = "button";
+			button.title = item.child_session_id || "";
+			const state = item.state || "running";
+			button.append(el("span", "subagent-state", state));
+			button.append(el("span", "subagent-id", item.child_session_id || ""));
+			if (item.turn_count) button.append(el("span", "subagent-steps", `${item.turn_count} steps`));
+			button.addEventListener("click", () => this.selectSession(item.child_session_id));
+			this.subagentBar.append(button);
+		}
+	}
+
+	renderReadonly() {
+		const pane = this.activePane();
+		const readOnly = pane?.read_only === true;
+		this.readonlyBanner.hidden = !readOnly;
+		this.backParent.hidden = !pane?.parent_session_id;
 	}
 
 	renderMessages() {

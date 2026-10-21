@@ -14,8 +14,9 @@
 | `file-tools` | 当前实现 | Workspace 文件读写八件套 |
 | `shell-tools` | 当前实现 | 同步命令执行与进程树取消 |
 | `sandbox` | 当前实现 | 工具调用链上的权限裁决：allow、modify、deny |
+| `subagent` | 当前实现 | 单工具委派：阻塞执行子会话，最终回答作为工具结果 |
 
-`web-tools` 和 `subagent` 曾在本仓库设计，随后从源码移除。
+`web-tools` 曾在本仓库设计，随后从源码移除。
 
 ## 2. 跨插件通信
 
@@ -56,9 +57,10 @@ agent
 ├── llm-openai
 ├── model-context（llm.complete 消费者）
 ├── session
-└── tools
-    ├── file-tools（file）
-    └── shell-tools（shell）
+├── tools
+│   ├── file-tools（file）
+│   └── shell-tools（shell）
+└── subagent（loop.turn 调用方）
 
 sandbox（可选件，autostart: false）
 └── 消费 tools.call、file.write、file.replace、file.patch、shell.execute
@@ -72,16 +74,18 @@ sandbox（可选件，autostart: false）
 
 `sandbox` 是可选件。它的 `autostart` 是 `false`，从插件中心启动后进链，在链上时裁决 `tools.call` 与直连高危能力。缺席即放行，缺席是部署约定。
 
+`subagent` 通过 `tools.sync` 注册单个 `subagent` 工具。模型调用后，插件创建子会话、阻塞执行 `loop.turn`，并把子代理最终回答作为工具结果返回。子会话 prompt 由 model-context 的 `subagent_sections` 管理；父会话记录 `subagent_spawned` / `subagent_finished`，聊天区提供只读子会话入口。
+
 ## 6. 未实现能力
 
-Web 工具和 Subagent 插件不在当前源码。交互式终端和后台 Shell 也未实现。sandbox 的确认流、确认面板与 Prompt 贡献也未实现。
+Web 工具不在当前源码。交互式终端和后台 Shell 也未实现。sandbox 的确认流、确认面板与 Prompt 贡献也未实现。subagent 暂不支持后台/续聊、嵌套和独立取消。
 
 ## 7. 构建清单
 
 `scripts/shipped-plugins.conf` 是发布目标的唯一清单，`scripts/build.sh` 和 `scripts/build.ps1` 共用。当前收录：
 
 ```text
-core: agent session llm-openai model-context tools file-tools shell-tools
+core: agent session llm-openai model-context tools file-tools shell-tools subagent
 tools:（空）
 optional: sandbox
 ```

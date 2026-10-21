@@ -400,6 +400,8 @@ Host Shell 拥有 Diagnostic 悬浮窗。它与插件 Component 分离。
 
 插件中心提供 `Settings` 页签。页面读取 Manifest 中的 `settings.schema`，并用现有 Browser Call 执行 `settings.get` 和 `settings.save`。
 
+插件未处于 `active` 时，页面不发 `settings.get`，按状态显示未启动、加载中或启动失败提示，并禁用保存。插件启动落定后页面自动刷新快照并加载设置。
+
 页面支持 `string`、`secret`、`number` 和 `boolean` 控件。`required` 只显示必填提示，不阻止提交。每个插件独立读取和保存。
 
 Secret 输入不回显明文。已有 Secret 显示“已配置”，空输入是否覆盖由插件定义。保存失败时保留当前输入。

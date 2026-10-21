@@ -74,6 +74,7 @@
       "description": "Read a workspace file.",
       "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
       "risk": 10,
+      "parallel_safe": true,
       "tags": ["fs", "read"],
       "target_capability": "file",
       "target_method": "read"
@@ -89,6 +90,7 @@
 | `tools[].description` | 字符串 | 是 | 去除首尾空白后 1 到 8192 字节 |
 | `tools[].input_schema` | 对象 | 是 | 最多 64 KiB，`type` 必须是 `object`，`properties` 必填 |
 | `tools[].risk` | 整数 | 是 | 0 到 100，越高越危险 |
+| `tools[].parallel_safe` | 布尔 | 否 | 只读或无共享状态时为 `true`；agent 的 `auto` 模式只在整批工具都为 `true` 时并发 |
 | `tools[].tags` | 字符串数组 | 否 | 最多 16 个，匹配 `^[a-z][a-z0-9_-]{0,31}$` |
 | `tools[].target_capability` | 字符串 | 是 | 必须在来源 `provides` 内，不能是 `host` 或 `tools` |
 | `tools[].target_method` | 字符串 | 是 | 目标方法名 |
@@ -158,7 +160,7 @@
 输出：
 
 ```json
-{"tools": [{"name": "file_read", "description": "...", "input_schema": {}, "risk": 10, "target_capability": "file", "target_method": "read"}]}
+{"tools": [{"name": "file_read", "description": "...", "input_schema": {}, "risk": 10, "parallel_safe": true, "target_capability": "file", "target_method": "read"}]}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -342,6 +344,7 @@ sandbox 在 `tools.call` 与 `file.write` 这类写键上都参与。写键在�
 | `description` | 字符串 | 提供方 | 1 到 8192 字节 |
 | `input_schema` | 对象 | 提供方 | object schema，最多 64 KiB |
 | `risk` | 整数 | 提供方 | 0 到 100，越高越危险 |
+| `parallel_safe` | 布尔 | 提供方 | 可与其他 safe 工具并发；缺省 false |
 | `tags` | 字符串数组 | 提供方 | 最多 16 个，供模式筛选 |
 | `source_plugin` | 字符串 | tools 注入 | 注册载荷里没有这个字段 |
 | `target_capability` | 字符串 | 提供方 | 目标能力，不能是 `host` 或 `tools` |

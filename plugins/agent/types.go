@@ -136,16 +136,19 @@ func addUsage(dst *usage, src usage) {
 }
 
 type toolSpec struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Risk        int             `json:"risk,omitempty"`
-	Tags        []string        `json:"tags,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Risk         int             `json:"risk,omitempty"`
+	ParallelSafe bool            `json:"parallel_safe,omitempty"`
+	Tags         []string        `json:"tags,omitempty"`
 }
 
 type config struct {
-	DefaultScheme string `json:"default_scheme"`
-	MaxSteps      int    `json:"max_steps"`
+	DefaultScheme    string `json:"default_scheme"`
+	MaxSteps         int    `json:"max_steps"`
+	ToolParallelism  string `json:"tool_parallelism,omitempty"`
+	MaxParallelTools int    `json:"max_parallel_tools,omitempty"`
 }
 
 type configGetOut struct {
@@ -209,6 +212,7 @@ type messagesOut struct {
 type modelContextOut struct {
 	Messages      []chatMessage    `json:"messages"`
 	Tools         []toolDefinition `json:"tools"`
+	ToolSpecs     []toolSpec       `json:"-"`
 	TokenEstimate int              `json:"token_estimate"`
 	// Degraded is set when the baseline had to omit tools. model-context runs
 	// later on the llm.complete chain and replaces the content zone; the agent

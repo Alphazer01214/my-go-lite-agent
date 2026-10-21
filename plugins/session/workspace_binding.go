@@ -119,7 +119,7 @@ func (p *plugin) reconcileWorkspaceSelection(workspaceID string) {
 		}
 	}
 
-	list, err := p.list(workspaceID)
+	list, err := p.list(workspaceID, false)
 	if err != nil || len(list.Sessions) == 0 {
 		p.mu.Lock()
 		p.selected = ""

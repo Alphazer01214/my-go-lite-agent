@@ -172,3 +172,45 @@ func TestCreatePersistsModel(t *testing.T) {
 		t.Fatalf("meta=%+v", meta)
 	}
 }
+
+func TestListHidesSubagentSessionsByDefault(t *testing.T) {
+	p := newPlugin(t.TempDir())
+	t.Cleanup(p.close)
+	workspace := t.TempDir()
+	if _, err := p.create(context.Background(), createIn{
+		SessionID: "s-main", Workspace: workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.create(context.Background(), createIn{
+		SessionID: "s-child", Workspace: workspace,
+		ParentSessionID: "s-main", Origin: "subagent", DelegationDepth: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	visible, err := p.list("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visible.Sessions) != 1 || visible.Sessions[0].SessionID != "s-main" {
+		t.Fatalf("visible sessions = %#v", visible.Sessions)
+	}
+
+	all, err := p.list("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Sessions) != 2 {
+		t.Fatalf("all sessions = %#v", all.Sessions)
+	}
+	var child *sessionSummary
+	for i := range all.Sessions {
+		if all.Sessions[i].SessionID == "s-child" {
+			child = &all.Sessions[i]
+		}
+	}
+	if child == nil || child.Origin != "subagent" || child.ParentSessionID != "s-main" || child.DelegationDepth != 1 {
+		t.Fatalf("child summary = %#v", child)
+	}
+}

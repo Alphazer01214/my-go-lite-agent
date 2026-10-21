@@ -7,6 +7,7 @@ import {
 	renderPluginList,
 } from "./plugins.mjs";
 import {
+	pluginSettingsAvailability,
 	renderSettingsList,
 	setSettingsFormValues,
 	setSettingsStatus,
@@ -163,6 +164,7 @@ function setPluginActionStatus(message, kind = "info") {
 function renderSettings(plugins) {
 	const configurable = plugins.filter((plugin) => plugin?.settings?.schema?.length);
 	renderSettingsList(document, elements.settingsList, configurable, {
+		availability: pluginSettingsAvailability,
 		onLoad: loadPluginSettings,
 		onSave: savePluginSettings,
 	});
@@ -223,6 +225,25 @@ async function applyBootstrap(payload, { loadMounts = true, resync = false } = {
 	}
 }
 
+// StartPlugin only spawns the process; the plugin becomes active once it
+// registers. Poll so the settings panel does not stay stuck on "loading"
+// after an explicit start.
+async function waitForPluginSettled(name) {
+	const deadline = Date.now() + 5000;
+	let payload = null;
+	while (Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		try {
+			payload = await fetchBootstrap();
+		} catch {
+			return payload;
+		}
+		const plugin = payload?.plugins?.find((entry) => entry.name === name);
+		if (!plugin || plugin.state !== "loading") return payload;
+	}
+	return payload;
+}
+
 async function runPluginAction(plugin, action, button) {
 	if (!plugin?.name) return;
 	button.disabled = true;
@@ -232,10 +253,17 @@ async function runPluginAction(plugin, action, button) {
 			method: "POST",
 			headers: { Accept: "application/json" },
 		});
-		const payload = await parseManagementResponse(response);
+		let payload = await parseManagementResponse(response);
+		if (action === "start") payload = (await waitForPluginSettled(plugin.name)) || payload;
 		// A lifecycle action can restart a plugin without changing its mount.
 		// Resync mounted components so they re-read the new plugin generation.
 		await applyBootstrap(payload, { resync: true });
+		const state = payload?.plugins?.find((entry) => entry.name === plugin.name)?.state;
+		if (action === "start" && state !== "active") {
+			setPluginActionStatus(`${plugin.name} 启动未完成（${state || "unknown"}），请稍后刷新`, "error");
+			button.disabled = false;
+			return;
+		}
 		setPluginActionStatus(`${plugin.name} 已${action === "start" ? "启动" : "停止"}`, "success");
 	} catch (error) {
 		setPluginActionStatus(error instanceof Error ? error.message : String(error), "error");

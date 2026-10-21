@@ -218,6 +218,9 @@ function Get-ExtraInputPaths([string]$target, [string]$pkg) {
         $name = Split-Path $pkg -Leaf
         $manifest = Join-Path $root "plugins\$name\plugin.json"
         if (Test-Path $manifest) { $paths.Add($manifest) }
+        # model-context go:embeds config.example.json as the shipped prompt default.
+        $example = Join-Path $root "plugins\$name\config.example.json"
+        if (Test-Path $example) { $paths.Add($example) }
     }
     return $paths
 }
@@ -375,6 +378,22 @@ try {
     # ── plugins ─────────────────────────────────────────────────────────────
     foreach ($name in $shippedPlugins) {
         Install-PluginDir $name
+    }
+
+    # Windows dist is .exe-only. Remove extensionless binaries left behind by
+    # build.sh or older manual builds so the layout has a single executable.
+    $bareServer = Join-Path $dist "liteagent-server"
+    if ((Test-Path $bareServer -PathType Leaf) -and (Test-Path "$bareServer.exe" -PathType Leaf)) {
+        Remove-Item $bareServer -Force -ErrorAction SilentlyContinue
+        Write-Host "remove extensionless dist/liteagent-server"
+    }
+    Get-ChildItem (Join-Path $dist "plugins") -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $bare = Join-Path $_.FullName $_.Name
+        $exe = Join-Path $_.FullName ($_.Name + ".exe")
+        if ((Test-Path $bare -PathType Leaf) -and (Test-Path $exe -PathType Leaf)) {
+            Remove-Item $bare -Force -ErrorAction SilentlyContinue
+            Write-Host "remove extensionless dist/plugins/$($_.Name)/$($_.Name)"
+        }
     }
 
     # Workspace Registry moved into session. Preserve an existing legacy file

@@ -798,6 +798,14 @@ select:focus-visible {
   color: #8c2929;
 }
 
+.settings-status-muted {
+  color: var(--text-muted);
+}
+
+.settings-plugin-unavailable .settings-save:disabled {
+  cursor: not-allowed;
+}
+
 .settings-save {
   min-height: 32px;
   padding: 4px 12px;
