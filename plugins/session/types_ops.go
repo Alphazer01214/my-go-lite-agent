@@ -84,6 +84,7 @@ type sessionSummary struct {
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	DelegationDepth  int    `json:"delegation_depth,omitempty"`
+	Pinned           bool   `json:"pinned,omitempty"`
 	FactCount        int    `json:"fact_count"`
 	CreatedTimestamp int64  `json:"created_ts"`
 	LastTimestamp    int64  `json:"last_ts"`
@@ -103,7 +104,18 @@ type infoOut struct {
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	DelegationDepth  int    `json:"delegation_depth,omitempty"`
+	Pinned           bool   `json:"pinned,omitempty"`
 	CreatedTimestamp int64  `json:"created_ts"`
 	FactCount        int    `json:"fact_count"`
 	NextSeq          int    `json:"next_seq"`
+}
+
+type deleteIn struct {
+	SessionID string `json:"session_id"`
+}
+
+type deleteOut struct {
+	SessionID string `json:"session_id"`
+	Deleted   bool   `json:"deleted"`
+	Selected  string `json:"selected_id,omitempty"`
 }

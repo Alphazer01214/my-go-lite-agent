@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// Actions a rule can carry. confirm is a target-contract state
-// (docs/design/plugins/08-sandbox.md §1) and lands with the confirmation
-// flow; this build accepts allow, modify and deny only.
+// Actions a rule can carry. confirm blocks the call until a user decides
+// through sandbox.decide; a timeout or rejection returns a tool error.
 const (
-	ActionAllow  = "allow"
-	ActionModify = "modify"
-	ActionDeny   = "deny"
+	ActionAllow   = "allow"
+	ActionConfirm = "confirm"
+	ActionModify  = "modify"
+	ActionDeny    = "deny"
 )
 
 // Lifetimes a rule can carry.
@@ -27,6 +27,8 @@ const (
 func actionRank(action string) int {
 	switch action {
 	case ActionDeny:
+		return 4
+	case ActionConfirm:
 		return 3
 	case ActionModify:
 		return 2
@@ -39,7 +41,14 @@ func actionRank(action string) int {
 
 // validAction reports whether an action exists in this build.
 func validAction(action string) bool {
-	return action == ActionAllow || action == ActionModify || action == ActionDeny
+	return action == ActionAllow || action == ActionConfirm ||
+		action == ActionModify || action == ActionDeny
+}
+
+// validOutcomeAction reports whether an action makes sense without a rule
+// template. modify needs modified_arguments, so it is rule-only.
+func validOutcomeAction(action string) bool {
+	return action == ActionAllow || action == ActionConfirm || action == ActionDeny
 }
 
 // ruleScope is the match condition of a rule. A rule with several conditions

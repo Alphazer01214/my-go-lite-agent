@@ -32,11 +32,24 @@ func (p *plugin) adjudicate(
 	if err != nil {
 		return nil, err
 	}
+	// tools dispatching a tool forwards the same call_id into the direct
+	// provider seam. The outer tools.call already adjudicated this call, so do
+	// not ask a second time (or write a duplicate audit entry).
+	if req.Capability == "tools" && req.Method == "call" {
+		// This is the outer call; it owns its one adjudication below.
+	} else if p.approved.consume(call, time.Now()) {
+		return proceed(ctx, req.Payload)
+	}
+
 	verdict := p.decide(call, risk)
-	p.writeAudit(ctx, verdict, call, payload.Arguments)
+	if verdict.Action == ActionConfirm {
+		return p.awaitConfirmation(ctx, req, payload, verdict, call, proceed)
+	}
+	p.writeAudit(ctx, verdict, call, payload.Arguments, "", 0)
 
 	switch verdict.Action {
 	case ActionAllow:
+		p.rememberApproved(req, call)
 		return proceed(ctx, req.Payload)
 	case ActionModify:
 		arguments, err := applyTemplate(payload.Arguments, verdict.ModifiedArguments)
@@ -47,10 +60,20 @@ func (p *plugin) adjudicate(
 		if err != nil {
 			return nil, err
 		}
+		p.rememberApproved(req, call)
 		return proceed(ctx, rewritten)
 	default:
 		return denyResult(verdict)
 	}
+}
+
+// rememberApproved marks an allowed tools.call so its nested direct provider
+// seam skips adjudication.
+func (p *plugin) rememberApproved(req *pluginsdk.Request, call callContext) {
+	if req.Capability != "tools" || req.Method != "call" {
+		return
+	}
+	p.approved.remember(call, time.Now())
 }
 
 func (p *plugin) resolveCall(ctx context.Context, req *pluginsdk.Request, payload seamPayload) (callContext, int, error) {

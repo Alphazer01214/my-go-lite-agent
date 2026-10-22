@@ -17,12 +17,12 @@ func TestEvaluateUsesTheRiskBandWithoutAMatchingRule(t *testing.T) {
 	}
 }
 
-func TestEvaluateDeniesAWriteWithoutAMatchingRule(t *testing.T) {
+func TestEvaluateConfirmsAWriteWithoutAMatchingRule(t *testing.T) {
 	cfg := defaultConfig()
 	call := callContext{Tool: "file_write", Capability: "file", Method: "write"}
 	verdict := evaluate(nil, cfg, call, 80, time.Now())
-	if verdict.Action != ActionDeny {
-		t.Fatalf("action = %s, want deny", verdict.Action)
+	if verdict.Action != ActionConfirm {
+		t.Fatalf("action = %s, want confirm", verdict.Action)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestEvaluateSkipsAnExpiredRule(t *testing.T) {
 	}}
 	call := callContext{Tool: "file_write", Capability: "file", Method: "write"}
 	verdict := evaluate(rules, cfg, call, 80, time.Now())
-	if verdict.Action != ActionDeny {
-		t.Fatalf("action = %s, want deny from the risk band", verdict.Action)
+	if verdict.Action != ActionConfirm {
+		t.Fatalf("action = %s, want confirm from the risk band", verdict.Action)
 	}
 }

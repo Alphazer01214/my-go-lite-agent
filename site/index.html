@@ -201,7 +201,7 @@
       <span class="idx">05</span>
       <div>
         <h2>一次 Turn 的完整链路</h2>
-        <p class="block-lede">从浏览器点击发送到 UI 推送收口。跟着播放看每一跳，或切到工具轮、沙箱裁决、子代理委派、取消、异常、刷新场景。</p>
+        <p class="block-lede">从浏览器点击发送到 UI 推送收口。跟着播放看每一跳，或切到工具轮、沙箱裁决与确认、子代理委派、取消、异常、刷新场景。</p>
       </div>
     </header>
     <div class="player panel">
@@ -231,7 +231,7 @@
       <span class="idx">06</span>
       <div>
         <h2>WebUI 平台壳</h2>
-        <p class="block-lede">Host 提供 Shell、五 Slot、Loader 和 Browser Bridge；Component 由插件拥有。Plugin Runtime 驱动自己拥有的 Component。</p>
+        <p class="block-lede">Host 提供 Shell、五 Slot、Loader 和 Browser Bridge；Component 由插件拥有。同一 Slot 可以容纳多个 Mount，实例身份是插件名加 mount_id。Plugin Runtime 只驱动自己拥有的 Component。</p>
       </div>
     </header>
     <div class="split split-shell">
@@ -253,6 +253,7 @@
           <button class="slot slot-right" data-slot="right" type="button">
             <span class="slot-tag mono">right</span>
             <span class="comp" data-mount="trace">session-trace</span>
+            <span class="comp" data-mount="confirm">sandbox-confirm</span>
           </button>
         </div>
         <button class="slot slot-bottom" data-slot="bottom" type="button">

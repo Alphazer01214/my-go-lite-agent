@@ -227,7 +227,15 @@ func main() {
 			return nil, err
 		}
 		return p.updateSession(ctx, in)
-	})).WithInfo("update", "update session name"))
+	})).WithInfo("update", "update session name or pinned state"))
+
+	s.Register("session", "delete", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
+		var in deleteIn
+		if err := decode(req, &in); err != nil {
+			return nil, err
+		}
+		return p.deleteSession(ctx, in)
+	})).WithInfo("delete", "delete one session log"))
 
 	s.Register("session", "stream.update", pluginsdk.NewHandler(handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
 		var in streamUpdateIn

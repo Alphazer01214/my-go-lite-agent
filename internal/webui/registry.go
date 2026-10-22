@@ -26,7 +26,6 @@ const (
 	diagnosticUIMountDuplicate  = "ui_mount_duplicate"
 	diagnosticUISlotInvalid     = "ui_slot_invalid"
 	diagnosticUISlotReserved    = "ui_slot_reserved"
-	diagnosticUISlotDuplicate   = "ui_slot_duplicate"
 )
 
 var (
@@ -55,7 +54,6 @@ func NewRegistry(discoveries plugin.Discoveries) (*Registry, []plugin.Diagnostic
 
 	seenPlugins := make(map[string]struct{})
 	seenMountIDs := make(map[string]map[string]struct{})
-	seenSlots := make(map[string]MountKey)
 
 	for _, discovery := range discoveries.Plugins {
 		pluginName := discovery.Manifest.Name
@@ -101,7 +99,7 @@ func NewRegistry(discoveries plugin.Discoveries) (*Registry, []plugin.Diagnostic
 			componentPath := sourcePath + "#ui.components[" + strconv.Itoa(i) + "]"
 			spec, ok := registry.buildSpec(
 				pluginName, component, entryURL, componentPath,
-				seenMountIDs[pluginName], seenSlots,
+				seenMountIDs[pluginName],
 			)
 			if !ok {
 				continue
@@ -182,7 +180,6 @@ func (r *Registry) buildSpec(
 	component plugin.UIComponent,
 	entryURL, componentPath string,
 	seenMountIDs map[string]struct{},
-	seenSlots map[string]MountKey,
 ) (MountSpec, bool) {
 	valid := true
 
@@ -233,17 +230,9 @@ func (r *Registry) buildSpec(
 	if !valid {
 		return MountSpec{}, false
 	}
-	if owner, exists := seenSlots[component.Slot]; exists {
-		r.addDiagnostic(plugin.Diagnostic{
-			Plugin: pluginName, Path: componentPath, Code: diagnosticUISlotDuplicate,
-			Message: "slot is already used by " + owner.Plugin + ":" + owner.ID,
-		})
-		return MountSpec{}, false
-	}
 
 	key := MountKey{Plugin: pluginName, ID: component.MountID}
 	seenMountIDs[component.MountID] = struct{}{}
-	seenSlots[component.Slot] = key
 	return MountSpec{Key: key, Tag: component.Tag, Slot: component.Slot, EntryURL: entryURL}, true
 }
 

@@ -81,6 +81,7 @@ type SettingsItemField struct {
 	Description string            `json:"description,omitempty"`
 	Min         *float64          `json:"min,omitempty"`
 	Step        *float64          `json:"step,omitempty"`
+	Options     []SettingsOption  `json:"options,omitempty"`
 }
 
 type SettingsFieldType string
@@ -123,7 +124,7 @@ var (
 	}
 	settingsItemFields = map[string]struct{}{
 		"key": {}, "label": {}, "type": {}, "required": {}, "description": {},
-		"min": {}, "step": {},
+		"min": {}, "step": {}, "options": {},
 	}
 )
 

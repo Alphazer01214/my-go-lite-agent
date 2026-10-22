@@ -397,7 +397,7 @@
     h.push('<h3 class="mini-title">当前组合的调用链</h3>');
     h.push('<div class="combo-line">session-chat → loop.turn → agent → session.derive（基线投影）</div>');
     h.push('<div class="combo-line">llm.complete → ' + (mc ? 'model-context (prio 2000) → Proceed → llm-openai' : 'llm-openai（Consumer 缺席，基线直达）') + '</div>');
-    h.push('<div class="combo-line' + (tl ? '' : ' dim') + '">工具阶段 → ' + (tl ? 'tools.list / tools.call → ' + (sb ? 'sandbox 裁决 (prio 500) → ' : '') + [ft ? 'file.*' : null, st ? 'shell.*' : null].filter(Boolean).join(' + ') + (ft || st ? '' : '（无可用 Provider）') : '跳过，写入 request_header.meta.degraded') + '</div>');
+    h.push('<div class="combo-line' + (tl ? '' : ' dim') + '">工具阶段 → ' + (tl ? 'tools.call → ' + (sb ? 'sandbox 裁决/确认 (prio 500) → tools → ' : 'tools → ') + [ft ? 'file.*' : null, st ? 'shell.*' : null].filter(Boolean).join(' + ') + (ft || st ? '' : '（无可用 Provider）') : '跳过，写入 request_header.meta.degraded') + '</div>');
     h.push('<div class="combo-line' + (sub ? '' : ' dim') + '">委派 → ' + (sub ? '模型调用 subagent 工具 → tools.call → subagent.run → 子会话 loop.turn' : '模型看不到 subagent 工具，无法委派') + '</div>');
     h.push('<div class="combo-line">落盘 → session.append（assistant / step_end / turn_end） → ui.state</div>');
 
@@ -406,7 +406,7 @@
     if (!tl) deg.push('<b>tools 停用</b>：agent 跳过工具阶段并标记 degraded；file-tools、shell-tools 的注册表不再被查询。');
     if (!ft) deg.push('<b>file-tools 停用</b>：file.* 不再进入路由表，tools.call 打到该目标返回 route_failed。');
     if (!st) deg.push('<b>shell-tools 停用</b>：shell.* 不可用；shell_execute 是 RiskCritical 工具。');
-    if (!sb) deg.push('<b>sandbox 停用</b>：tools.call、file.write、file.replace、file.patch、shell.execute 五个接缝都不再有人裁决，调用照常到达 Provider，也不产生审计条目。');
+    if (!sb) deg.push('<b>sandbox 停用</b>：tools.call、file.write、file.replace、file.patch、shell.execute 五个接缝都不再有人裁决，调用照常到达 Provider，也不产生确认面板或审计条目。');
     if (!sub) deg.push('<b>subagent 停用</b>：模型看不到 subagent 工具，委派这条路整体消失；loop、session、tools 不受影响。');
     h.push('<div class="degrade">' + (deg.length ? deg.join('<br>') : '全部插件在线。降级只发生在弱依赖缺失时，硬依赖缺失会让插件启动或调用失败。') + '</div>');
     h.push('<p class="hint">启动顺序由 Manifest 的 <code>autostart</code> 与 <code>depends_on</code> 决定：Host 取全部 autostart 根插件，按 <code>depends_on</code> 做 DFS 后序装载。停止某个插件不会级联停止依赖方，但 Host 会摘掉它的路由键，依赖方的后续调用返回 <code>method_not_found</code>（路由表里没有属主）。</p>');

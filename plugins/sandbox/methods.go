@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
+	"os"
 )
 
 func (p *plugin) check(ctx context.Context, req *pluginsdk.Request) (checkOut, error) {
@@ -150,9 +152,31 @@ func (p *plugin) settingsGet(_ context.Context, _ *pluginsdk.Request) (settingsG
 	p.mu.RLock()
 	cfg := p.cfg
 	p.mu.RUnlock()
+	persistent := p.rules.list(LifetimePersistent, "")
+	rules := make([]ruleSetting, 0, len(persistent))
+	for _, item := range persistent {
+		rules = append(rules, ruleSetting{
+			RuleID:            item.RuleID,
+			Action:            item.Action,
+			Tool:              item.Scope.Tool,
+			Capability:        item.Scope.Capability,
+			Method:            item.Scope.Method,
+			PathGlob:          item.Scope.PathGlob,
+			CommandPattern:    item.Scope.CommandPattern,
+			Priority:          item.Priority,
+			TTLSeconds:        item.TTLSeconds,
+			Note:              item.Note,
+			ModifiedArguments: compactJSON(item.ModifiedArguments),
+		})
+	}
+	bands := make([]band, len(cfg.RiskBands))
+	copy(bands, cfg.RiskBands)
 	return settingsGetOut{Values: map[string]any{
 		"default_action":       cfg.DefaultAction,
+		"confirm_ttl_seconds":  cfg.ConfirmTTLSeconds,
 		"audit_retention_days": cfg.AuditRetentionDays,
+		"risk_bands":           bands,
+		"rules":                rules,
 	}}, nil
 }
 
@@ -161,15 +185,23 @@ func (p *plugin) settingsSave(_ context.Context, req *pluginsdk.Request) (settin
 	if err := DecodeStrict(req.Payload, &in); err != nil {
 		return settingsSaveOut{}, err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+
+	p.mu.RLock()
 	next := p.cfg
+	p.mu.RUnlock()
 	if in.Values.DefaultAction != nil {
-		if !validAction(*in.Values.DefaultAction) {
+		if !validOutcomeAction(*in.Values.DefaultAction) {
 			return settingsSaveOut{}, pluginsdk.ErrCode(pluginsdk.CodeBadArguments,
-				"default_action must be allow or deny")
+				"default_action must be allow, confirm or deny")
 		}
 		next.DefaultAction = *in.Values.DefaultAction
+	}
+	if in.Values.ConfirmTTLSeconds != nil {
+		if *in.Values.ConfirmTTLSeconds < 30 || *in.Values.ConfirmTTLSeconds > 3600 {
+			return settingsSaveOut{}, pluginsdk.ErrCode(pluginsdk.CodeBadArguments,
+				"confirm_ttl_seconds must be between 30 and 3600")
+		}
+		next.ConfirmTTLSeconds = *in.Values.ConfirmTTLSeconds
 	}
 	if in.Values.AuditRetentionDays != nil {
 		if *in.Values.AuditRetentionDays < 1 || *in.Values.AuditRetentionDays > 3650 {
@@ -178,7 +210,39 @@ func (p *plugin) settingsSave(_ context.Context, req *pluginsdk.Request) (settin
 		}
 		next.AuditRetentionDays = *in.Values.AuditRetentionDays
 	}
+	if in.Values.RiskBands != nil {
+		bands, ok := validBands(*in.Values.RiskBands)
+		if !ok {
+			return settingsSaveOut{}, pluginsdk.ErrCode(pluginsdk.CodeBadArguments,
+				"risk_bands must be non-empty and use max_risk 0-100 with a valid action")
+		}
+		next.RiskBands = bands
+	}
+	var rules []rule
+	if in.Values.Rules != nil {
+		var err error
+		rules, err = rulesFromSettings(*in.Values.Rules)
+		if err != nil {
+			return settingsSaveOut{}, err
+		}
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	previousRules := p.rules.list(LifetimePersistent, "")
+	replaced := false
+	if in.Values.Rules != nil {
+		if _, err := p.rules.replacePersistent(rules); err != nil {
+			return settingsSaveOut{}, err
+		}
+		replaced = true
+	}
 	if err := next.save(p.configPath); err != nil {
+		if replaced {
+			if _, rollbackErr := p.rules.replacePersistent(previousRules); rollbackErr != nil {
+				fmt.Fprintf(os.Stderr, "sandbox: rollback rules: %v\n", rollbackErr)
+			}
+		}
 		return settingsSaveOut{}, pluginsdk.ErrCode(pluginsdk.CodeHandlerError, err.Error())
 	}
 	p.cfg = next

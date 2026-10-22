@@ -175,6 +175,10 @@ func (p *plugin) updateSession(ctx context.Context, in updateIn) (updateOut, err
 			changed = true
 		}
 	}
+	if in.Pinned != nil && meta.Pinned != *in.Pinned {
+		meta.Pinned = *in.Pinned
+		changed = true
+	}
 	if changed {
 		if err := st.updateMeta(meta); err != nil {
 			return updateOut{}, err
@@ -188,7 +192,7 @@ func (p *plugin) updateSession(ctx context.Context, in updateIn) (updateOut, err
 		}
 	}
 	return updateOut{
-		SessionID: in.SessionID, Name: meta.Name, Workspace: meta.Workspace,
+		SessionID: in.SessionID, Name: meta.Name, Pinned: meta.Pinned, Workspace: meta.Workspace,
 	}, nil
 }
 

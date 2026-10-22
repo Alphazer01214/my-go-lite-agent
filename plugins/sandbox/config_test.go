@@ -48,6 +48,33 @@ func TestLoadConfigRejectsAnInvalidBand(t *testing.T) {
 	}
 }
 
+func TestLoadConfigMigratesLegacyDenyBands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"default_action":"allow","risk_bands":[{"max_risk":49,"action":"allow"},{"max_risk":79,"action":"deny"},{"max_risk":100,"action":"deny"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := loadConfig(path)
+	if cfg.RiskBands[1].Action != ActionConfirm || cfg.RiskBands[2].Action != ActionConfirm {
+		t.Fatalf("legacy bands were not migrated: %+v", cfg.RiskBands)
+	}
+	if cfg.ConfirmTTLSeconds != 300 {
+		t.Fatalf("ttl = %d, want 300", cfg.ConfirmTTLSeconds)
+	}
+}
+
+func TestLoadConfigKeepsExplicitDenyBands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"confirm_ttl_seconds":120,"risk_bands":[{"max_risk":49,"action":"allow"},{"max_risk":79,"action":"deny"},{"max_risk":100,"action":"deny"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := loadConfig(path)
+	if cfg.RiskBands[1].Action != ActionDeny || cfg.ConfirmTTLSeconds != 120 {
+		t.Fatalf("explicit config was migrated: %+v", cfg)
+	}
+}
+
 func TestLoadConfigKeepsTheRuleFileInsideThePluginDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := `{"rules_file":"../escape.json"}`

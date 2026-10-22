@@ -19,9 +19,11 @@ import (
 // Plugin-level error codes. The sandbox_ prefix is reserved for this plugin
 // in docs/design/plugins/00-conventions.md §6.
 const (
-	CodeDenied       = "sandbox_denied"
-	CodeRuleInvalid  = "sandbox_rule_invalid"
-	CodeRuleNotFound = "sandbox_rule_not_found"
+	CodeDenied              = "sandbox_denied"
+	CodeRuleInvalid         = "sandbox_rule_invalid"
+	CodeRuleNotFound        = "sandbox_rule_not_found"
+	CodeConfirmTokenInvalid = "sandbox_confirm_token_invalid"
+	CodeConfirmExpired      = "sandbox_confirm_expired"
 )
 
 // MaxArgumentsBytes bounds one argument object. The tools plugin uses the

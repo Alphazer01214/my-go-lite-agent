@@ -97,7 +97,8 @@ func TestRegistryReportsInvalidMountsAndKeepsValidOnes(t *testing.T) {
 	)
 
 	registry, diagnostics := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
-	if len(registry.Mounts()) != 1 {
+	// Two components may share a slot now: "valid" and "late" both target left.
+	if len(registry.Mounts()) != 2 {
 		t.Fatalf("mounts = %#v", registry.Mounts())
 	}
 
@@ -106,7 +107,6 @@ func TestRegistryReportsInvalidMountsAndKeepsValidOnes(t *testing.T) {
 		"ui_mount_id_invalid",
 		"ui_slot_reserved",
 		"ui_mount_duplicate",
-		"ui_slot_duplicate",
 	} {
 		if !hasCode(diagnostics, code) {
 			t.Fatalf("missing %s in %#v", code, diagnostics)

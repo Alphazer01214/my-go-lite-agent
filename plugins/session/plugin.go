@@ -91,11 +91,6 @@ func (p *plugin) close() {
 	p.reg = make(map[string]*store)
 	p.mu.Unlock()
 	for _, st := range stores {
-		st.mu.Lock()
-		if st.f != nil {
-			_ = st.f.Close()
-			st.f = nil
-		}
-		st.mu.Unlock()
+		st.close()
 	}
 }

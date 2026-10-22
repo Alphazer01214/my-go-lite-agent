@@ -732,7 +732,8 @@ select:focus-visible {
   gap: 6px;
 }
 
-.settings-list-row input {
+.settings-list-row input,
+.settings-list-row select {
   flex: 1 1 120px;
   width: auto;
   min-width: 0;

@@ -76,7 +76,7 @@ LA.capMethods = [
   'agent.config.get', 'agent.config.set', 'agent.settings.get', 'agent.settings.save',
   'session.create', 'session.append', 'session.query', 'session.derive', 'session.list',
   'session.info', 'session.state', 'session.messages', 'session.facts', 'session.dock',
-  'session.select', 'session.close', 'session.refresh', 'session.update', 'session.stream.update',
+  'session.select', 'session.close', 'session.refresh', 'session.update', 'session.delete', 'session.stream.update',
   'session.workspace.list', 'session.workspace.create', 'session.workspace.select',
   'session.workspace.current', 'session.workspace.rename', 'session.workspace.remove',
   'llm.complete', 'llm.cancel', 'llm.config.get', 'llm.config.set',
@@ -87,6 +87,7 @@ LA.capMethods = [
   'shell.execute',
   'subagent.run',
   'sandbox.check', 'sandbox.list_rules', 'sandbox.set_rule',
+  'sandbox.pending.list', 'sandbox.decide',
   'sandbox.settings.get', 'sandbox.settings.save',
   'host.register', 'host.proceed', 'host.plugins', 'host.ui.state', 'host.ui.command',
   'host.context.create', 'host.context.bind', 'host.context.close',
@@ -152,9 +153,9 @@ LA.pipeline = {
 /* 消费链接缝全景。同一 (capability, method) 上的成员按 priority 递减排列。 */
 LA.seams = [
   ['llm.complete', 'model-context（2000）→ llm-openai（0）', '组装上下文，改写 payload 后 Proceed；Consumer 缺席时基线直达 Provider'],
-  ['tools.call', 'sandbox（500）→ tools（0）', '先裁决再分发；tools 分发出去的那一跳会重新进链'],
-  ['file.write / file.replace / file.patch', 'sandbox（500）→ file-tools（0）', '直连高危能力也过裁决'],
-  ['shell.execute', 'sandbox（500）→ shell-tools（0）', '命令执行也过裁决'],
+  ['tools.call', 'sandbox（500）→ tools（0）', '先裁决再分发；confirm 阻塞等待人工决定，tools 分发出去的那一跳会重新进链'],
+  ['file.write / file.replace / file.patch', 'sandbox（500）→ file-tools（0）', '直连高危能力也过裁决；外层已放行的 call_id 会跳过二次裁决'],
+  ['shell.execute', 'sandbox（500）→ shell-tools（0）', '命令执行也过裁决；外层已放行的 call_id 会跳过二次裁决'],
 ];
 
 LA.pluginPos = {
@@ -202,11 +203,13 @@ LA.plugins = [
     methods: [['session.create', '创建 Session，保存 model / context_window'],
       ['session.append', '写 Fact 并推送 State'], ['session.derive', '纯投影模型上下文'],
       ['session.query / list / info', '读取历史与模型元数据'],
-      ['session.state / dock / select / close / refresh / update', 'UI 会话管理'],
+      ['session.state / dock / select / close / refresh', 'UI 会话管理'],
+      ['session.update', '更新显示名称与置顶状态'],
+      ['session.delete', '删除会话日志；有未闭合 Turn 时拒绝'],
       ['session.messages / facts', '按 before_seq 翻页读旧消息与旧 Fact'],
       ['session.stream.update', '接收流式快照'], ['session.workspace.*', 'Workspace 注册、选择与改名']],
     mounts: [['session-history', 'left'], ['session-chat', 'center'], ['session-trace', 'right'], ['session-dock', 'bottom']],
-    note: 'Fact Log 落在 ./sessions/<id>.jsonl，只追加。子会话带 origin=subagent 与 parent_session_id，默认不出现在历史列表，父会话聊天区按 subagent_spawned 事实列出子代理入口，子会话是只读视图。sandbox_decision 与 subagent_spawned / subagent_finished 也写进同一份日志，它们不是 message，不进模型上下文。' },
+    note: 'Fact Log 落在 ./sessions/<id>.jsonl，只追加。历史列表支持改名、置顶与删除；置顶状态写入 session_meta 并跨重启恢复，删除前检查未闭合 Turn。子会话带 origin=subagent 与 parent_session_id，默认不出现在历史列表，父会话聊天区按 subagent_spawned 事实列出子代理入口，子会话是只读视图。sandbox_decision 与 subagent_spawned / subagent_finished 也写进同一份日志，它们不是 message，不进模型上下文。' },
 
   { name: 'llm-openai', label: 'llm-openai', caps: ['llm'], status: '当前实现',
     color: 'var(--rose)', toggleable: false,
@@ -259,13 +262,15 @@ LA.plugins = [
     provides: ['sandbox'], dependsOn: ['tools'], requires: ['session', 'tools'],
     consumes: ['tools.call', 'file.write', 'file.replace', 'file.patch', 'shell.execute（priority 500）'],
     priority: 500,
-    methods: [['tools.call (Consumer, prio 500)', 'allow / modify / deny 三态裁决'],
+    methods: [['tools.call (Consumer, prio 500)', 'allow / confirm / modify / deny 四态裁决'],
       ['file.write / replace / patch (Consumer)', '直连高危能力也过裁决'],
       ['shell.execute (Consumer)', '直连命令执行也过裁决'],
       ['sandbox.check', '干跑一次裁决，不写审计'],
-      ['sandbox.list_rules / set_rule', '规则集读写，规则只升不降'],
-      ['sandbox.settings.get / save', '默认动作与审计保留天数']],
-    mounts: [], note: 'autostart 为 true，是启动根；depends_on tools 决定启动顺序。allow 原样 Proceed，modify 改写 arguments 后 Proceed，deny 短路返回工具结果包络（meta.code=sandbox_denied）。命中规则优先于风险分段；都没命中时按 risk 分段判定。随发行版来的默认分段是 risk ≤ 49 放行、≥ 50 一律拒绝，所以开箱状态下写文件与命令执行都会被挡住——确认流落地后这两档改判 confirm 即可，规则与代码都不用动。当前只有三态，confirm 依赖确认流，尚未实现。缺席即放行是部署约定，不是平台保证。' },
+      ['sandbox.pending.list / decide', '列出待确认调用并提交人工决定'],
+      ['sandbox.list_rules / set_rule', '规则集读写，set_rule 保持只升不降'],
+      ['sandbox.settings.get / save', '默认动作、风险档、确认超时、审计保留与持久规则']],
+    mounts: [['sandbox-confirm', 'right']],
+    note: 'autostart 为 true，是启动根；depends_on tools 决定启动顺序。allow 原样 Proceed，modify 改写 arguments 后 Proceed，deny 短路返回工具结果包络（meta.code=sandbox_denied）。confirm 会阻塞当前调用：创建一次性令牌、写 confirm 审计、把待确认列表推给右下角 sandbox-confirm；用户允许后同一次调用继续，拒绝或超时返回错误包络，取消则清理令牌。默认分段是 risk ≤ 49 放行、≥ 50 确认。设置页可直接增删改持久规则（允许删除 deny 规则），sandbox.set_rule 仍保持只升不降。tools.call 放行后，tools 会带同一个 call_id 再调直连键，sandbox 用 60 秒标记跳过第二遍裁决。缺席即放行是部署约定，不是平台保证。' },
 
   { name: 'subagent', label: 'subagent', caps: ['subagent'], status: '当前实现',
     color: 'var(--indigo)', toggleable: true,
@@ -308,6 +313,7 @@ LA.actors = [
   { id: 'api', label: 'Upstream', sub: 'LLM API' },
   { id: 'tools', label: 'tools', sub: 'registry' },
   { id: 'sb', label: 'sandbox', sub: 'Consumer' },
+  { id: 'sbui', label: 'sandbox-confirm', sub: 'Browser' },
   { id: 'file', label: 'file-tools', sub: 'Provider' },
   { id: 'sub', label: 'subagent', sub: 'plugin' },
 ];
@@ -387,16 +393,18 @@ LA.scenarios = {
     ],
   },
   guard: {
-    label: '沙箱裁决',
+    label: '沙箱裁决与确认',
     steps: [
       { from: 'agent', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'tools.call {name:"file_write"}', needs: ['tools'], skip: '缺 tools：模型看不到任何工具' },
       { from: 'tools', to: 'sb', frame: 'req', cap: 'tools', method: 'call', label: 'Consumer 截住这一跳', needs: ['sandbox'],
         skip: '缺 sandbox：这一跳直接进 tools，不产生任何裁决', note: 'sandbox 声明 consumes tools.call，manifest priority 500。第一跳只认 Consumer，Provider 在入口这一跳不可选。' },
       { from: 'sb', to: 'tools', frame: 'req', cap: 'tools', method: 'list', label: '查工具风险刻度', note: 'sandbox 读 tools.list 的 risk 字段。查不到就按未知风险 70 处理。' },
-      { from: 'sb', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '写 sandbox_decision 事实', note: '裁决条目与被裁决的调用落在同一条时间线上。session 缺席时退化为插件内存里的环形缓冲。' },
-      { from: 'sb', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'allow：原样 Proceed', note: 'modify 改写 arguments 后 Proceed；deny 直接短路返回，不进下一跳。默认分段是 risk ≤ 49 放行、≥ 50 拒绝，所以开箱状态下写文件与命令执行会落到 deny。' },
+      { from: 'sb', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '写 sandbox_decision 事实', note: 'confirm 时先写一条 decision=confirm 的审计条目，并创建一次性令牌。裁决条目与被裁决的调用落在同一条时间线上；session 缺席时退化为插件内存里的环形缓冲。' },
+      { from: 'sb', to: 'sbui', frame: 'ui', cap: 'host.ui', method: 'state', label: '推送待确认列表', note: 'sandbox-confirm 固定在视口右下角，显示工具、风险、理由、参数摘要、会话与剩余时间。' },
+      { from: 'sbui', to: 'sb', frame: 'http', cap: 'sandbox', method: 'decide', label: '用户允许一次', note: '拒绝时原调用返回 sandbox_denied；超时返回 sandbox_confirm_expired；取消轮次会清理令牌。允许后同一次调用继续，不需要模型重发。' },
+      { from: 'sb', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'allow：原样 Proceed', note: 'modify 改写 arguments 后 Proceed；deny 直接短路返回，不进下一跳。默认分段是 risk ≤ 49 放行、≥ 50 确认。' },
       { from: 'tools', to: 'file', frame: 'req', cap: 'file', method: 'write', label: 'tools 分发到 file.write' },
-      { from: 'file', to: 'sb', frame: 'req', cap: 'file', method: 'write', label: '再截一次：直连高危键也过裁决', needs: ['sandbox'], skip: '缺 sandbox：file.write 直达 file-tools' },
+      { from: 'file', to: 'sb', frame: 'req', cap: 'file', method: 'write', label: '同一 call_id 再进直连接缝', needs: ['sandbox'], skip: '缺 sandbox：file.write 直达 file-tools', note: 'tools 对外层 tools.call 放行后，会把同一个 call_id 带进直连键；sandbox 的 60 秒标记命中，跳过第二遍裁决与审计。' },
       { from: 'sb', to: 'file', frame: 'req', cap: 'file', method: 'write', label: 'Proceed 到 Provider' },
       { from: 'file', to: 'tools', frame: 'res', cap: 'file', method: 'write', label: '写入结果' },
       { from: 'tools', to: 'agent', frame: 'res', cap: 'tools', method: 'call', label: '工具结果回到 agent' },
@@ -483,13 +491,13 @@ LA.scenarios = {
   },
 };
 
-LA.turnNote = '取消与异常只影响一个 Session 的活动 Turn。工具轮里的 file.* 与 shell.* 由 Provider 执行，tools 只做注册与分发；sandbox 在 tools.call 与 file.write、shell.execute 上各截一次。子代理由模型通过 subagent 工具发起，它在独立会话里跑自己的 loop.turn，最终回答作为一次工具结果回到父代理。Turn 结束后的 Dock 用量来自 llm_usage；上下文明细通过 model-context.inspect 还原，下一次预览通过 build，不写 Fact。聊天区按 turns 摘要折叠过程：完成轮默认收起，最终回答与用户消息常显。';
+LA.turnNote = '取消与异常只影响一个 Session 的活动 Turn。工具轮里的 file.* 与 shell.* 由 Provider 执行，tools 只做注册与分发；sandbox 在 tools.call 与 file.write、shell.execute 上各截一次，命中 confirm 时阻塞等待 sandbox-confirm 面板，允许后同一次调用继续；外层放行的 call_id 会让直连那一跳跳过二次裁决。子代理由模型通过 subagent 工具发起，它在独立会话里跑自己的 loop.turn，最终回答作为一次工具结果回到父代理。Turn 结束后的 Dock 用量来自 llm_usage；上下文明细通过 model-context.inspect 还原，下一次预览通过 build，不写 Fact。聊天区按 turns 摘要折叠过程：完成轮默认收起，最终回答与用户消息常显。';
 
 LA.slots = {
   top: { tag: 'Host 控件', owner: 'Host', mount: '—', body: 'v1 的 top 由 Host 控件保留，插件使用其余四个 Slot。内容：插件中心入口（插件 / 设置 / 依赖关系）与 Diagnostic 悬浮窗。' },
-  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。模型目录在插件中心设置页维护；保存后通过 settings-saved 事件刷新下拉。点击会话发 session.select / session.workspace.select，收到 State 后重绘。子会话默认不出现在这个列表里。' },
+  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。列表行支持改名、置顶与删除：改名走 session.update，置顶写入 session_meta 并跨重启恢复，删除走 session.delete 且运行中的会话会被拒绝。模型目录在插件中心设置页维护；保存后通过 settings-saved 事件刷新下拉。子会话默认不出现在这个列表里。' },
   center: { tag: 'session-chat', owner: 'session', mount: 'chat', body: '多会话 Pane。发送调用 loop.turn，取消调用 loop.cancel；流式增量来自 Stream Command，落盘后由 State 重建。消息按 Turn 折叠：完成轮默认收起过程，保留用户消息和最终回答；Turn 头显示状态、过程条数、工具数和时长。父会话里按 subagent_spawned 事实列出子代理入口，子会话是只读视图。' },
-  right: { tag: 'session-trace', owner: 'session', mount: 'trace', body: 'Fact Log 与上下文快照视图。sandbox_decision 与 subagent_spawned / subagent_finished 也落在这里，它们是平台事实，不进模型上下文。业务含义由 session 的 communication.md 定义。' },
+  right: { tag: 'session-trace + sandbox-confirm', owner: 'session + sandbox', mount: 'trace + confirm', body: '同一 Slot 容纳两个 Mount。session-trace 展示 Fact Log 与上下文快照；sandbox_decision、subagent_spawned / subagent_finished 也落在这里，它们是平台事实，不进模型上下文。sandbox-confirm 固定在视口右下角，显示待确认工具、风险、理由、参数摘要、会话与剩余时间，提供允许一次、拒绝和查看会话。' },
   bottom: { tag: 'session-dock', owner: 'session', mount: 'dock', body: '模型、API usage 上下文仪表、会话累计用量和 Turn 状态。点击 chip 展开上下文与用量明细；context_snapshot 由 model-context 写入，消息通过 model-context.inspect 还原，下一次请求通过 build 预览。没有选中会话时 dock 与 bottom Slot 一并隐藏。' },
 };
 
@@ -626,8 +634,10 @@ LA.reading = [
   'plugins/model-context/assemble.go — 上下文 Facts 与 derive；',
   'plugins/model-context/budget.go — 预算与压缩；',
   'plugins/tools/registry.go — 工具注册、Generation 与来源归属；',
-  'plugins/sandbox/seam.go — 裁决三态与 Proceed；',
+  'plugins/sandbox/seam.go — 四态裁决、直连接缝与 Proceed；',
+  'plugins/sandbox/confirm.go — 阻塞确认、令牌与审计；',
   'plugins/sandbox/policy.go — 规则命中优先于风险分段；',
+  'plugins/sandbox/ui/main.js — 右下角确认面板；',
   'plugins/subagent/runner.go — 子会话创建、委派深度与结果回写；',
   'plugins/llm-openai/openai.go — 流式与 JSON 两种上游模式。',
 ];

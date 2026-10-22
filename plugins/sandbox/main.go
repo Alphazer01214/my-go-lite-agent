@@ -7,15 +7,21 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"os"
 	"sync"
+	"time"
 )
 
 type sdkCaller interface {
 	Call(ctx context.Context, capability, method string, payload json.RawMessage) (json.RawMessage, error)
 }
 
+type uiPublisher interface {
+	SetState(mountID string, state json.RawMessage) error
+}
+
 type plugin struct {
 	sdk   sdkCaller
 	audit *auditLog
+	ui    uiPublisher
 
 	// cfg is the active configuration. It changes when the settings are
 	// saved; the rules in flight keep the configuration they started with.
@@ -26,7 +32,10 @@ type plugin struct {
 	// directory in a real run.
 	configPath string
 
-	rules *ruleStore
+	rules    *ruleStore
+	pending  *pendingStore
+	approved *approvalStore
+	uiRev    uint64
 
 	// riskMu guards the cached tool table.
 	riskMu sync.Mutex
@@ -41,6 +50,9 @@ func newPlugin(sdk sdkCaller) *plugin {
 		cfg:        cfg,
 		configPath: configFile,
 		rules:      newRuleStore(cfg.RulesFile),
+		pending:    newPendingStore(),
+		approved:   newApprovalStore(),
+		uiRev:      uint64(time.Now().UnixMicro()),
 	}
 }
 
@@ -61,6 +73,7 @@ func handleTyped[T any](fn func(context.Context, *pluginsdk.Request) (T, error))
 func main() {
 	sdk := pluginsdk.NewPlugin("sandbox")
 	p := newPlugin(sdk)
+	p.ui = sdk.WebUI()
 
 	// The sandbox is a Consumer. It registers the keys it adjudicates; the
 	// providers keep the route ownership, so the call still reaches them
@@ -82,6 +95,10 @@ func main() {
 		WithInfo("list_rules", "list the rules in effect"))
 	sdk.Register("sandbox", "set_rule", pluginsdk.NewHandler(handleTyped(p.setRule)).
 		WithInfo("set_rule", "add, update or delete one rule"))
+	sdk.Register("sandbox", "decide", pluginsdk.NewHandler(handleTyped(p.decideCall)).
+		WithInfo("decide", "approve or reject one pending confirmation"))
+	sdk.Register("sandbox", "pending.list", pluginsdk.NewHandler(handleTyped(p.listPending)).
+		WithInfo("pending.list", "list calls waiting for confirmation"))
 	sdk.Register("sandbox", "settings.get", pluginsdk.NewHandler(handleTyped(p.settingsGet)).
 		WithInfo("settings.get", "read the plugin settings"))
 	sdk.Register("sandbox", "settings.save", pluginsdk.NewHandler(handleTyped(p.settingsSave)).

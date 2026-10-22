@@ -13,7 +13,7 @@ LA_SEQ.parts = [
   { id: 'p2', n: '二', title: '浏览器入口：一次点击怎么进 Host', lead: '浏览器的请求不是 Frame。Bridge 把它翻译成 Host Call，并且由 Host 注入可信来源。' },
   { id: 'p3', n: '三', title: '一次 Turn：主链路', lead: '从 loop.turn 到 State Push 的完整序列。注意 agent 不直接调用 model-context。' },
   { id: 'p4', n: '四', title: '三个关键旁路', lead: '流式增量、上下文组装、工具轮。这三条是理解数据怎么流动的核心。' },
-  { id: 'p5', n: '五', title: '插件层：裁决与委派', lead: '沙箱在工具接缝上裁决，subagent 把任务派给独立会话的子代理。两条链路都只经 Host 路由。' },
+  { id: 'p5', n: '五', title: '插件层：裁决、确认与委派', lead: '沙箱在工具接缝上裁决并等待人工确认，subagent 把任务派给独立会话的子代理。两条链路都只经 Host 路由。' },
   { id: 'p6', n: '六', title: '终态：取消、异常、刷新', lead: '每条在途 Call 都必须收敛到唯一终态，页面刷新也不例外。' },
   { id: 'p7', n: '七', title: 'Host 内务：注册、路由、生命周期', lead: 'Host 不解释业务，但它决定谁能被找到。' },
 ];
@@ -268,23 +268,28 @@ LA_SEQ.diagrams = {
   /* ---------- 五、插件层 ---------- */
 
   guard: {
-    title: '沙箱裁决：工具接缝上的三态',
-      where: 'plugins/sandbox/seam.go · plugins/sandbox/policy.go · internal/host/pipeline.go',
-    lead: 'sandbox 是 tools.call 的 Consumer，也是 file.write 与 shell.execute 的 Consumer。tools 分发出去的那一跳会重新进链，所以一次写文件要过两次裁决。',
+    title: '沙箱裁决：工具接缝上的四态与确认',
+      where: 'plugins/sandbox/seam.go · plugins/sandbox/confirm.go · plugins/sandbox/ui/main.js · internal/host/pipeline.go',
+    lead: 'sandbox 是 tools.call 的 Consumer，也是 file.write 与 shell.execute 的 Consumer。命中 confirm 时调用会阻塞，等待右下角 sandbox-confirm；允许后同一次调用继续。tools 分发出去的直连那一跳用 call_id 标记跳过二次裁决。',
     mermaid: `sequenceDiagram
     participant A as agent
     participant T as tools
     participant SB as sandbox
     participant S as session
+    participant U as sandbox-confirm
     participant F as file-tools
     A->>T: req tools.call name=file_write
     T->>SB: req tools.call prio=500
     SB->>T: req tools.list 查 risk
     T-->>SB: res tools[]
-    SB->>S: req session.append sandbox_decision
-    Note over SB,T: deny 就在这里短路返回，不再 Proceed
-    SB->>T: req tools.call Proceed allow
-    T->>SB: req file.write prio=500
+    SB->>S: req session.append sandbox_decision(confirm)
+    SB->>U: ui.state pending[token]
+    Note over SB,U: handler 阻塞，等待用户决定
+    U->>SB: sandbox.decide allow
+    SB->>S: req session.append sandbox_decision(allow)
+    SB->>T: req tools.call Proceed
+    T->>SB: req file.write prio=500 (same call_id)
+    Note over SB: call_id 标记命中，跳过二次裁决
     SB->>F: req file.write Proceed
     F-->>T: res file.write
     T-->>A: res tools.call`,
@@ -293,12 +298,15 @@ LA_SEQ.diagrams = {
       2: { t: 'Consumer 截住这一跳', b: 'sandbox 的 manifest 声明 consumes tools.call，priority 500。入口这一跳只认 Consumer，Provider 在这一跳不可选。', k: 'priority 越大越靠前' },
       3: { t: '查风险刻度', b: 'sandbox 读 tools.list 的 risk 字段。缓存 5 秒，失败时 1 秒重试。查不到就按未知风险 70 处理。', k: 'risk 0–100，未知按 70' },
       4: { t: '拿到工具清单', b: '工具表按名字和 (target_capability, target_method) 两个索引建。', k: 'riskTable' },
-      5: { t: '写裁决条目', b: '审计条目是 session 事实 sandbox_decision，和被裁决的调用在同一条时间线上。session 缺席时退化为插件内存里的环形缓冲。', k: 'Fact: sandbox_decision' },
-      6: { t: '三态之一', b: 'allow 原样 Proceed；modify 改写 arguments 后 Proceed；deny 短路返回工具结果包络，meta.code 是 sandbox_denied。命中规则优先于风险分段；都没命中时按 risk 分段判定。默认分段是 ≤49 放行、≥50 拒绝，所以开箱状态下写文件与命令执行都会落到 deny。', k: 'allow / modify / deny' },
-      7: { t: 'Proceed 到 Provider', b: 'Proceed 走 host.proceed，一次性生效。链位上限降到 499，下一跳是 tools。', k: 'host.proceed' },
-      8: { t: '再截一次', b: 'tools 分发对 file.write 的调用会重新进链，而 sandbox 也声明 consumes file.write，所以直连高危能力同样过裁决。', k: '直连高危键也过裁决' },
-      9: { t: 'Provider 执行', b: 'file-tools 在 Workspace 范围内做实际写入，用 os.Root 防路径逃逸。', k: 'Workspace 作用域' },
-      10: { t: '结果回到 agent', b: 'deny 时这里不会发生：sandbox 在第 6 跳就短路，返回的包络带 is_error=true，模型能读到拒绝原因。', k: 'deny 不进下一跳' },
+      5: { t: '写 confirm 审计', b: '命中 confirm 时先写一条 decision=confirm 的 sandbox_decision 事实，并创建一次性令牌。审计与被裁决的调用在同一条时间线上；session 缺席时退化为插件内存里的环形缓冲。', k: 'Fact: sandbox_decision(confirm)' },
+      6: { t: '推送确认面板', b: '待确认列表推给 sandbox-confirm。面板显示工具、风险、理由、参数摘要、会话名与剩余时间；它固定在视口右下角，不占插槽布局。', k: 'host.ui.state → confirm' },
+      7: { t: '四态之一', b: 'allow 原样 Proceed；confirm 阻塞等待；modify 改写 arguments 后 Proceed；deny 短路返回工具结果包络，meta.code 是 sandbox_denied。命中规则优先于风险分段；都没命中时按 risk 分段判定。默认分段是 ≤49 放行、≥50 确认。', k: 'allow / confirm / modify / deny' },
+      8: { t: '人工决定', b: '用户点击允许后，sandbox.decide 删除令牌并把决定交给等待中的 handler；拒绝返回 sandbox_denied，超时返回 sandbox_confirm_expired，取消轮次会清理令牌并写 cancelled 审计。', k: 'sandbox.decide allow / deny' },
+      9: { t: 'Proceed 到 tools', b: '允许后同一次调用继续，Proceed 走 host.proceed，一次性生效。链位上限降到 499，下一跳是 tools。', k: 'host.proceed' },
+      10: { t: '直连键再进链', b: 'tools 分发对 file.write 的调用会重新进链，而 sandbox 也声明 consumes file.write。外层 tools.call 放行时记下的 call_id 标记命中，这一跳直接放行，不再询问或重复写审计。', k: '60s call_id 标记' },
+      11: { t: 'Provider 执行', b: 'file-tools 在 Workspace 范围内做实际写入，用 os.Root 防路径逃逸。', k: 'Workspace 作用域' },
+      12: { t: '结果回到 tools', b: '工具结果统一形状：content、is_error、truncated、meta。', k: 'file.write res' },
+      13: { t: '结果回到 agent', b: 'deny 或确认拒绝时这里不会发生：sandbox 短路返回的包络带 is_error=true，模型能读到原因。', k: 'deny / confirm 拒绝不进下一跳' },
     },
   },
 
@@ -550,7 +558,7 @@ LA_SEQ.pluginCodes = [
   ['tools', 'tool_not_found / tool_name_conflict / tool_owner_mismatch / tool_target_unavailable / tool_target_reserved / tool_definition_invalid / tool_source_invalid', '注册表与分发期的本地错误；目标 Provider 停了就是 tool_target_unavailable'],
   ['file-tools', 'path_escape / path_not_found / file_exists / file_conflict / edit_ambiguous / edit_not_found / file_binary / file_too_large', '路径与内容层面的本地错误；路径越界一律拒绝'],
   ['shell-tools', 'command_blocked / command_not_found / cwd_escape / cwd_invalid / env_invalid / process_start_failed', '进程启动前的本地错误；取消与超时另用 call_cancelled、call_deadline_exceeded'],
-  ['sandbox', 'sandbox_denied / sandbox_rule_invalid / sandbox_rule_not_found', 'sandbox_denied 写在工具结果包络的 meta.code 里，不是协议错误；另两个是规则写入期的校验失败'],
+  ['sandbox', 'sandbox_denied / sandbox_confirm_token_invalid / sandbox_confirm_expired / sandbox_rule_invalid / sandbox_rule_not_found', 'sandbox_denied 与 sandbox_confirm_expired 写在工具结果包络的 meta.code 里，不是协议错误；token_invalid 是确认令牌不存在或已消费；rule_* 是规则写入期的校验失败'],
   ['session', 'session_not_found / workspace_mismatch / workspace_not_found / workspace_required', '会话与工作区定位失败'],
   ['llm-openai', 'llm_upstream', '上游 HTTP 失败统一成一个码，具体状态在 error_msg 里'],
 ];

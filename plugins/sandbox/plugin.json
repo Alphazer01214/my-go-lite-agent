@@ -24,11 +24,19 @@
         "label": "Default action",
         "type": "select",
         "required": true,
-        "description": "未命中任何规则时使用的动作。",
+        "description": "未命中任何规则时使用的动作。confirm 会暂停调用，等待用户确认。",
         "options": [
           { "value": "allow", "label": "Allow everything not matched by a rule" },
+          { "value": "confirm", "label": "Ask the user before running unmatched calls" },
           { "value": "deny", "label": "Deny everything not matched by a rule" }
         ]
+      },
+      {
+        "key": "confirm_ttl_seconds",
+        "label": "Confirm timeout (seconds)",
+        "type": "number",
+        "required": true,
+        "description": "确认请求的等待时长。超时后调用按失败返回。范围 30 到 3600。"
       },
       {
         "key": "audit_retention_days",
@@ -36,6 +44,56 @@
         "type": "number",
         "required": true,
         "description": "内存审计缓冲保留天数。会话事实日志不由本插件裁剪。"
+      },
+      {
+        "key": "risk_bands",
+        "label": "Risk bands",
+        "type": "list",
+        "description": "按 max_risk 从小到大匹配，第一条覆盖该风险值的档生效。建议最后一档覆盖 100。",
+        "item_fields": [
+          { "key": "max_risk", "label": "最大风险值", "type": "number", "min": 0, "required": true },
+          {
+            "key": "action",
+            "label": "动作",
+            "type": "select",
+            "required": true,
+            "options": [
+              { "value": "allow", "label": "allow" },
+              { "value": "confirm", "label": "confirm" },
+              { "value": "deny", "label": "deny" }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "rules",
+        "label": "Rules",
+        "type": "list",
+        "description": "持久规则。条件之间是合取，至少填一个条件。规则 ID 留空时自动生成。删除 deny 规则或放宽规则只影响本设置页，sandbox.set_rule 仍保持只升不降。",
+        "item_fields": [
+          { "key": "rule_id", "label": "规则 ID（留空自动生成）", "type": "string" },
+          {
+            "key": "action",
+            "label": "动作",
+            "type": "select",
+            "required": true,
+            "options": [
+              { "value": "allow", "label": "allow" },
+              { "value": "confirm", "label": "confirm" },
+              { "value": "modify", "label": "modify" },
+              { "value": "deny", "label": "deny" }
+            ]
+          },
+          { "key": "tool", "label": "工具名", "type": "string" },
+          { "key": "capability", "label": "能力名", "type": "string" },
+          { "key": "method", "label": "方法名", "type": "string" },
+          { "key": "path_glob", "label": "路径通配", "type": "string" },
+          { "key": "command_pattern", "label": "命令模式", "type": "string" },
+          { "key": "priority", "label": "权重", "type": "number" },
+          { "key": "ttl_seconds", "label": "有效期（秒）", "type": "number", "min": 0 },
+          { "key": "note", "label": "说明", "type": "string" },
+          { "key": "modified_arguments", "label": "改写参数（JSON，仅 modify）", "type": "string" }
+        ]
       }
     ]
   },
@@ -43,5 +101,11 @@
     { "name": "rules", "description": "List adjudication rules", "usage": "/sandbox rules" },
     { "name": "check", "description": "Dry-run one tool call", "usage": "/sandbox check <tool> <json>" }
   ],
-  "description": "Permission adjudication on tool seams: allow, modify, deny"
+  "ui": {
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "sandbox-confirm", "mount_id": "confirm", "slot": "right" }
+    ]
+  },
+  "description": "Permission adjudication on tool seams: allow, confirm, modify, deny"
 }

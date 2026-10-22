@@ -81,6 +81,9 @@ func newTestPlugin(t *testing.T, caller sdkCaller) *plugin {
 		cfg:        defaultConfig(),
 		configPath: filepath.Join(dir, "config.json"),
 		rules:      newRuleStore(filepath.Join(dir, "rules.json")),
+		pending:    newPendingStore(),
+		approved:   newApprovalStore(),
+		uiRev:      1,
 	}
 }
 
@@ -124,6 +127,12 @@ func TestSeamAllowsAReadOnlyCall(t *testing.T) {
 func TestSeamDeniesAWriteAndReturnsAToolResult(t *testing.T) {
 	caller := &fakeCaller{tools: testTools()}
 	p := newTestPlugin(t, caller)
+	if _, _, _, err := p.rules.set(rule{
+		Action: ActionDeny,
+		Scope:  ruleScope{Tool: "file_write"},
+	}, ""); err != nil {
+		t.Fatalf("set deny rule: %v", err)
+	}
 	req := &pluginsdk.Request{Capability: "tools", Method: "call",
 		Payload: json.RawMessage(`{"name":"file_write","arguments":{"path":"a.txt"},"session_id":"s-1"}`)}
 
@@ -240,10 +249,10 @@ func TestSeamWritesTheAuditEntryToTheSession(t *testing.T) {
 	caller := &fakeCaller{tools: testTools()}
 	p := newTestPlugin(t, caller)
 	req := &pluginsdk.Request{Capability: "tools", Method: "call",
-		Payload: json.RawMessage(`{"name":"file_write","arguments":{"path":"a.txt"},"session_id":"s-1","call_id":"c-9"}`)}
+		Payload: json.RawMessage(`{"name":"file_read","arguments":{"path":"a.txt"},"session_id":"s-1","call_id":"c-9"}`)}
 
 	if _, err := p.adjudicate(context.Background(), req, seamPayload{
-		Name:      "file_write",
+		Name:      "file_read",
 		Arguments: json.RawMessage(`{"path":"a.txt"}`),
 		SessionID: "s-1",
 		CallID:    "c-9",
@@ -261,8 +270,8 @@ func TestSeamWritesTheAuditEntryToTheSession(t *testing.T) {
 		t.Fatalf("fact type = %v, want %s", fact["type"], FactTypeDecision)
 	}
 	meta, _ := fact["meta"].(map[string]any)
-	if meta["decision"] != ActionDeny {
-		t.Fatalf("meta decision = %v, want deny", meta["decision"])
+	if meta["decision"] != ActionAllow {
+		t.Fatalf("meta decision = %v, want allow", meta["decision"])
 	}
 	if meta["session_id"] != "s-1" {
 		t.Fatalf("meta session id = %v, want s-1", meta["session_id"])
@@ -324,6 +333,7 @@ func TestAuditSurvivesAFailingSession(t *testing.T) {
 func TestUnknownToolIsJudgedWithTheUnknownRisk(t *testing.T) {
 	caller := &fakeCaller{tools: testTools()}
 	p := newTestPlugin(t, caller)
+	p.cfg.RiskBands = []band{{MaxRisk: 49, Action: ActionAllow}, {MaxRisk: 100, Action: ActionDeny}}
 	req := &pluginsdk.Request{Capability: "tools", Method: "call",
 		Payload: json.RawMessage(`{"name":"mystery_tool","arguments":{}}`)}
 
@@ -346,6 +356,7 @@ func TestUnknownToolIsJudgedWithTheUnknownRisk(t *testing.T) {
 func TestAFailingToolRegistryIsJudgedWithTheUnknownRisk(t *testing.T) {
 	caller := &fakeCaller{listErr: errors.New("tools down")}
 	p := newTestPlugin(t, caller)
+	p.cfg.RiskBands = []band{{MaxRisk: 49, Action: ActionAllow}, {MaxRisk: 100, Action: ActionDeny}}
 	req := &pluginsdk.Request{Capability: "tools", Method: "call",
 		Payload: json.RawMessage(`{"name":"file_read","arguments":{}}`)}
 
@@ -374,8 +385,8 @@ func TestCheckIsDry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if out.Decision != ActionDeny {
-		t.Fatalf("decision = %s, want deny", out.Decision)
+	if out.Decision != ActionConfirm {
+		t.Fatalf("decision = %s, want confirm", out.Decision)
 	}
 	if len(caller.appends_()) != 0 {
 		t.Fatal("a dry run must not write an audit entry")
@@ -464,7 +475,7 @@ func TestSettingsRejectAnInvalidValue(t *testing.T) {
 	caller := &fakeCaller{tools: testTools()}
 	p := newTestPlugin(t, caller)
 	_, err := p.settingsSave(context.Background(), &pluginsdk.Request{
-		Payload: json.RawMessage(`{"values":{"default_action":"confirm"}}`),
+		Payload: json.RawMessage(`{"values":{"default_action":"bogus"}}`),
 	})
 	if pluginsdk.Code(err) != pluginsdk.CodeBadArguments {
 		t.Fatalf("error code = %q, want %q", pluginsdk.Code(err), pluginsdk.CodeBadArguments)

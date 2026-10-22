@@ -14,3 +14,11 @@ func ruleInvalid(message string) error {
 func ruleNotFound(message string) error {
 	return pluginsdk.ErrCode(CodeRuleNotFound, message)
 }
+
+func confirmTokenInvalid(message string) error {
+	return pluginsdk.ErrCode(CodeConfirmTokenInvalid, message)
+}
+
+func confirmExpired(message string) error {
+	return pluginsdk.ErrCode(CodeConfirmExpired, message)
+}

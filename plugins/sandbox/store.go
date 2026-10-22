@@ -226,6 +226,74 @@ func (s *ruleStore) set(next rule, sessionID string) (string, bool, int, error) 
 	return next.RuleID, false, s.version, nil
 }
 
+// replacePersistent replaces the whole persistent rule set in one write. It is
+// the settings editor's path: a human may add, update or remove any rule,
+// including deny rules, so the monotonic check used by set does not apply here.
+//
+// Rules that keep an existing id keep their creation time; new ids are
+// allocated from the store counter. Nothing changes when validation fails.
+func (s *ruleStore) replacePersistent(next []rule) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing := make(map[string]rule, len(s.persistent))
+	for _, item := range s.persistent {
+		existing[item.RuleID] = item
+	}
+	now := time.Now().UnixMilli()
+	prepared := make([]rule, 0, len(next))
+	seen := make(map[string]bool, len(next))
+	nextSeq := s.seq
+	for _, item := range next {
+		if !validAction(item.Action) {
+			return s.version, ruleInvalid("action must be allow, confirm, modify or deny")
+		}
+		if item.Scope.empty() {
+			return s.version, ruleInvalid("scope must name at least one condition")
+		}
+		if item.Action == ActionModify && len(item.ModifiedArguments) == 0 {
+			return s.version, ruleInvalid("modified_arguments is required for a modify rule")
+		}
+		if item.Priority == 0 {
+			item.Priority = 100
+		}
+		if item.TTLSeconds < 0 {
+			return s.version, ruleInvalid("ttl_seconds must not be negative")
+		}
+		item.Lifetime = LifetimePersistent
+		if item.RuleID == "" {
+			nextSeq++
+			item.RuleID = fmt.Sprintf("r-%d", nextSeq)
+		} else if seen[item.RuleID] {
+			return s.version, ruleInvalid("duplicate rule_id: " + item.RuleID)
+		}
+		if seq := ruleSeq(item.RuleID); seq > nextSeq {
+			nextSeq = seq
+		}
+		seen[item.RuleID] = true
+		if previous, ok := existing[item.RuleID]; ok {
+			item.CreatedTS = previous.CreatedTS
+		} else if item.CreatedTS == 0 {
+			item.CreatedTS = now
+		}
+		prepared = append(prepared, item)
+	}
+
+	previous := s.persistent
+	previousVersion := s.version
+	previousSeq := s.seq
+	s.persistent = prepared
+	s.version++
+	s.seq = nextSeq
+	if err := s.persistLocked(); err != nil {
+		s.persistent = previous
+		s.version = previousVersion
+		s.seq = previousSeq
+		return previousVersion, err
+	}
+	return s.version, nil
+}
+
 // delete removes one rule. A deny rule cannot be deleted.
 func (s *ruleStore) delete(ruleID, lifetime, sessionID string) (int, error) {
 	s.mu.Lock()

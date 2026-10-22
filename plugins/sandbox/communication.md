@@ -14,6 +14,8 @@
 
 本插件是 Consumer，不是 Tool Provider。它不注册工具，也不执行文件与命令操作。
 
+对外方法：`check`、`list_rules`、`set_rule`、`pending.list`、`decide`、`settings.get`、`settings.save`。
+
 ## 2. 调用图
 
 ```mermaid
@@ -76,10 +78,9 @@ flowchart LR
 | 动作 | 行为 |
 |---|---|
 | `allow` | 原样放行。 |
+| `confirm` | 暂停调用，等待用户确认；允许后原样放行，拒绝或超时按失败返回。 |
 | `modify` | 改写 `arguments` 后放行。 |
 | `deny` | 短路返回，不进下一跳。 |
-
-`confirm` 还没有实现。风险档里的 `confirm` 目标动作当前按 `deny` 执行。
 
 ### 4.1 拒绝的返回形态
 
@@ -106,7 +107,7 @@ flowchart LR
 | `meta` 字段 | 说明 |
 |---|---|
 | `code` | 固定是 `sandbox_denied`。 |
-| `sandbox_decision` | 四态动作之一。当前只有 `deny` 会短路。 |
+| `sandbox_decision` | 四态动作之一。`deny` 与确认失败会短路；`confirm` 在等待期间不返回。 |
 | `rule_id` | 命中的规则。没有规则命中时是空串。 |
 | `reason` | 判定依据。 |
 | `risk` | 工具风险值。查不到时是 70。 |
@@ -117,6 +118,20 @@ flowchart LR
 ### 4.2 改写
 
 `modify` 规则带 `modified_arguments` 模板。模板是覆盖层：模板点名的键被替换，模板没点名的键保留。改写后的完整参数发给提供方。
+
+### 4.3 确认
+
+`confirm` 在裁决方内部等待，不依赖调用方重试。流程是：
+
+1. 创建一次性令牌，写入 `sandbox_decision` 审计事实，推送待确认状态到 `sandbox-confirm`。
+2. handler 阻塞在令牌的决策通道上；SDK 的接收循环继续服务 `sandbox.decide` 和其他调用。
+3. 用户允许后，同一次调用带着原参数继续进下一跳；拒绝返回 `sandbox_denied` 包络。
+4. 超过 `confirm_ttl_seconds` 返回 `sandbox_confirm_expired` 包络。取消轮次返回 `call_cancelled` 并清理令牌。
+
+确认期间 `session` 仍可记录审计事实，`session` UI 仍可刷新。插件重启后令牌全部失效。
+
+`tools.call` 放行后，`tools` 会带着同一个 `call_id` 调目标能力的直连接缝。
+sandbox 记一个 60 秒的 call_id 标记，匹配时直接放行这一跳，避免同一次工具调用被确认两次或写两条审计。
 
 ## 5. 风险解析
 
@@ -170,7 +185,7 @@ flowchart LR
 
 | 序号 | 规则 | 说明 |
 |---:|---|---|
-| 1 | 动作优先级 | `deny` 高于 `modify`，`modify` 高于 `allow`。 |
+| 1 | 动作优先级 | `deny` 高于 `confirm`，`confirm` 高于 `modify`，`modify` 高于 `allow`。 |
 | 2 | 同动作比权重 | `priority` 大的先。 |
 | 3 | 同权重比范围 | 范围窄的先。 |
 | 4 | 同范围比标识 | `rule_id` 字典序小的先。 |
@@ -185,10 +200,12 @@ flowchart LR
 | 新增一条更窄的规则 | 成功 |
 | 把一条 `deny` 规则的动作改成别的 | `sandbox_rule_invalid` |
 | 删除一条 `deny` 规则 | `sandbox_rule_invalid` |
-| 删除一条 `allow` 或 `modify` 规则 | 成功 |
+| 删除一条 `allow`、`confirm` 或 `modify` 规则 | 成功 |
 | 把一条规则改成更严的动作 | 成功 |
 
 「更宽」按范围包含关系判断。范围包含是保守近似：字面量只覆盖相同字面量。含通配符的一侧按更宽处理，判不出来的关系按不覆盖处理。
+
+设置页的 `settings.save` 是例外：它整体替换持久规则，允许删除 `deny` 规则或放宽规则。模型不能调用设置方法，只有人可以。
 
 ## 7. 方法
 
@@ -293,7 +310,7 @@ flowchart LR
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `rule_id` | 否 | 省略时自动生成。给出时表示更新该规则。 |
-| `action` | 是 | `allow`、`modify` 或 `deny`。 |
+| `action` | 是 | `allow`、`confirm`、`modify` 或 `deny`。 |
 | `scope` | 是 | 匹配条件，至少一个字段非空。 |
 | `priority` | 否 | 缺省是 100。 |
 | `lifetime` | 否 | `persistent` 或 `session`。缺省是 `persistent`。 |
@@ -313,19 +330,96 @@ flowchart LR
 
 `delete` 是目标契约之外的一个补充。目标契约固定了删除行为，但没有给删除方法。
 
-### 7.4 sandbox.settings.get
+### 7.4 sandbox.pending.list
+
+列出正在等待用户确认的调用。输入可省略 `session_id`；给出时只列该会话。
+
+```json
+{"session_id": "s-1"}
+```
+
+输出：
+
+```json
+{
+  "pending": [
+    {
+      "token": "cf-7f3a",
+      "tool": "file_write",
+      "capability": "file",
+      "method": "write",
+      "session_id": "s-1",
+      "rule_id": "r-3",
+      "reason": "命中确认规则 r-3",
+      "risk": 80,
+      "arguments_preview": "path: E:/project/a.txt",
+      "created_ts": 1760000000000,
+      "expires_at": 1760000300000
+    }
+  ]
+}
+```
+
+`arguments_preview` 只给命令、路径或参数名，不给文件内容。
+
+### 7.5 sandbox.decide
+
+提交一次人工决定。只对存在且未过期的令牌有效。
+
+```json
+{"token": "cf-7f3a", "decision": "allow"}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `token` | 是 | 确认令牌。 |
+| `decision` | 是 | `allow` 或 `deny`。 |
+
+输出：
+
+```json
+{"token": "cf-7f3a", "decision": "allow", "state": "approved", "expires_at": 1760000300000}
+```
+
+令牌是一次性的。第二个决定返回 `sandbox_confirm_token_invalid`，过期返回 `sandbox_confirm_expired`。
+
+### 7.6 sandbox.settings.get
 
 输入是空对象，输出是 `values` 包络。
 
 ```json
-{"values": {"default_action": "allow", "audit_retention_days": 30}}
+{
+  "values": {
+    "default_action": "allow",
+    "confirm_ttl_seconds": 300,
+    "audit_retention_days": 30,
+    "risk_bands": [
+      {"max_risk": 49, "action": "allow"},
+      {"max_risk": 79, "action": "confirm"},
+      {"max_risk": 100, "action": "confirm"}
+    ],
+    "rules": [
+      {
+        "rule_id": "r-3",
+        "action": "deny",
+        "command_pattern": "rm -rf *",
+        "priority": 100,
+        "ttl_seconds": 0,
+        "note": "禁止递归删除"
+      }
+    ]
+  }
+}
 ```
 
-### 7.5 sandbox.settings.save
+`rules` 只包含持久规则，使用扁平字段，作用域条件与规则字段同级。
+
+### 7.7 sandbox.settings.save
 
 输入是同一个 `values` 包络，输出是 `{"saved": true}`。
 
-保存后写进 `config.json`。配置改动不影响在途调用。
+`rules` 非空时整体替换持久规则集。设置页可以删除 `deny` 规则或放宽规则；这条路径只对人工编辑开放。
+保存后写进 `config.json`，规则写进 `rules.json`。配置改动不影响在途调用。
 
 ## 8. 审计
 
@@ -349,7 +443,8 @@ flowchart LR
     "session_id": "s-1",
     "turn_id": "",
     "step_id": "",
-    "confirm_token": "",
+    "confirm_token": "cf-7f3a",
+    "expires_at": 1760000300000,
     "ts": 1760000000000
   }
 }
@@ -357,14 +452,16 @@ flowchart LR
 
 | 字段 | 说明 |
 |---|---|
-| `decision` | 裁决动作。 |
+| `decision` | 裁决动作。确认等待中为 `confirm`，终态为 `allow`、`deny` 或 `cancelled`。 |
 | `rule_id` | 命中的规则。没有规则命中时是空串。 |
 | `reason` | 判定依据。 |
 | `risk` | 工具风险值。查不到时是 70。 |
 | `arguments_digest` | 参数摘要。不记参数原文。 |
 | `turn_id`、`step_id` | 当前接缝载荷不带这两个字段，所以是空串。 |
-| `confirm_token` | 确认流还没有实现，所以是空串。 |
+| `confirm_token` | 确认令牌。非确认调用为空串。 |
+| `expires_at` | 确认令牌过期时刻。非确认调用省略。 |
 
+一次确认产生两条审计事实：第一条 `confirm`，第二条是允许、拒绝、超时或取消后的终态。
 事实类型不带 `message`，所以不进模型上下文。它出现在会话追踪视图里。
 
 `session` 缺席时审计退化为进程内的有界环形缓冲，环形缓冲不落盘。
@@ -386,6 +483,8 @@ flowchart LR
 | 错误码 | 场景 |
 |---|---|
 | `sandbox_denied` | 裁决结果是 `deny`。它出现在拒绝包络的 `meta.code` 里，不是协议错误。 |
+| `sandbox_confirm_expired` | 确认令牌过期。它出现在失败包络的 `meta.code` 里，`sandbox.decide` 也用它。 |
+| `sandbox_confirm_token_invalid` | 令牌不存在、已消费或已决定。 |
 | `sandbox_rule_invalid` | 规则字段非法，或违反只升不降的约束。 |
 | `sandbox_rule_not_found` | 更新或删除一条不存在的规则。 |
 
@@ -393,18 +492,28 @@ flowchart LR
 
 ## 11. WebUI
 
-本插件当前没有 Component。它不贡献任何槽位。
+本插件拥有一个 Component。
 
-确认面板属于后续批次。右栏当前由 `session` 独占，放宽槽位共享是它的前置条件。
+| Component | Mount | Slot | 职责 |
+|---|---|---|---|
+| `sandbox-confirm` | `confirm` | `right` | 右下角固定确认面板 |
+
+面板订阅 `sandbox.pending.list` 的状态，收到拒绝/允许后调用 `sandbox.decide`。
+它显示会话名，并提供“查看会话”按钮；点击后调用 `session.select`。
+
+状态由插件推送，`revision` 单调递增。面板每秒只更新倒计时，不重建行。
 
 ## 12. 与目标契约的差异
 
 | 项 | 目标契约 | 当前实现 |
 |---|---|---|
-| 动作 | 四态 | 三态。`confirm` 缺失。 |
+| 动作 | 四态 | 四态。 |
+| 确认流 | 两阶段令牌续传 | 阻塞等待，允许后同一次调用继续。 |
 | 意图区 | `meta` 对象 | 扁平字段，沿用现有 `tools.call` 契约。 |
 | 拒绝返回 | 协议错误或工具结果包络 | 工具结果包络。 |
 | 规则删除 | 固定行为，没有方法 | `sandbox.set_rule` 的 `delete` 字段。 |
+| 规则编辑 | 无图形界面 | 设置页规则列表。 |
+| Prompt 贡献 | 动态轨 `policy` 节 | 没有。 |
 | 确认令牌 | 两阶段续传 | 没有。 |
 | 确认面板 | 右栏组件 | 没有。 |
 | Prompt 贡献 | 动态轨 `policy` 节 | 没有。 |

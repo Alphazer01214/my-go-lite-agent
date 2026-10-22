@@ -44,9 +44,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   overflow: auto;
   list-style: none;
 }
+.history-row { display: flex; align-items: stretch; gap: 4px; }
 .item {
   display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -59,6 +61,49 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .item.active .name { color: var(--session-accent-strong, #0c604c); }
 .item .meta { display: block; margin-top: 2px; color: var(--session-muted-text, #5c6875); font-size: 12px; }
 .item .open-badge { float: right; margin-left: 6px; color: var(--session-accent, #147d64); font-size: 11px; }
+.pin-badge { float: right; margin-left: 6px; color: var(--session-accent, #147d64); font-size: 11px; }
+.row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.history-row:hover .row-actions,
+.history-row:focus-within .row-actions { opacity: 1; }
+@media (hover: none) {
+  .row-actions { opacity: 1; }
+}
+.row-actions button { padding: 2px 7px; border-radius: 5px; font-size: 11px; line-height: 1.5; }
+.row-actions .danger { color: var(--session-danger, #b91c1c); }
+.row-actions .armed { border-color: var(--session-danger, #b91c1c); background: #fdecec; }
+.rename-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(15 23 32 / 35%);
+}
+.rename-overlay[hidden] { display: none; }
+.rename-dialog {
+  width: min(360px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 8px;
+  background: var(--session-surface, #ffffff);
+  box-shadow: 0 12px 32px rgb(24 33 43 / 20%);
+}
+.rename-dialog h2 { margin-bottom: 10px; font-size: 15px; }
+.rename-dialog input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--session-border, #d5dbe1);
+  border-radius: 6px;
+}
+.rename-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 .toolbar { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 8px; }
 .toolbar textarea {
@@ -1237,6 +1282,16 @@ class SessionHistory extends HTMLElement {
         <input class="history-search" type="search" aria-label="搜索会话" placeholder="搜索标题、ID 或工作区">
         <ul class="list"></ul>
         <div class="error" aria-live="polite"></div>
+        <div class="rename-overlay" hidden>
+          <form class="rename-dialog">
+            <h2>重命名会话</h2>
+            <input class="rename-input" maxlength="200" aria-label="会话名称" placeholder="留空则使用会话 ID">
+            <div class="rename-actions">
+              <button type="button" class="rename-cancel">取消</button>
+              <button type="submit" class="rename-save">保存</button>
+            </div>
+          </form>
+        </div>
       `;
 		this.head = this.shadowRoot.querySelector(".hint");
 		this.workspaceSelect = this.shadowRoot.querySelector(".workspace-select");
@@ -1247,6 +1302,10 @@ class SessionHistory extends HTMLElement {
 		this.error = this.shadowRoot.querySelector(".error");
 		this.modelRow = this.shadowRoot.querySelector(".model-row");
 		this.modelSelect = this.shadowRoot.querySelector(".model-select");
+		this.renameOverlay = this.shadowRoot.querySelector(".rename-overlay");
+		this.renameForm = this.shadowRoot.querySelector(".rename-dialog");
+		this.renameInput = this.shadowRoot.querySelector(".rename-input");
+		this.renameCancel = this.shadowRoot.querySelector(".rename-cancel");
 		this.models = [];
 		this.defaultModel = "";
 		this.selectedModel = "";
@@ -1256,9 +1315,23 @@ class SessionHistory extends HTMLElement {
 		this.query = "";
 		this.creating = false;
 		this.workspaceBusy = false;
+		this.renamingId = "";
+		this.deleteArmed = "";
+		this.deleteArmedTimer = 0;
 		this.workspaceSelect.addEventListener("change", () => this.selectWorkspace(this.workspaceSelect.value));
 		this.workspaceAdd.addEventListener("click", () => this.addWorkspace());
 		this.createButton.addEventListener("click", () => this.createSession());
+		this.renameCancel.addEventListener("click", () => this.closeRename());
+		this.renameForm.addEventListener("submit", (event) => {
+			event.preventDefault();
+			this.submitRename();
+		});
+		this.renameOverlay.addEventListener("click", (event) => {
+			if (event.target === this.renameOverlay) this.closeRename();
+		});
+		this.renameOverlay.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") this.closeRename();
+		});
 		this.modelSelect.addEventListener("change", () => {
 			this.selectedModel = this.modelSelect.value;
 		});
@@ -1279,6 +1352,10 @@ class SessionHistory extends HTMLElement {
 
 	disconnectedCallback() {
 		window.removeEventListener("liteagent:settings-saved", this.onSettingsSaved);
+		if (this.deleteArmedTimer) {
+			clearTimeout(this.deleteArmedTimer);
+			this.deleteArmedTimer = 0;
+		}
 	}
 
 	async refresh() {
@@ -1470,16 +1547,104 @@ class SessionHistory extends HTMLElement {
 		for (const session of sessions) {
 			const active = session.session_id === this.state.selected_id;
 			const open = (this.state.open_ids || []).includes(session.session_id);
+			const row = el("li", "history-row");
 			const button = el("button", active ? "item active" : "item");
 			button.type = "button";
 			button.title = session.workspace ? `${session.session_id}\n${session.workspace}` : session.session_id;
 			if (open) button.append(el("span", "open-badge", active ? "当前" : "已打开"));
-			button.append(el("strong", "name", session.name || session.session_id));
+			if (session.pinned) button.append(el("span", "pin-badge", "置顶"));
+			button.append(el("strong", "name", sessionLabel(session)));
 			const meta = `${session.fact_count || 0} 条记录 · ${formatTime(session.last_ts || session.created_ts)}`;
 			button.append(el("span", "meta", meta));
 			button.addEventListener("click", () => this.select(session.session_id));
-			this.list.append(button);
+
+			const actions = el("div", "row-actions");
+			const pin = el("button", "", session.pinned ? "取消置顶" : "置顶");
+			pin.type = "button";
+			pin.title = session.pinned ? "取消置顶" : "置顶会话";
+			pin.addEventListener("click", () => this.togglePin(session));
+			const rename = el("button", "", "改名");
+			rename.type = "button";
+			rename.title = "重命名会话";
+			rename.addEventListener("click", () => this.openRename(session));
+			const remove = el("button", this.deleteArmed === session.session_id ? "armed danger" : "danger",
+				this.deleteArmed === session.session_id ? "确认删除" : "删除");
+			remove.type = "button";
+			remove.title = this.deleteArmed === session.session_id
+				? "再次点击确认删除该会话及其日志文件"
+				: "删除会话";
+			remove.addEventListener("click", () => this.deleteSession(session));
+			actions.append(pin, rename, remove);
+			row.append(button, actions);
+			this.list.append(row);
 		}
+	}
+
+	async togglePin(session) {
+		this.error.textContent = "";
+		try {
+			await call("update", { session_id: session.session_id, pinned: !session.pinned });
+			await this.refresh();
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		}
+	}
+
+	openRename(session) {
+		this.renamingId = session.session_id;
+		this.renameInput.value = session.name || "";
+		this.renameOverlay.hidden = false;
+		this.renameInput.focus();
+		this.renameInput.select();
+	}
+
+	closeRename() {
+		this.renamingId = "";
+		this.renameOverlay.hidden = true;
+	}
+
+	async submitRename() {
+		const sessionId = this.renamingId;
+		if (!sessionId) return;
+		const save = this.renameForm.querySelector(".rename-save");
+		save.disabled = true;
+		this.error.textContent = "";
+		try {
+			await call("update", { session_id: sessionId, name: this.renameInput.value });
+			this.closeRename();
+			await this.refresh();
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		} finally {
+			save.disabled = false;
+		}
+	}
+
+	async deleteSession(session) {
+		if (this.deleteArmed !== session.session_id) {
+			this.deleteArmed = session.session_id;
+			if (this.deleteArmedTimer) clearTimeout(this.deleteArmedTimer);
+			this.deleteArmedTimer = setTimeout(() => {
+				this.deleteArmed = "";
+				this.deleteArmedTimer = 0;
+				this.render();
+			}, 4000);
+			this.render();
+			return;
+		}
+		this.deleteArmed = "";
+		if (this.deleteArmedTimer) {
+			clearTimeout(this.deleteArmedTimer);
+			this.deleteArmedTimer = 0;
+		}
+		this.error.textContent = "";
+		try {
+			await call("delete", { session_id: session.session_id });
+			await this.refresh();
+		} catch (error) {
+			this.error.textContent = describeError(error);
+		}
+		this.render();
 	}
 
 	renderWorkspaces() {

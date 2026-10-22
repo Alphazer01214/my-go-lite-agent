@@ -25,6 +25,7 @@ type Meta struct {
 	ParentSessionID  string `json:"parent_session_id,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	DelegationDepth  int    `json:"delegation_depth,omitempty"`
+	Pinned           bool   `json:"pinned,omitempty"`
 	CreatedTimestamp int64  `json:"created_ts"`
 }
 

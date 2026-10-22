@@ -18,6 +18,7 @@ type config struct {
 	DefaultAction      string `json:"default_action"`
 	RiskBands          []band `json:"risk_bands"`
 	RulesFile          string `json:"rules_file"`
+	ConfirmTTLSeconds  int    `json:"confirm_ttl_seconds"`
 	AuditRetentionDays int    `json:"audit_retention_days"`
 }
 
@@ -30,20 +31,18 @@ type band struct {
 
 // defaultConfig is the shipped policy.
 //
-// The risk scale is the one the tools plugin uses: 0 to 100. The band table
-// below is the target mapping of this build: read only calls are allowed,
-// anything that writes or executes is denied because the confirmation state
-// does not exist yet. When the confirmation flow lands, the two deny bands
-// become confirm bands; no code changes with them.
+// The risk scale is the one the tools plugin uses: 0 to 100. Read only calls
+// are allowed; anything that writes or executes asks the user first.
 func defaultConfig() config {
 	return config{
 		DefaultAction: ActionAllow,
 		RiskBands: []band{
 			{MaxRisk: 49, Action: ActionAllow},
-			{MaxRisk: 79, Action: ActionDeny},
-			{MaxRisk: 100, Action: ActionDeny},
+			{MaxRisk: 79, Action: ActionConfirm},
+			{MaxRisk: 100, Action: ActionConfirm},
 		},
 		RulesFile:          "rules.json",
+		ConfirmTTLSeconds:  300,
 		AuditRetentionDays: 30,
 	}
 }
@@ -60,22 +59,32 @@ func loadConfig(path string) config {
 		DefaultAction      string `json:"default_action"`
 		RiskBands          []band `json:"risk_bands"`
 		RulesFile          string `json:"rules_file"`
+		ConfirmTTLSeconds  int    `json:"confirm_ttl_seconds"`
 		AuditRetentionDays int    `json:"audit_retention_days"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox: config: %v\n", err)
 		return cfg
 	}
-	if validAction(raw.DefaultAction) {
+	if validOutcomeAction(raw.DefaultAction) {
 		cfg.DefaultAction = raw.DefaultAction
 	}
 	if bands, ok := validBands(raw.RiskBands); ok {
 		cfg.RiskBands = bands
+		// Configs written before the confirmation flow used deny for the two
+		// upper bands. With no TTL field there was no confirmation to configure,
+		// so that deny was a placeholder for "ask the user"; migrate it once.
+		if raw.ConfirmTTLSeconds == 0 && isLegacyDenyBands(bands) {
+			cfg.RiskBands = defaultConfig().RiskBands
+		}
 	} else if len(raw.RiskBands) > 0 {
 		fmt.Fprintln(os.Stderr, "sandbox: config: invalid risk_bands, using defaults")
 	}
 	if name := validRulesFile(raw.RulesFile); name != "" {
 		cfg.RulesFile = name
+	}
+	if raw.ConfirmTTLSeconds >= 30 && raw.ConfirmTTLSeconds <= 3600 {
+		cfg.ConfirmTTLSeconds = raw.ConfirmTTLSeconds
 	}
 	if raw.AuditRetentionDays > 0 && raw.AuditRetentionDays <= 3650 {
 		cfg.AuditRetentionDays = raw.AuditRetentionDays
@@ -90,7 +99,7 @@ func validBands(bands []band) ([]band, bool) {
 	}
 	out := make([]band, 0, len(bands))
 	for _, item := range bands {
-		if item.MaxRisk < 0 || item.MaxRisk > 100 || !validAction(item.Action) {
+		if item.MaxRisk < 0 || item.MaxRisk > 100 || !validOutcomeAction(item.Action) {
 			return nil, false
 		}
 		out = append(out, item)
@@ -109,6 +118,16 @@ func validRulesFile(name string) string {
 		return ""
 	}
 	return name
+}
+
+// isLegacyDenyBands matches the shipped table from before confirm existed.
+func isLegacyDenyBands(bands []band) bool {
+	if len(bands) != 3 {
+		return false
+	}
+	return bands[0] == band{MaxRisk: 49, Action: ActionAllow} &&
+		bands[1] == band{MaxRisk: 79, Action: ActionDeny} &&
+		bands[2] == band{MaxRisk: 100, Action: ActionDeny}
 }
 
 // bandAction returns the action of the band that covers a risk value. An

@@ -36,6 +36,7 @@ type auditMeta struct {
 	TurnID           string `json:"turn_id"`
 	StepID           string `json:"step_id"`
 	ConfirmToken     string `json:"confirm_token"`
+	ExpiresAt        int64  `json:"expires_at,omitempty"`
 	TS               int64  `json:"ts"`
 }
 
@@ -79,7 +80,14 @@ func (a *auditLog) entries() []auditMeta {
 //
 // The write uses a context that outlives the call: a cancelled turn still
 // gets its decision recorded.
-func (p *plugin) writeAudit(ctx context.Context, d decision, call callContext, arguments json.RawMessage) {
+func (p *plugin) writeAudit(
+	ctx context.Context,
+	d decision,
+	call callContext,
+	arguments json.RawMessage,
+	confirmToken string,
+	expiresAt int64,
+) {
 	// A call that was cancelled before the decision leaves no trace: there was
 	// no decision to record.
 	if ctx.Err() != nil {
@@ -98,7 +106,8 @@ func (p *plugin) writeAudit(ctx context.Context, d decision, call callContext, a
 		SessionID:        call.SessionID,
 		TurnID:           call.TurnID,
 		StepID:           call.StepID,
-		ConfirmToken:     "",
+		ConfirmToken:     confirmToken,
+		ExpiresAt:        expiresAt,
 		TS:               time.Now().UnixMilli(),
 	}
 	if call.SessionID == "" {

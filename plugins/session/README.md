@@ -22,7 +22,8 @@ plugins/session/sessions/workspaces.json
 
 Session 属于一个 Workspace。创建时传入 `workspace_id`，Session 将它和规范路径写入 `session_start` Fact。
 
-Workspace 绑定在 Session 生命周期内不可修改。`session.update` 只更新显示名称。
+Workspace 绑定在 Session 生命周期内不可修改。`session.update` 更新显示名称与置顶状态。
+`session.delete` 删除会话日志；有未闭合 Turn 时拒绝。置顶会话排在历史列表前面，状态写入 `session_meta`，重启后恢复。
 
 创建时还可以传入 `model` 和 `context_window`，它们同样写入 `session_start`，创建后不变。Session 不校验模型目录，
 只保存调用方选择的模型 id 和窗口。
@@ -97,7 +98,9 @@ Session 拥有：
 
 Session Runtime 是这些 Component 的直接驱动者。llm-openai 不直接渲染输出。
 
-当前交互包括 Workspace 选择与添加、按 Workspace 过滤会话、会话搜索、多会话标签、按会话保留输入草稿、后台会话运行指示、底部消息输入框、流式状态、停止生成、消息和代码复制、思考过程折叠、回到最新和稳定 revision。
+当前交互包括 Workspace 选择与添加、按 Workspace 过滤会话、会话搜索、会话改名/置顶/删除、多会话标签、按会话保留输入草稿、后台会话运行指示、底部消息输入框、流式状态、停止生成、消息和代码复制、思考过程折叠、回到最新和稳定 revision。
+
+会话操作在历史列表行右侧：改名打开对话框，删除需要连续点击两次确认。运行中的会话由后端拒绝删除。
 
 聊天消息按 Turn 折叠：完成轮默认收起过程，只保留用户消息、上下文块和最终回答；Turn 头显示状态、过程条数、工具数和时长。
 没有过程行的轮次显示状态行，零工具完成的轮次标注「未调用工具」。展开后，工具结果、reasoning 和 tool_calls 仍各自可折叠。

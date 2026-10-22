@@ -6,7 +6,10 @@ import (
 )
 
 func TestMatchPath(t *testing.T) {
-	workspace := filepath.Join(string(filepath.Separator), "ws")
+	// A temp dir is absolute on every platform. A bare "\ws" is only rooted on
+	// Windows, and filepath.IsAbs rejects it, which would double the workspace.
+	workspace := t.TempDir()
+	outside := t.TempDir()
 	cases := []struct {
 		name    string
 		pattern string
@@ -15,7 +18,7 @@ func TestMatchPath(t *testing.T) {
 	}{
 		{"relative both sides", "README.md", "README.md", true},
 		{"relative pattern absolute path", "README.md", filepath.Join(workspace, "README.md"), true},
-		{"outside the workspace", "README.md", filepath.Join(string(filepath.Separator), "other", "README.md"), false},
+		{"outside the workspace", "README.md", filepath.Join(outside, "README.md"), false},
 		{"star stays in one segment", "*.md", filepath.Join(workspace, "README.md"), true},
 		{"star does not cross a segment", "*", filepath.Join(workspace, "docs", "a.md"), false},
 		{"double star crosses segments", "**/*.md", filepath.Join(workspace, "docs", "a.md"), true},

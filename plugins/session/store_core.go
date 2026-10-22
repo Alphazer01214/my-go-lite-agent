@@ -44,6 +44,9 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 }
 
 func (s *store) appendLocked(ins []factIn) ([]int, int, error) {
+	if s.f == nil {
+		return nil, s.nextSeq, errHandler("session is closed")
+	}
 	ts := nowMS()
 	// The sequence is only consumed once the bytes are on the log: a failed
 	// write must not leave a permanent gap that recover() would read back.
@@ -93,4 +96,22 @@ func (s *store) nextSequence() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.nextSeq
+}
+
+// close detaches the log file. A later append fails instead of writing to a
+// closed handle; deletion holds this lock so no write can interleave.
+func (s *store) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f != nil {
+		_ = s.f.Close()
+		s.f = nil
+	}
+}
+
+// reopen attaches a fresh handle after a failed delete rolled the store back.
+func (s *store) reopen(f *os.File) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.f = f
 }

@@ -284,6 +284,7 @@ session 声明 `consumes` 后，1000 生效。届时上表的链序才成立。
 |---|---|---|
 | `session_id` | 是 | 目标会话 |
 | `name` | 否 | 新名称。省略表示不改名 |
+| `pinned` | 否 | 置顶状态。省略表示不改 |
 | `workspace` | 否 | 传入即报错 |
 | `workspace_id` | 否 | 传入即报错 |
 
@@ -293,11 +294,39 @@ session 声明 `consumes` 后，1000 生效。届时上表的链序才成立。
 {
   "session_id": "s-123",
   "name": "项目分析",
+  "pinned": true,
   "workspace": "E:/project"
 }
 ```
 
-名称变化写入一条 `session_meta` 事实。工作区绑定在会话生命周期内不可修改。
+名称或置顶状态变化写入一条 `session_meta` 事实。工作区绑定在会话生命周期内不可修改。
+
+**session.delete**
+
+输入：
+
+```json
+{
+  "session_id": "s-123"
+}
+```
+
+输出：
+
+```json
+{
+  "session_id": "s-123",
+  "deleted": true,
+  "selected_id": "s-124"
+}
+```
+
+| 规则 | 说明 |
+|---|---|
+| 有未闭合 Turn | 返回 `bad_arguments` |
+| 打开或选中的会话 | 删除前从打开列表移除，并选中同工作区相邻会话 |
+| 落盘文件 | 关闭句柄后删除 `<session_id>.jsonl` |
+| 会话不存在 | 返回 `session_not_found` |
 
 ### 4.2 投影类
 
@@ -505,6 +534,7 @@ session 声明 `consumes` 后，1000 生效。届时上表的链序才成立。
       "name": "项目分析",
       "workspace_id": "ws-123",
       "workspace": "E:/project",
+      "pinned": true,
       "fact_count": 20,
       "created_ts": 1760000000000,
       "last_ts": 1760000010000
@@ -513,7 +543,7 @@ session 声明 `consumes` 后，1000 生效。届时上表的链序才成立。
 }
 ```
 
-按 `last_ts` 降序排列。相同时按 `created_ts` 降序，再相同按 `session_id` 降序。
+置顶会话排在前面。其余按 `last_ts` 降序排列。相同时按 `created_ts` 降序，再相同按 `session_id` 降序。
 
 **session.state**
 
@@ -888,7 +918,7 @@ session 拥有四个 Component。标签都以插件名加连字符开头。
 
 | Component | Mount | Slot | 职责 |
 |---|---|---|---|
-| `session-history` | `history` | `left` | 会话列表、工作区选择、新建会话 |
+| `session-history` | `history` | `left` | 会话列表、工作区选择、新建会话、改名/置顶/删除 |
 | `session-chat` | `chat` | `center` | 消息区、Turn 分组、流式草稿、输入框 |
 | `session-trace` | `trace` | `right` | 事实追踪 |
 | `session-dock` | `dock` | `bottom` | 模型、用量、上下文占用、轮次状态 |
@@ -996,6 +1026,7 @@ session 使用 `session_` 与 `workspace_` 两个前缀。
 | 事实类型为空 | `bad_arguments` |
 | JSON 解码失败 | `bad_arguments` |
 | 修改已有会话的工作区 | `bad_arguments` |
+| 删除有未闭合 Turn 的会话 | `bad_arguments` |
 | 会话不存在 | `session_not_found` |
 | 缺少工作区 | `workspace_required` |
 | 工作区不存在 | `workspace_not_found` |
@@ -1135,7 +1166,7 @@ session 使用 `session_` 与 `workspace_` 两个前缀。
 | 多用户 | 一个 Session 进程服务一个用户空间，没有身份与鉴权 |
 | 跨设备同步 | 日志是本地文件，没有同步协议 |
 | 会话迁移 | 会话不可跨工作区移动，也不可跨机器搬运 |
-| 事实删除 | 日志只追加，没有删除或改写接口 |
+| 单条事实删除 | 日志只追加，没有单条事实的删除或改写接口；`session.delete` 删除整个会话文件 |
 | 事实压缩 | 日志文件不做归档或分片 |
 
 **目标契约。**

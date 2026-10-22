@@ -19,7 +19,8 @@
 | `session.select` | 打开并切换到指定会话 | 当前实现 |
 | `session.close` | 关闭一个打开的会话标签 | 当前实现 |
 | `session.refresh` | Workspace 切换后重新同步并发布 UI State | 当前实现 |
-| `session.update` | 更新 Session 名称 | 当前实现 |
+| `session.update` | 更新 Session 名称或置顶状态 | 当前实现 |
+| `session.delete` | 删除一个没有运行中 Turn 的 Session | 当前实现 |
 | `session.workspace.list` | 列出 Workspace 和当前选择 | 当前实现 |
 | `session.workspace.create` | 注册并选择 Workspace | 当前实现 |
 | `session.workspace.select` | 切换当前 Workspace | 当前实现 |
@@ -248,6 +249,7 @@ v1 不保存 `stream_chunk`。Agent 累计 stream，最终写 `message` Fact。
       "name": "项目分析",
       "workspace_id": "ws-123",
       "workspace": "E:/project",
+      "pinned": true,
       "fact_count": 20,
       "created_ts": 1760000000000,
       "last_ts": 1760000010000
@@ -255,6 +257,8 @@ v1 不保存 `stream_chunk`。Agent 累计 stream，最终写 `message` Fact。
   ]
 }
 ```
+
+置顶会话排在前面，其余按 `last_ts`、`created_ts`、`session_id` 降序。
 
 ## 8. session.info
 
@@ -279,6 +283,7 @@ v1 不保存 `stream_chunk`。Agent 累计 stream，最终写 `message` Fact。
   "parent_session_id": "",
   "origin": "",
   "delegation_depth": 0,
+  "pinned": true,
   "created_ts": 1760000000000,
   "fact_count": 20,
   "next_seq": 21
@@ -405,10 +410,26 @@ Session Runtime：
 ### session.update
 
 ```json
-{"session_id": "s-123", "name": "项目分析"}
+{"session_id": "s-123", "name": "项目分析", "pinned": true}
 ```
 
-`name` 可省略。Workspace 绑定不可修改；传入 `workspace` 或 `workspace_id` 返回 `bad_arguments`。名称更新写入 `session_meta` Fact。
+`name` 与 `pinned` 均可省略。Workspace 绑定不可修改；传入 `workspace` 或 `workspace_id` 返回 `bad_arguments`。
+名称或置顶状态变化写入 `session_meta` Fact，并在重启后恢复。
+
+### session.delete
+
+```json
+{"session_id": "s-123"}
+```
+
+输出：
+
+```json
+{"session_id": "s-123", "deleted": true, "selected_id": "s-124"}
+```
+
+删除会关闭文件、移除注册和打开的标签，并删除 `s-123.jsonl`。有未闭合 Turn 的会话返回 `bad_arguments`。
+删除当前会话后，同 Workspace 的相邻会话会被选中；没有则清空。
 
 ### session.refresh
 
@@ -860,6 +881,7 @@ Component 的主题变量由插件自己拥有，统一使用 `--session-*` 前�
 | Workspace 路径不合法 | `workspace_invalid` |
 | Session Workspace 与 Workspace ID 不一致 | `workspace_mismatch` |
 | 修改已有 Session 的 Workspace | `bad_arguments` |
+| 删除有未闭合 Turn 的 Session | `bad_arguments` |
 | JSONL 写失败 | `handler_error` |
 | JSON 解码失败 | `bad_arguments` |
 

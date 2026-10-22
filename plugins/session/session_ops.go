@@ -211,14 +211,19 @@ func (p *plugin) list(workspaceID string, includeSubagents bool) (listOut, error
 			ParentSessionID:  meta.ParentSessionID,
 			Origin:           meta.Origin,
 			DelegationDepth:  meta.DelegationDepth,
+			Pinned:           meta.Pinned,
 			FactCount:        count,
 			CreatedTimestamp: meta.CreatedTimestamp,
 			LastTimestamp:    lastTS,
 		})
 	}
-	// Newest first. Map iteration is randomized, so the order must be explicit.
+	// Pinned first, then newest first. Map iteration is randomized, so the
+	// order must be explicit.
 	sort.Slice(out.Sessions, func(i, j int) bool {
 		a, b := out.Sessions[i], out.Sessions[j]
+		if a.Pinned != b.Pinned {
+			return a.Pinned
+		}
 		if a.LastTimestamp != b.LastTimestamp {
 			return a.LastTimestamp > b.LastTimestamp
 		}
@@ -250,8 +255,100 @@ func (p *plugin) info(in infoIn) (infoOut, error) {
 		ParentSessionID:  meta.ParentSessionID,
 		Origin:           meta.Origin,
 		DelegationDepth:  meta.DelegationDepth,
+		Pinned:           meta.Pinned,
 		CreatedTimestamp: meta.CreatedTimestamp,
 		FactCount:        total,
 		NextSeq:          st.nextSequence(),
 	}, nil
+}
+
+// delete removes one session log. A session with an open turn is refused: the
+// running agent would otherwise report into a file that no longer exists.
+func (p *plugin) deleteSession(ctx context.Context, in deleteIn) (deleteOut, error) {
+	if in.SessionID == "" {
+		return deleteOut{}, errBadArguments("session_id is required")
+	}
+	st, err := p.get(in.SessionID)
+	if err != nil {
+		return deleteOut{}, err
+	}
+	meta := st.snapshotMeta()
+	facts, _, err := p.readFacts(st.id)
+	if err != nil {
+		return deleteOut{}, err
+	}
+	if turnID := openTurnID(facts); turnID != "" {
+		return deleteOut{}, errBadArguments("session has a running turn: " + turnID)
+	}
+
+	p.mu.Lock()
+	delete(p.reg, st.id)
+	delete(p.streams, st.id)
+	if p.selected == st.id {
+		p.selected = ""
+	}
+	if meta.WorkspaceID != "" && p.selectedByWorkspace[meta.WorkspaceID] == st.id {
+		delete(p.selectedByWorkspace, meta.WorkspaceID)
+	}
+	kept := p.open[:0]
+	for _, id := range p.open {
+		if id != st.id {
+			kept = append(kept, id)
+		}
+	}
+	p.open = kept
+	p.mu.Unlock()
+	p.streamOutMu.Lock()
+	delete(p.streamOut, st.id)
+	p.streamOutMu.Unlock()
+
+	st.close()
+	path, pathErr := p.sessionPath(st.id)
+	if pathErr == nil {
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			// Put the session back rather than hiding live data because one
+			// file operation failed. If reopening fails too, the log remains on
+			// disk and returns on the next start.
+			if f, reopenErr := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644); reopenErr == nil {
+				st.reopen(f)
+				p.mu.Lock()
+				p.reg[st.id] = st
+				p.mu.Unlock()
+				if meta.WorkspaceID != "" {
+					p.reconcileWorkspaceSelection(meta.WorkspaceID)
+				}
+				p.publishForSelection(ctx)
+			}
+			return deleteOut{}, errHandler(removeErr.Error())
+		}
+	}
+	if meta.WorkspaceID != "" {
+		p.reconcileWorkspaceSelection(meta.WorkspaceID)
+	}
+	p.publishForSelection(ctx)
+	return deleteOut{SessionID: st.id, Deleted: true, Selected: p.selectedID()}, nil
+}
+
+// openTurnID returns the id of a turn that has started but not ended. Recovery
+// writes turn_end on load, so a session loaded normally has none.
+func openTurnID(facts []Fact) string {
+	open := make(map[string]bool)
+	for _, fact := range facts {
+		var meta factContextMeta
+		if len(fact.Meta) > 0 {
+			_ = json.Unmarshal(fact.Meta, &meta)
+		}
+		switch fact.Type {
+		case TypeTurnStart:
+			if meta.TurnID != "" {
+				open[meta.TurnID] = true
+			}
+		case TypeTurnEnd:
+			delete(open, meta.TurnID)
+		}
+	}
+	for turnID := range open {
+		return turnID
+	}
+	return ""
 }

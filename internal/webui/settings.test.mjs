@@ -112,6 +112,21 @@ test("normalizes list fields and keeps select values", () => {
 	});
 });
 
+test("keeps select values inside list rows", () => {
+	const values = collectSettingsValues(
+		[{
+			key: "rules",
+			type: "list",
+			item_fields: [
+				{ key: "action", type: "select" },
+				{ key: "priority", type: "number" },
+			],
+		}],
+		{ rules: [{ action: "deny", priority: "5" }] },
+	);
+	assert.deepEqual(values, { rules: [{ action: "deny", priority: 5 }] });
+});
+
 test("renders settings fields and calls lifecycle hooks", () => {
 	const document = fakeDocument();
 	const root = document.createElement("div");

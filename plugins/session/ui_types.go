@@ -272,6 +272,7 @@ type closeOut struct {
 type updateIn struct {
 	SessionID   string  `json:"session_id"`
 	Name        *string `json:"name,omitempty"`
+	Pinned      *bool   `json:"pinned,omitempty"`
 	Workspace   *string `json:"workspace,omitempty"`
 	WorkspaceID *string `json:"workspace_id,omitempty"`
 }
@@ -279,6 +280,7 @@ type updateIn struct {
 type updateOut struct {
 	SessionID string `json:"session_id"`
 	Name      string `json:"name,omitempty"`
+	Pinned    bool   `json:"pinned,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 }
 

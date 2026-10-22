@@ -147,17 +147,40 @@ function createListRow(document, field, item) {
 	const row = document.createElement("div");
 	row.className = "settings-list-row";
 	for (const itemField of Array.isArray(field.item_fields) ? field.item_fields : []) {
-		const input = document.createElement("input");
+		const value = item?.[itemField.key];
+		let input;
+		if (itemField.type === "select") {
+			input = document.createElement("select");
+			const options = (Array.isArray(itemField.options) ? itemField.options : [])
+				.map((option) => ({
+					value: String(option?.value ?? ""),
+					label: String(option?.label || option?.value || ""),
+				}))
+				.filter((option) => option.value);
+			// A blank placeholder keeps an untouched new row out of the save
+			// payload; otherwise the first option would make the row look filled.
+			const blank = document.createElement("option");
+			blank.value = "";
+			blank.textContent = "请选择";
+			input.replaceChildren(blank, ...options.map((option) => {
+				const node = document.createElement("option");
+				node.value = option.value;
+				node.textContent = option.label;
+				return node;
+			}));
+			input.value = value === null || value === undefined ? "" : String(value);
+		} else {
+			input = document.createElement("input");
+			input.type = itemField.type === "number" ? "number" : "text";
+			input.placeholder = itemField.label || itemField.key;
+			input.value = value === null || value === undefined ? "" : String(value);
+		}
 		input.className = "settings-list-input";
 		input.dataset.itemKey = itemField.key;
-		input.type = itemField.type === "number" ? "number" : "text";
-		input.placeholder = itemField.label || itemField.key;
 		input.setAttribute?.("aria-label", `${field.label || field.key} ${itemField.label || itemField.key}`);
 		if (itemField.required) input.setAttribute?.("aria-required", "true");
 		if (itemField.min !== undefined) input.min = String(itemField.min);
 		if (itemField.step !== undefined) input.step = String(itemField.step);
-		const value = item?.[itemField.key];
-		input.value = value === null || value === undefined ? "" : String(value);
 		row.append(input);
 	}
 	const remove = document.createElement("button");
