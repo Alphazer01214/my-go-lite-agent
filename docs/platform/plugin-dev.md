@@ -2,6 +2,8 @@
 
 一个插件是一个目录包。目录名、`plugin.json.name` 和 `pluginsdk.NewPlugin` 的名称必须一致。
 
+目录怎么分、文件怎么拆、什么放哪里，见 [plugin-standard.md](plugin-standard.md)。本文只讲开发流程。
+
 ## 1. 包结构
 
 ```text
@@ -9,6 +11,9 @@ plugins/<name>/
   main.go
   plugin.json
   config.json
+  errors.go
+  types.go
+  plugin.go
   README.md
   communication.md
   ui/
@@ -21,9 +26,14 @@ plugins/<name>/
 | `main.go` | 是 | 注册 handler 并启动 Plugin Runtime |
 | `plugin.json` | 是 | 静态注册面 |
 | `config.json` | 视需要 | 可写运行配置 |
+| `errors.go` | 是 | 本插件的错误码常量与构造器 |
+| `types.go` | 是 | 跨功能共享的契约类型 |
+| `plugin.go` | 是 | plugin 结构体、配置、锁与生命周期 |
 | `README.md` | 是 | 功能、配置和方法概览 |
 | `communication.md` | 是 | 方法、payload、Event 和前端通信 |
 | `ui/` | 视需要 | Web Component 和静态资源 |
+
+业务实现按关注点拆进 `<feature>.go`，规则见 [plugin-standard.md](plugin-standard.md) 第 4 节。
 
 ## 2. main.go
 

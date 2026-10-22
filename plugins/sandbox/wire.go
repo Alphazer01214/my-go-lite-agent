@@ -1,10 +1,5 @@
 package main
 
-// This file is the sandbox plugin's private wire format. It intentionally does
-// not live in pluginsdk: the adjudication payload is a business contract
-// between this plugin and the seams it consumes, not a Host contract. Keep the
-// JSON tags in sync with plugins/sandbox/communication.md.
-
 import (
 	"bytes"
 	"crypto/sha256"
@@ -12,10 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
+	"io"
 )
+
+// This file is the sandbox plugin's private wire format. It intentionally does
+// not live in pluginsdk: the adjudication payload is a business contract
+// between this plugin and the seams it consumes, not a Host contract. Keep the
+// JSON tags in sync with plugins/sandbox/communication.md.
 
 // Plugin-level error codes. The sandbox_ prefix is reserved for this plugin
 // in docs/design/plugins/00-conventions.md §6.

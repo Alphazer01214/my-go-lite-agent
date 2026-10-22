@@ -11,19 +11,19 @@ func (p *plugin) resolveWorkspaceBinding(workspaceID, workspacePath string) (str
 	if workspaceID != "" {
 		record, ok := p.workspaces.info(workspaceID)
 		if !ok {
-			return "", "", errCoded("workspace_not_found", "workspace not found: "+workspaceID)
+			return "", "", errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceID)
 		}
 		if workspacePath != "" && !sameWorkspacePath(workspacePath, record.Path) {
-			return "", "", errCoded("workspace_mismatch", "workspace path does not match workspace_id")
+			return "", "", errCoded(codeWorkspaceMismatch, "workspace path does not match workspace_id")
 		}
 		return record.WorkspaceID, record.Path, nil
 	}
 	if workspacePath == "" {
-		return "", "", errCoded("workspace_required", "workspace_id or workspace is required")
+		return "", "", errCoded(codeWorkspaceRequired, "workspace_id or workspace is required")
 	}
 	record, _, err := p.workspaces.ensure(workspacePath, "", false)
 	if err != nil {
-		return "", "", errCoded("workspace_invalid", err.Error())
+		return "", "", errCoded(codeWorkspaceInvalid, err.Error())
 	}
 	return record.WorkspaceID, record.Path, nil
 }
@@ -76,7 +76,7 @@ func (p *plugin) workspaceRecords() ([]workspaceRecord, string) {
 // already know the target session use this to avoid a second selection pass.
 func (p *plugin) setWorkspace(workspaceID string) error {
 	if strings.TrimSpace(workspaceID) == "" {
-		return errCoded("workspace_required", "workspace_id is required")
+		return errCoded(codeWorkspaceRequired, "workspace_id is required")
 	}
 	_, err := p.workspaces.selectID(workspaceID)
 	return err

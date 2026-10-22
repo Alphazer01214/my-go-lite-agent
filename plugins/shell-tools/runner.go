@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type processSpec struct {
@@ -77,14 +76,14 @@ func runProcess(ctx context.Context, spec processSpec) (json.RawMessage, error) 
 	configureProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return nil, pluginsdk.ErrCode("command_not_found", err.Error())
+			return nil, errCommandNotFound(err.Error())
 		}
-		return nil, pluginsdk.ErrCode("process_start_failed", err.Error())
+		return nil, errProcessStartFailed(err.Error())
 	}
 	if err := assignProcess(cmd); err != nil {
 		_ = killProcessTree(cmd)
 		_ = cmd.Wait()
-		return nil, pluginsdk.ErrCode("process_start_failed", err.Error())
+		return nil, errProcessStartFailed(err.Error())
 	}
 
 	wait := make(chan error, 1)

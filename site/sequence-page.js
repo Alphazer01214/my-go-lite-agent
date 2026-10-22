@@ -9,7 +9,7 @@
 
   function heroFacts() {
     const facts = [
-      { k: '12', t: '张序列图', d: '从 Frame 闭环到插件生命周期' },
+      { k: '14', t: '张序列图', d: '从 Frame 闭环到插件层的裁决与委派' },
       { k: 'fwd-N', t: 'pending 键', d: 'Host 分配的内部 id，不是插件的 id' },
       { k: '1', t: '条终态 Response', d: '每条 Request 最终只得到一条' },
       { k: '0', t: '插件直连', d: '任何跨插件调用都经 Host 路由' },
@@ -156,6 +156,7 @@
     table('#frameFields', ['字段', '取值', '谁写', '含义'], LA_SEQ.frameFields);
     table('#pendingKeys', ['场景', 'pending 键', 'Frame.id 还原成什么', '说明'], LA_SEQ.pendingKeys);
     table('#errPoints', ['error_code', '在哪一跳被写', '说明'], LA_SEQ.errPoints);
+    table('#pluginCodes', ['插件', '错误码', '什么时候出现'], LA_SEQ.pluginCodes);
     renderParts();
     renderIndex();
     initNav();

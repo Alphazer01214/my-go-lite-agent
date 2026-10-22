@@ -3,14 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"io/fs"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type listIn struct {
@@ -50,7 +49,7 @@ func (p *plugin) list(_ context.Context, _ *pluginsdk.Request, input ProviderInp
 		return nil, mapPathError(err)
 	}
 	if !info.IsDir() {
-		return nil, pluginsdk.ErrCode("path_not_directory", "path is not a directory")
+		return nil, errPathNotDirectory("path is not a directory")
 	}
 	recursive := in.Recursive != nil && *in.Recursive
 	maxDepth := 1

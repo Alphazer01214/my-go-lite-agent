@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"io/fs"
 	"os"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type statIn struct {

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiteAgent 数据流转 · 序列图</title>
-<meta name="description" content="用 mermaid sequenceDiagram 风格逐跳展示 LiteAgent 的数据传输：Frame 的 id 改写、pending 闭环、Browser Call、Turn 主链路、流式增量、上下文组装、工具轮、取消、异常与刷新重连。">
+<meta name="description" content="用 mermaid sequenceDiagram 风格逐跳展示 LiteAgent 的数据传输：Frame 的 id 改写、pending 闭环、Browser Call、Turn 主链路、流式增量、上下文组装、工具轮、沙箱裁决、子代理委派、取消、异常与刷新重连。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -96,6 +96,11 @@
     <div class="panel">
       <table class="tbl" id="errPoints"></table>
     </div>
+    <div class="panel">
+      <h3 class="mini-title">插件自有错误码<span class="mono-dim"> 不在 protocol/errors.go 里，但会写进 Frame.error_code</span></h3>
+      <table class="tbl" id="pluginCodes"></table>
+      <p class="hint">每个插件用独立前缀，平台的 30 个稳定码不受影响。插件码的含义只在该插件的契约里定义。</p>
+    </div>
   </section>
 
   <section class="block" id="index">
@@ -103,7 +108,7 @@
       <span class="idx">05</span>
       <div>
         <h2>全部图索引</h2>
-        <p class="block-lede">十二张图，按数据流方向排。</p>
+        <p class="block-lede">十四张图，按数据流方向排。</p>
       </div>
     </header>
     <div class="panel">
@@ -116,8 +121,8 @@
 <footer class="foot">
   <div class="foot-inner">
     <p class="foot-title">数据来源</p>
-    <p>本页序列图与 <code>internal/host/</code>、<code>internal/webui/</code>、<code>pluginsdk/</code>、<code>plugins/*/</code> 的实现逐跳比对，并与 <code>docs/protocol.md</code>、<code>docs/webui.md</code>、<code>docs/project-map/OVERVIEW.md</code> 的同名图对照。渲染器是本页自带的 <code>sequence.js</code>，不依赖 npm 与 CDN。</p>
-    <p class="foot-meta">LiteAgent · 整理于 2026-10-20 · 行为以当前源码为准</p>
+    <p>本页序列图与 <code>internal/host/</code>、<code>internal/webui/</code>、<code>pluginsdk/</code>、<code>plugins/*/</code> 的实现逐跳比对，并与 <code>docs/platform/protocol.md</code>、<code>docs/platform/webui.md</code>、<code>docs/design/composition-model-context-tools-sandbox.md</code> 的同名图对照。渲染器是本页自带的 <code>sequence.js</code>，不依赖 npm 与 CDN。</p>
+    <p class="foot-meta">LiteAgent · 整理于 2026-10-21 · 行为以当前源码为准</p>
   </div>
 </footer>
 

@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 const maxReadFileBytes = 16 << 20
@@ -38,20 +37,20 @@ func (p *plugin) read(_ context.Context, _ *pluginsdk.Request, input ProviderInp
 		return nil, mapPathError(err)
 	}
 	if info.IsDir() {
-		return nil, pluginsdk.ErrCode("path_is_directory", "path is a directory")
+		return nil, errPathIsDirectory("path is a directory")
 	}
 	if info.Size() > maxReadFileBytes {
-		return nil, pluginsdk.ErrCode("file_too_large", "file exceeds 16 MiB")
+		return nil, errFileTooLarge("file exceeds 16 MiB")
 	}
 	data, err := w.root.ReadFile(rel)
 	if err != nil {
 		return nil, mapPathError(err)
 	}
 	if bytes.IndexByte(data, 0) >= 0 {
-		return Failure("file_binary", "file contains NUL bytes", map[string]any{"path": displayPath(rel)})
+		return Failure(codeFileBinary, "file contains NUL bytes", map[string]any{"path": displayPath(rel)})
 	}
 	if !utf8.Valid(data) {
-		return Failure("file_binary", "file is not valid UTF-8", map[string]any{"path": displayPath(rel)})
+		return Failure(codeFileBinary, "file is not valid UTF-8", map[string]any{"path": displayPath(rel)})
 	}
 
 	lines := splitLines(string(data))
@@ -64,7 +63,7 @@ func (p *plugin) read(_ context.Context, _ *pluginsdk.Request, input ProviderInp
 		end = *in.EndLine
 	}
 	if start < 1 || end < start || start > len(lines) {
-		return nil, pluginsdk.ErrCode("line_range_invalid", "line range is outside the file")
+		return nil, errLineRangeInvalid("line range is outside the file")
 	}
 	if end > len(lines) {
 		end = len(lines)

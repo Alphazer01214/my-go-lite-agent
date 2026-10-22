@@ -3,12 +3,16 @@
 (function () {
   'use strict';
 
-  const en = { 'model-context': true, 'tools': true, 'file-tools': true, 'shell-tools': true };
+  const en = {
+    'model-context': true, tools: true, 'file-tools': true, 'shell-tools': true,
+    sandbox: true, subagent: true,
+  };
   const NODE_W = 158, NODE_H = 90;
 
   const owner = {
     loop: 'agent', agent: 'agent', session: 'session', llm: 'llm-openai',
-    'model-context': 'model-context', tools: 'tools', file: 'file-tools', shell: 'shell-tools', host: 'Host',
+    'model-context': 'model-context', tools: 'tools', file: 'file-tools', shell: 'shell-tools',
+    subagent: 'subagent', sandbox: 'sandbox', host: 'Host',
   };
 
   const $ = (s, r) => (r || document).querySelector(s);
@@ -233,7 +237,7 @@
     $('#pipeTrack').innerHTML = rows.join('');
     $('#pipeNote').innerHTML = (en['model-context']
       ? 'Request 从 Host 入口进入，先经 <code>' + p.method + '</code> 的 Consumer（priority 2000），Consumer 调 <code>Proceed</code> 后交给 Owner。'
-      : '没有可用 Consumer 时，<code>agent</code> 的基线投影直接进入 <code>' + p.owner.name + '</code>。因为 <code>llm.complete</code> 的 Consumer 是可选注册，不是 Manifest 强制声明。') +
+      : '没有活跃 Consumer 时，入口这一跳找不到 Consumer，调用直接交给该键的 Provider——这就是缺席即放行。平台不提供强制拦截。') +
       '<br>' + p.rules.map((r) => '· ' + esc(r)).join('<br>');
 
     function node(name, prio, note, on, key) {
@@ -283,6 +287,22 @@
     return [a.cx + dx * s, a.cy + dy * s];
   }
 
+  /* 二次贝塞尔上的点，用来把标签放在曲线上而不是中点。 */
+  function quad(p0, p1, p2, t) {
+    const u = 1 - t;
+    return [
+      u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+      u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+    ];
+  }
+
+  /* 一条边的走向：dip 向下绕，bow 横向弓出，其余走直线。 */
+  function edgeControl(a, b, ed) {
+    if (ed.dip) return [(a.cx + b.cx) / 2, Math.max(a.cy, b.cy) + ed.dip];
+    if (ed.bow) return [(a.cx + b.cx) / 2 + ed.bow.dx, (a.cy + b.cy) / 2 + (ed.bow.dy || 0)];
+    return null;
+  }
+
   function renderGraph() {
     const svg = $('#graph');
     const parts = ['<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#4a6577"/></marker><marker id="ahp" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#b79cff"/></marker></defs>'];
@@ -297,7 +317,7 @@
     LA.edges.forEach((ed) => {
       const on = isOn(ed.from) && isOn(ed.to);
       const a = rect(ed.from), b = rect(ed.to);
-      const ctl = ed.dip ? [(a.cx + b.cx) / 2, Math.max(a.cy, b.cy) + ed.dip] : null;
+      const ctl = edgeControl(a, b, ed);
       const pa = ctl ? clip(a, { cx: ctl[0], cy: ctl[1], w: a.w, h: a.h }) : clip(a, b);
       const pb = ctl ? clip(b, { cx: ctl[0], cy: ctl[1], w: b.w, h: b.h }) : clip(b, a);
       const cls = 'gedge ' + ed.kind + (on ? '' : ' off');
@@ -307,8 +327,15 @@
         : 'M' + pa[0] + ',' + pa[1] + ' L' + pb[0] + ',' + pb[1];
       parts.push('<path class="' + cls + '" d="' + d + '" marker-end="' + mk + '"/>');
       if (ed.label) {
-        const lx = ctl ? ctl[0] : (pa[0] + pb[0]) / 2;
-        const ly = (ctl ? ctl[1] : (pa[1] + pb[1]) / 2) - 5;
+        const at = ed.labelAt === undefined ? 0.5 : ed.labelAt;
+        let lx, ly;
+        if (ctl) {
+          const p = quad([a.cx, a.cy], ctl, [b.cx, b.cy], at);
+          lx = p[0]; ly = p[1];
+        } else {
+          lx = (pa[0] + pb[0]) / 2; ly = (pa[1] + pb[1]) / 2 - 5;
+        }
+        ly += ed.labelDy || 0;
         parts.push('<text class="gelabel" x="' + lx + '" y="' + ly + '" text-anchor="middle" style="paint-order:stroke;stroke:#080d13;stroke-width:3">' + esc(ed.label) + '</text>');
       }
     });
@@ -350,6 +377,9 @@
     if (p.name !== 'host') {
       h += row('depends_on', p.dependsOn.length ? p.dependsOn.map((d) => '<span class="chip">' + esc(d) + '</span>').join('') : '<span class="chip">无</span>');
       h += row('requires', p.requires.length ? p.requires.map((d) => '<span class="chip">' + esc(d) + '</span>').join('') : '<span class="chip">无</span>');
+      if (p.consumes && p.consumes.length) {
+        h += row('consumes', p.consumes.map((d) => '<span class="chip">' + esc(d) + '</span>').join(''));
+      }
       if (p.mounts.length) h += row('ui.components', p.mounts.map((m) => '<span class="chip">' + esc(m[0]) + ' → ' + esc(m[1]) + '</span>').join(''));
       else h += row('ui.components', '<span class="chip">无</span>');
       if (p.note) h += row('note', esc(p.note));
@@ -361,12 +391,14 @@
 
   function renderCombo() {
     const mc = en['model-context'], tl = en['tools'], ft = en['file-tools'], st = en['shell-tools'];
+    const sb = en['sandbox'], sub = en['subagent'];
     const chain = ['agent'];
     const h = [];
     h.push('<h3 class="mini-title">当前组合的调用链</h3>');
     h.push('<div class="combo-line">session-chat → loop.turn → agent → session.derive（基线投影）</div>');
     h.push('<div class="combo-line">llm.complete → ' + (mc ? 'model-context (prio 2000) → Proceed → llm-openai' : 'llm-openai（Consumer 缺席，基线直达）') + '</div>');
-    h.push('<div class="combo-line' + (tl ? '' : ' dim') + '">工具阶段 → ' + (tl ? 'tools.list / tools.call → ' + [ft ? 'file.*' : null, st ? 'shell.*' : null].filter(Boolean).join(' + ') + (ft || st ? '' : '（无可用 Provider）') : '跳过，写入 request_header.meta.degraded') + '</div>');
+    h.push('<div class="combo-line' + (tl ? '' : ' dim') + '">工具阶段 → ' + (tl ? 'tools.list / tools.call → ' + (sb ? 'sandbox 裁决 (prio 500) → ' : '') + [ft ? 'file.*' : null, st ? 'shell.*' : null].filter(Boolean).join(' + ') + (ft || st ? '' : '（无可用 Provider）') : '跳过，写入 request_header.meta.degraded') + '</div>');
+    h.push('<div class="combo-line' + (sub ? '' : ' dim') + '">委派 → ' + (sub ? '模型调用 subagent 工具 → tools.call → subagent.run → 子会话 loop.turn' : '模型看不到 subagent 工具，无法委派') + '</div>');
     h.push('<div class="combo-line">落盘 → session.append（assistant / step_end / turn_end） → ui.state</div>');
 
     const deg = [];
@@ -374,6 +406,8 @@
     if (!tl) deg.push('<b>tools 停用</b>：agent 跳过工具阶段并标记 degraded；file-tools、shell-tools 的注册表不再被查询。');
     if (!ft) deg.push('<b>file-tools 停用</b>：file.* 不再进入路由表，tools.call 打到该目标返回 route_failed。');
     if (!st) deg.push('<b>shell-tools 停用</b>：shell.* 不可用；shell_execute 是 RiskCritical 工具。');
+    if (!sb) deg.push('<b>sandbox 停用</b>：tools.call、file.write、file.replace、file.patch、shell.execute 五个接缝都不再有人裁决，调用照常到达 Provider，也不产生审计条目。');
+    if (!sub) deg.push('<b>subagent 停用</b>：模型看不到 subagent 工具，委派这条路整体消失；loop、session、tools 不受影响。');
     h.push('<div class="degrade">' + (deg.length ? deg.join('<br>') : '全部插件在线。降级只发生在弱依赖缺失时，硬依赖缺失会让插件启动或调用失败。') + '</div>');
     h.push('<p class="hint">启动顺序由 Manifest 的 <code>autostart</code> 与 <code>depends_on</code> 决定：Host 取全部 autostart 根插件，按 <code>depends_on</code> 做 DFS 后序装载。停止某个插件不会级联停止依赖方，但 Host 会摘掉它的路由键，依赖方的后续调用返回 <code>method_not_found</code>（路由表里没有属主）。</p>');
     $('#comboOut').innerHTML = h.join('');
@@ -549,13 +583,15 @@
     const compactOn = ctxCompact && ctxMC;
     const facts = LA.ctxFacts;
     $('#ctxCompact').disabled = !ctxMC;
-$('#factList').innerHTML = facts.map((f) => {
+    $('#factList').innerHTML = facts.map((f) => {
       const vis = ctxVisible(f);
       const label = f.kind ? f.type + ' · ' + f.kind : f.type;
+      const tail = f.host ? ' · 平台事实，不进模型上下文' : '';
       return '<li class="fact' + (vis ? '' : ' muted') + (hlSeq === f.seq ? ' hl' : '') + '" data-seq="' + f.seq + '">' +
         '<span class="fs">seq ' + f.seq + '</span><span class="ft">' + esc(label) + '</span>' +
-        '<span class="fx">' + esc(f.role) + ' · ' + esc(f.text) + '</span></li>';
+        '<span class="fx">' + esc(f.role + ' · ' + f.text + tail) + '</span></li>';
     }).join('');
+
 
     const proj = [];
     const msgs = facts.filter((f) => f.type === 'message' && ctxVisible(f) && !f.kind);
@@ -583,7 +619,16 @@ $('#factList').innerHTML = facts.map((f) => {
   }
 
   /* ---------- 08 / 09 static ---------- */
+  function renderSeams() {
+    const host = $('#seamTable');
+    if (!host) return;
+    host.innerHTML = '<thead><tr><th>接缝 (capability, method)</th><th>链序</th><th>语义</th></tr></thead><tbody>' +
+      LA.seams.map((s) => '<tr><td><code>' + esc(s[0]) + '</code></td><td>' + esc(s[1]) + '</td><td>' + esc(s[2]) + '</td></tr>').join('') +
+      '</tbody>';
+  }
+
   function initStatic() {
+    renderSeams();
     $('#rulesGrid').innerHTML = LA.rules.map((r, i) =>
       '<div class="rule" data-n="' + String(i + 1).padStart(2, '0') + '"><p>' + esc(r[0]) + '</p><span>' + esc(r[1]) + '</span></div>').join('');
     $('#nongoals').innerHTML = LA.nongoals.map((n) => '<span class="chip">' + esc(n) + '</span>').join('');

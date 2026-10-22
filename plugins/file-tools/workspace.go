@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type workspace struct {
@@ -19,18 +17,18 @@ type workspace struct {
 
 func openWorkspace(path string) (*workspace, error) {
 	if path == "" {
-		return nil, pluginsdk.ErrCode("workspace_required", "workspace is required")
+		return nil, errWorkspaceRequired("workspace is required")
 	}
 	if !filepath.IsAbs(path) {
-		return nil, pluginsdk.ErrCode("workspace_invalid", "workspace must be an absolute path")
+		return nil, errWorkspaceInvalid("workspace must be an absolute path")
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		return nil, pluginsdk.ErrCode("workspace_invalid", "workspace must be an existing directory")
+		return nil, errWorkspaceInvalid("workspace must be an existing directory")
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
-		return nil, pluginsdk.ErrCode("workspace_invalid", err.Error())
+		return nil, errWorkspaceInvalid(err.Error())
 	}
 	return &workspace{root: root, path: path}, nil
 }
@@ -44,29 +42,29 @@ func (w *workspace) Close() error {
 
 func safeRelative(path string, allowRoot bool) (string, error) {
 	if path == "" {
-		return "", pluginsdk.ErrCode("path_invalid", "path is required")
+		return "", errPathInvalid("path is required")
 	}
 	if strings.ContainsRune(path, 0) {
-		return "", pluginsdk.ErrCode("path_invalid", "path contains NUL")
+		return "", errPathInvalid("path contains NUL")
 	}
 	normalized := strings.ReplaceAll(path, `\`, "/")
 	if strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "//") ||
 		filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
-		return "", pluginsdk.ErrCode("path_invalid", "path must be workspace-relative")
+		return "", errPathInvalid("path must be workspace-relative")
 	}
 	if normalized == "." {
 		if allowRoot {
 			return ".", nil
 		}
-		return "", pluginsdk.ErrCode("path_invalid", "a file path is required")
+		return "", errPathInvalid("a file path is required")
 	}
 	parts := strings.Split(normalized, "/")
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." {
-			return "", pluginsdk.ErrCode("path_invalid", "path contains an invalid component")
+			return "", errPathInvalid("path contains an invalid component")
 		}
 		if windowsReservedName(part) {
-			return "", pluginsdk.ErrCode("path_invalid", "path uses a reserved device name")
+			return "", errPathInvalid("path uses a reserved device name")
 		}
 	}
 	return filepath.FromSlash(strings.Join(parts, "/")), nil
@@ -92,12 +90,12 @@ func mapPathError(err error) error {
 		return nil
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		return pluginsdk.ErrCode("path_not_found", err.Error())
+		return errPathNotFound(err.Error())
 	}
 	if errors.Is(err, fs.ErrPermission) {
-		return pluginsdk.ErrCode("path_escape", err.Error())
+		return errPathEscape(err.Error())
 	}
-	return pluginsdk.ErrCode("file_io", err.Error())
+	return errFileIo(err.Error())
 }
 
 func randomSuffix() string {

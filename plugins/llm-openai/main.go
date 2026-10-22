@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os"
-
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
+	"os"
 )
 
 func errBadArguments(msg string) error {
@@ -13,7 +12,7 @@ func errBadArguments(msg string) error {
 }
 
 func errUpstream(msg string) error {
-	return pluginsdk.ErrCode("llm_upstream", msg)
+	return errLlmUpstream(msg)
 }
 
 func errHandler(msg string) error {

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiteAgent 结构图览 · 进程外插件 Runtime</title>
-<meta name="description" content="以交互方式看懂 LiteAgent：Host 薄内核、Frame v2 线契约、(capability, method) 路由、七个插件的组合与降级、一次 Turn 的完整链路和 WebUI 平台壳。">
+<meta name="description" content="以交互方式看懂 LiteAgent：Host 薄内核、Frame v2 线契约、(capability, method) 路由、九个插件的组合与降级、一次 Turn 的完整链路和 WebUI 平台壳。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -44,7 +44,7 @@
         Capability 路由和 WebUI 平台壳；具体业务由独立插件提供。两个层次互不越界。
       </p>
       <p class="hero-cta">
-        <a href="sequence.html">只看数据怎么流 → 12 张序列图，逐跳展开 ↗</a>
+        <a href="sequence.html">只看数据怎么流 → 14 张序列图，逐跳展开 ↗</a>
       </p>
       <ul class="facts" id="heroFacts"></ul>
     </div>
@@ -128,7 +128,7 @@
       <span class="idx">03</span>
       <div>
         <h2>两层路由与流水线</h2>
-        <p class="block-lede">路由键只有 <code>(capability, method)</code>。执行上下文把 Capability 绑到 Plugin Instance，是第二层调度。</p>
+        <p class="block-lede">路由键只有 <code>(capability, method)</code>。同一把键上可以有 Provider 和多个 Consumer，Host 按 priority 把它们串成消费链。</p>
       </div>
     </header>
     <div class="route-grid">
@@ -162,8 +162,8 @@
       </div>
     </div>
     <div class="callout">
-      <p><strong>Consumer 不抢占 Owner。</strong>已声明为 Consumer 但当前没有可用 Consumer 时，Host 不降级到 Provider，
-      调用返回 <code>route_failed</code>——避免绕过策略型 Consumer。</p>
+      <p><strong>Consumer 不抢占 Owner，但缺席就放行。</strong>已声明为 Consumer 的插件只进链，不夺走 Provider 的路由键；
+      而当某个 Consumer 当前不活跃时，Host 跳过这一跳，把调用交给 Provider——这是部署约定，不是平台保证的强制拦截。</p>
     </div>
   </section>
 
@@ -172,15 +172,15 @@
       <span class="idx">04</span>
       <div>
         <h2>插件图谱与降级</h2>
-        <p class="block-lede">七个插件构成当前发布集。关掉 <code>model-context</code> 或 <code>tools</code>，看链路怎么降级——这是可组合性的实际含义。</p>
+        <p class="block-lede">九个插件构成当前发布集，其中六个是可选件。关掉 <code>model-context</code>、<code>tools</code>、<code>sandbox</code> 或 <code>subagent</code>，看链路怎么降级——这是可组合性的实际含义。</p>
       </div>
     </header>
     <div class="graph-wrap">
-      <svg id="graph" class="graph" viewBox="0 0 1040 560" role="img" aria-label="Host 与七个插件的依赖与调用关系图"></svg>
+      <svg id="graph" class="graph" viewBox="0 0 1140 600" role="img" aria-label="Host 与九个插件的依赖与调用关系图"></svg>
       <div class="graph-legend">
         <span><i class="ln ln-solid"></i>depends_on（硬依赖，决定启动顺序）</span>
         <span><i class="ln ln-dash"></i>requires（弱依赖能力）</span>
-        <span><i class="ln ln-pipe"></i>流水线 Proceed</span>
+        <span><i class="ln ln-pipe"></i>消费链接缝 Proceed</span>
         <span class="mono-dim">实线由依赖方指向被依赖插件</span>
       </div>
     </div>
@@ -188,14 +188,20 @@
       <div class="panel detail" id="pluginDetail" aria-live="polite"></div>
       <div class="panel combo" id="comboOut" aria-live="polite"></div>
     </div>
+    <div class="panel">
+      <h3 class="mini-title">接缝全景<span class="mono-dim"> 同一把路由键上的成员按 priority 递减排列</span></h3>
+      <table class="field-table" id="seamTable"></table>
+      <p class="hint">成员资格由 manifest 的 <code>consumes</code> 与运行时注册的同名 handler 共同决定；<code>priority</code> 只决定链内顺序。Consumer 缺席时这一跳被跳过。</p>
+    </div>
   </section>
+
 
   <section class="block" id="turn">
     <header class="block-head">
       <span class="idx">05</span>
       <div>
         <h2>一次 Turn 的完整链路</h2>
-        <p class="block-lede">从浏览器点击发送到 UI 推送收口。跟着播放看每一跳，或切到取消、异常、刷新场景。</p>
+        <p class="block-lede">从浏览器点击发送到 UI 推送收口。跟着播放看每一跳，或切到工具轮、沙箱裁决、子代理委派、取消、异常、刷新场景。</p>
       </div>
     </header>
     <div class="player panel">
@@ -302,7 +308,7 @@
       <span class="idx">08</span>
       <div>
         <h2>原则与边界</h2>
-        <p class="block-lede">八条核心原则把层次钉住；v1 明确列出不做的事。</p>
+        <p class="block-lede">十二条核心原则把层次钉住；v1 明确列出不做的事。</p>
       </div>
     </header>
     <div class="rules-grid" id="rulesGrid"></div>
@@ -356,8 +362,8 @@
 <footer class="foot">
   <div class="foot-inner">
     <p class="foot-title">数据来源</p>
-    <p>本页内容以仓库当前源码为准，核对自 <code>README.md</code>、<code>ARCHITECTURE.md</code>、<code>CONTEXT.md</code>、<code>CONSTRAINT.md</code>、<code>docs/protocol.md</code>、<code>docs/webui.md</code>、<code>docs/manifest.md</code>、<code>docs/build.md</code>、各插件 <code>plugin.json</code> 与 <code>docs/project-map/</code>，并与 <code>protocol/</code>、<code>internal/host/</code>、<code>internal/webui/</code>、<code>pluginsdk/</code>、<code>plugins/*/</code> 的实现逐条比对。插件业务术语只出现在对应插件契约中。</p>
-    <p class="foot-meta">LiteAgent · 整理于 2026-10-20 · 行为以当前源码为准；文中数字与错误码取自 <code>protocol/errors.go</code> 与平台文档</p>
+    <p>本页内容以仓库当前源码为准，核对自 <code>README.md</code>、<code>ARCHITECTURE.md</code>、<code>CONTEXT.md</code>、<code>CONSTRAINT.md</code>、<code>docs/platform/protocol.md</code>、<code>docs/platform/webui.md</code>、<code>docs/platform/manifest.md</code>、<code>docs/platform/build.md</code>、<code>docs/platform/plugin-standard.md</code>、<code>docs/design/composition-model-context-tools-sandbox.md</code>、各插件 <code>plugin.json</code> 与 <code>docs/design/plugins/</code>，并与 <code>protocol/</code>、<code>internal/host/</code>、<code>internal/webui/</code>、<code>pluginsdk/</code>、<code>plugins/*/</code> 的实现逐条比对。插件业务术语只出现在对应插件契约中。</p>
+    <p class="foot-meta">LiteAgent · 整理于 2026-10-21 · 行为以当前源码为准；文中数字与错误码取自 <code>protocol/errors.go</code> 与平台文档</p>
   </div>
 </footer>
 

@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 const maxWriteBytes = 4 << 20
@@ -27,7 +26,7 @@ func (p *plugin) write(_ context.Context, _ *pluginsdk.Request, input ProviderIn
 		return nil, err
 	}
 	if len(in.Content) > maxWriteBytes {
-		return nil, pluginsdk.ErrCode("file_too_large", "content exceeds 4 MiB")
+		return nil, errFileTooLarge("content exceeds 4 MiB")
 	}
 	w, err := openWorkspace(input.Workspace)
 	if err != nil {
@@ -48,22 +47,22 @@ func (p *plugin) write(_ context.Context, _ *pluginsdk.Request, input ProviderIn
 		// ReadFile on a directory can surface as ENOENT on some platforms.
 		// Stat unconditionally so a directory target never reaches atomicWrite.
 		if info, statErr := w.root.Stat(rel); statErr == nil && info.IsDir() {
-			return nil, pluginsdk.ErrCode("path_is_directory", "path is a directory: "+displayPath(rel))
+			return nil, errPathIsDirectory("path is a directory: " + displayPath(rel))
 		}
 		if !os.IsNotExist(readErr) {
 			return nil, mapPathError(fmt.Errorf("write %s: %w", displayPath(rel), readErr))
 		}
 	}
 	if exists && !overwrite {
-		return Failure("file_exists", "file already exists", map[string]any{"path": displayPath(rel)})
+		return Failure(codeFileExists, "file already exists", map[string]any{"path": displayPath(rel)})
 	}
 	if in.ExpectedSHA256 != nil {
 		if !exists {
-			return Failure("file_conflict", "expected file does not exist", map[string]any{"path": displayPath(rel)})
+			return Failure(codeFileConflict, "expected file does not exist", map[string]any{"path": displayPath(rel)})
 		}
 		expected := strings.ToLower(*in.ExpectedSHA256)
 		if hashBytes(existing) != expected {
-			return Failure("file_conflict", "file digest does not match", map[string]any{"path": displayPath(rel)})
+			return Failure(codeFileConflict, "file digest does not match", map[string]any{"path": displayPath(rel)})
 		}
 	}
 	if !createDirs {
@@ -71,7 +70,7 @@ func (p *plugin) write(_ context.Context, _ *pluginsdk.Request, input ProviderIn
 		if dir != "." {
 			if _, err := w.root.Stat(dir); err != nil {
 				if os.IsNotExist(err) {
-					return nil, pluginsdk.ErrCode("path_not_found", fmt.Sprintf(
+					return nil, errPathNotFound(fmt.Sprintf(
 						"parent directory %q does not exist; pass create_dirs=true or create it first",
 						displayPath(dir)))
 				}
@@ -147,10 +146,10 @@ func (p *plugin) applyEdits(workspacePath, filePath string, expected *string, ed
 		return nil, mapPathError(err)
 	}
 	if len(data) > 8<<20 {
-		return nil, pluginsdk.ErrCode("file_too_large", "file exceeds 8 MiB")
+		return nil, errFileTooLarge("file exceeds 8 MiB")
 	}
 	if expected != nil && hashBytes(data) != strings.ToLower(*expected) {
-		return Failure("file_conflict", "file digest does not match", map[string]any{"path": displayPath(rel)})
+		return Failure(codeFileConflict, "file digest does not match", map[string]any{"path": displayPath(rel)})
 	}
 	current := string(data)
 	for _, edit := range edits {
@@ -159,11 +158,11 @@ func (p *plugin) applyEdits(workspacePath, filePath string, expected *string, ed
 		}
 		count := strings.Count(current, edit.OldText)
 		if count == 0 {
-			return Failure("edit_not_found", "old_text was not found", map[string]any{"path": displayPath(rel)})
+			return Failure(codeEditNotFound, "old_text was not found", map[string]any{"path": displayPath(rel)})
 		}
 		replaceAll := edit.ReplaceAll != nil && *edit.ReplaceAll
 		if count > 1 && !replaceAll {
-			return Failure("edit_ambiguous", "old_text matches more than once", map[string]any{
+			return Failure(codeEditAmbiguous, "old_text matches more than once", map[string]any{
 				"path": displayPath(rel), "matches": count,
 			})
 		}

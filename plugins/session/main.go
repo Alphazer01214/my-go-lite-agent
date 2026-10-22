@@ -176,7 +176,7 @@ func main() {
 		}
 		record, created, err := p.workspaces.ensure(in.Path, in.Name, true)
 		if err != nil {
-			return nil, errCoded("workspace_invalid", err.Error())
+			return nil, errCoded(codeWorkspaceInvalid, err.Error())
 		}
 		return workspaceCreateOut{Workspace: record, Created: created}, nil
 	})).WithInfo("workspace.create", "register and select an existing directory"))
@@ -187,7 +187,7 @@ func main() {
 			return nil, err
 		}
 		if err := p.selectWorkspace(in.WorkspaceID); err != nil {
-			return nil, errCoded("workspace_not_found", err.Error())
+			return nil, errCoded(codeWorkspaceNotFound, err.Error())
 		}
 		return workspaceSelectOut{WorkspaceID: in.WorkspaceID}, nil
 	})).WithInfo("workspace.select", "select one workspace"))

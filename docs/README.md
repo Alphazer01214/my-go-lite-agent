@@ -11,7 +11,6 @@
 | [platform/](platform/) | 平台契约 | 照着它能实现 |
 | [design/](design/) | 目标契约 | 照着它能规划 |
 | [prompts/](prompts/) | Prompt 契约 | 独立体系，自成一类 |
-| [reference/](reference/) | 易失导航 | 只指路，不定义事实 |
 | [archive/](archive/) | 过程记录 | 写完就冻结，只增不改 |
 | [research/](research/) | 参考材料 | 外部资料，不作为依据 |
 
@@ -26,6 +25,7 @@
 | [platform/manifest.md](platform/manifest.md) | Manifest、UI 和 Settings 静态契约 |
 | [platform/webui.md](platform/webui.md) | Host WebUI 和 Browser Bridge |
 | [platform/plugin-dev.md](platform/plugin-dev.md) | 插件包结构和开发流程 |
+| [platform/plugin-standard.md](platform/plugin-standard.md) | 插件目录组织、文件划分和拆分轴 |
 | [platform/build.md](platform/build.md) | 构建流程、增量缓存和 dist 产物布局 |
 | [platform/development.md](platform/development.md) | 平台模块、结构体和图解 |
 

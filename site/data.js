@@ -1,24 +1,27 @@
 /* LiteAgent 结构图览 · 内容数据
-   全部取自仓库文档与 plugin.json：README.md、ARCHITECTURE.md、CONTEXT.md、
-   docs/protocol.md、docs/webui.md、plugins/README.md、docs/project-map/。 */
+   全部取自仓库当前源码：README.md、ARCHITECTURE.md、CONTEXT.md、CONSTRAINT.md、
+   docs/platform 下的平台文档、docs/design 下的插件设计稿、plugins/README.md
+   与各插件 plugin.json，并与 protocol、internal/host、internal/webui、pluginsdk
+   与 plugins 目录下各插件的实现逐条比对。
+   插件业务术语只出现在对应插件契约中。 */
 
 const LA = {};
 
 LA.facts = [
   { k: '6', t: '平台模块', d: 'protocol、pluginsdk、host、plugin、webui、cmd' },
-  { k: '8', t: '已发布插件', d: 'agent、session、llm-openai、model-context、tools、file-tools、shell-tools、sandbox' },
-  { k: 'v2', t: 'Frame 版本', d: '线协议与 Manifest 版本独立演进' },
-  { k: '16 MiB', t: '单条 Frame 上限', d: '4 字节大端长度 + UTF-8 JSON body' },
+  { k: '9', t: '已发布插件', d: 'agent、session、llm-openai、model-context、tools、file-tools、shell-tools、sandbox、subagent' },
+  { k: '11', t: 'Host 方法', d: 'host.register 是路由表唯一写入口' },
   { k: '30', t: '稳定 error_code', d: 'protocol/errors.go 定义，Host 实际产出其中大部分' },
+  { k: '4', t: '条接缝', d: 'llm.complete、tools.call、file.write 系列、shell.execute' },
   { k: '0', t: 'Host 内的业务面板', d: '对话、工具、模型调用全在插件里' },
 ];
 
 LA.heroWire = [
   { type: 'req', text: 'req loop.turn → agent' },
-  { type: 'req', text: 'req session.info {model, context_window} → session' },
+  { type: 'req', text: 'req session.derive → session' },
   { type: 'req', text: 'req llm.complete → model-context' },
+  { type: 'req', text: 'req tools.call → sandbox' },
   { type: 'evt', text: 'evt llm.chunk {channel:"content"}' },
-  { type: 'ui', text: 'ui.command scroll {position:"bottom"}' },
   { type: 'ui', text: 'ui.state session-dock {model, usage, context}' },
   { type: 'res', text: 'res loop.turn {usage} error_code:""' },
 ];
@@ -33,9 +36,9 @@ LA.layers = [
     not: '不解释插件业务状态，不做插件业务状态存储。',
     files: ['internal/webui/server.go', 'internal/webui/bridge.go', 'internal/webui/publisher.go'] },
   { id: 'host', kind: 'platform', name: 'internal/host', path: 'Frame 路由内核',
-    role: 'Plugin Instance、执行上下文、Frame 路由、pending 和外部 Call 入口。',
+    role: 'Plugin Instance、执行上下文、Frame 路由、消费链、pending 和外部 Call 入口。',
     not: '不含业务策略。payload 对它不透明。',
-    files: ['internal/host/transport.go', 'internal/host/call.go', 'internal/host/pipeline.go'] },
+    files: ['internal/host/transport.go', 'internal/host/pipeline.go', 'internal/host/call.go'] },
   { id: 'plugin', kind: 'platform', name: 'internal/plugin', path: 'Manifest 发现',
     role: '扫描插件目录、解析 Manifest、计算 autostart 顺序。',
     not: '不运行业务逻辑。',
@@ -45,8 +48,8 @@ LA.layers = [
     not: '不定义业务数据。',
     files: ['protocol/frame.go', 'protocol/errors.go'] },
   { id: 'sdk', kind: 'platform', name: 'pluginsdk', path: '插件开发入口',
-    role: '注册 Handler、Call、Event、取消和插件 UI 驱动接口。',
-    not: '不定义插件业务契约，不管页面布局。',
+    role: '注册 Handler、Call、Event、Proceed、取消和插件 UI 驱动接口。只认 JSON 字段名，不提供共享的插件契约类型。',
+    not: '不定义插件业务契约，不管页面布局，不知道具体有哪些插件。',
     files: ['pluginsdk/plugin.go', 'pluginsdk/webui.go'] },
   { id: 'cmd', kind: 'platform', name: 'cmd/liteagent-server', path: '可执行入口',
     role: '组装 Host 与 WebUI，管理 HTTP 生命周期。',
@@ -55,7 +58,8 @@ LA.layers = [
   { id: 'plugins', kind: 'ext', name: 'plugins/', path: '扩展层',
     role: '每个插件自己决定提供哪些 Capability、如何保存业务状态、哪些 Component 负责展示。',
     not: '插件之间不直连，跨插件调用必须经 Host 路由。',
-    files: ['plugins/agent/', 'plugins/session/', 'plugins/llm-openai/', 'plugins/model-context/'] },
+    files: ['plugins/agent/', 'plugins/session/', 'plugins/llm-openai/', 'plugins/model-context/',
+      'plugins/tools/', 'plugins/file-tools/', 'plugins/shell-tools/', 'plugins/sandbox/', 'plugins/subagent/'] },
 ];
 
 LA.frameTypes = ['req', 'res', 'evt', 'cancel'];
@@ -81,6 +85,9 @@ LA.capMethods = [
   'tools.sync', 'tools.register', 'tools.unregister', 'tools.list', 'tools.call',
   'file.read', 'file.write', 'file.list', 'file.stat', 'file.search', 'file.glob', 'file.replace', 'file.patch',
   'shell.execute',
+  'subagent.run',
+  'sandbox.check', 'sandbox.list_rules', 'sandbox.set_rule',
+  'sandbox.settings.get', 'sandbox.settings.save',
   'host.register', 'host.proceed', 'host.plugins', 'host.ui.state', 'host.ui.command',
   'host.context.create', 'host.context.bind', 'host.context.close',
   'host.instance.create', 'host.instance.close', 'host.instance.restart',
@@ -90,7 +97,7 @@ LA.capMethods = [
    note 标注代码实况：哪些是 Host 真会写进 Frame.ErrorCode 的，哪些是保留码。 */
 LA.errCodes = [
   { code: 'host_closed', src: 'Host', msg: 'Host 已关闭' },
-  { code: 'route_failed', src: 'Host', msg: '路由失败', note: 'Manifest 声明了 consumes 却无活跃 Consumer 时也用这个码，不降级到 Provider' },
+  { code: 'route_failed', src: 'Host', msg: '路由失败', note: 'Host 侧无法完成这次调用：执行上下文绑定失效、目标实例不是 active、或 Proceed 之后找不到下一跳' },
   { code: 'method_not_found', src: 'Host/SDK', msg: '方法不存在', note: '路由表里没有属主时也是它：no owner for capability.method' },
   { code: 'plugin_not_mounted', src: 'Host', msg: '插件未挂载', note: '实例 id 不在运行表里' },
   { code: 'plugin_down', src: 'Host', msg: '插件进程已退出', note: 'Host 合成终态，关闭插件时也用它' },
@@ -132,30 +139,41 @@ LA.pipeline = {
   ],
   entry: { name: 'Host 入口', priority: 2147483647, note: 'Host 把入口 Request 的 priority 置为 2147483647。这是链位上限，不是任何插件的 Manifest priority。' },
   rules: [
+    '第一跳只认 Consumer：manifest 声明 consumes 该键时，Provider 在入口这一跳不可选',
     '选下一跳：在 priority ≤ 当前链位上限的活跃实例里取 priority 最大者',
     '每跳把上限降为 consumer.priority − 1，Request 因此按 priority 递减传播',
     '同键出现相同最高 priority：consume_priority_conflict，Host 不按注册顺序静默决胜',
     'Proceed 一次性生效，重复调用返回 flow_already_proceeded',
     '跳数上限 64，越界返回 pipeline_hops_exceeded；绕回已访问实例返回 pipeline_loop',
+    'Consumer 缺席即放行：入口这一跳找不到活跃 Consumer 时，调用直接交给该键的 Provider',
   ],
 };
 
+/* 消费链接缝全景。同一 (capability, method) 上的成员按 priority 递减排列。 */
+LA.seams = [
+  ['llm.complete', 'model-context（2000）→ llm-openai（0）', '组装上下文，改写 payload 后 Proceed；Consumer 缺席时基线直达 Provider'],
+  ['tools.call', 'sandbox（500）→ tools（0）', '先裁决再分发；tools 分发出去的那一跳会重新进链'],
+  ['file.write / file.replace / file.patch', 'sandbox（500）→ file-tools（0）', '直连高危能力也过裁决'],
+  ['shell.execute', 'sandbox（500）→ shell-tools（0）', '命令执行也过裁决'],
+];
+
 LA.pluginPos = {
-  host: { x: 520, y: 56 },
-  agent: { x: 520, y: 190 },
-  session: { x: 150, y: 330 },
-  'llm-openai': { x: 350, y: 330 },
-  'model-context': { x: 560, y: 330 },
-  tools: { x: 760, y: 330 },
-  'file-tools': { x: 680, y: 470 },
-  'shell-tools': { x: 880, y: 470 },
-  'sandbox': { x: 760, y: 190 },
+  host: { x: 560, y: 58 },
+  'subagent': { x: 300, y: 195 },
+  agent: { x: 560, y: 195 },
+  sandbox: { x: 880, y: 195 },
+  session: { x: 130, y: 350 },
+  'llm-openai': { x: 340, y: 350 },
+  'model-context': { x: 570, y: 350 },
+  tools: { x: 880, y: 350 },
+  'file-tools': { x: 680, y: 500 },
+  'shell-tools': { x: 1000, y: 500 },
 };
 
 LA.plugins = [
   { name: 'host', label: 'Host', caps: [], status: '平台内核',
-    color: 'var(--plat)', toggleable: false, core: true,
-    desc: '薄平台内核。发现插件、启动进程、路由 Frame、维护调用闭环、提供 WebUI 平台壳。',
+    color: 'var(--plat)', toggleable: false,
+    desc: '薄平台内核。发现插件、启动进程、路由 Frame、装配消费链、维护调用闭环、提供 WebUI 平台壳。',
     provides: [], dependsOn: [], requires: [], priority: null,
     methods: [['host.register', '写入路由表，唯一写入口'],
       ['host.proceed', '续传流水线到下一跳，一次性生效'],
@@ -164,19 +182,21 @@ LA.plugins = [
       ['host.ui.command', '推送 UI Command'],
       ['host.context.create / bind / close', '执行上下文与 Capability 绑定'],
       ['host.instance.create / close / restart', 'Plugin Instance 生命周期']],
-    mounts: [], note: 'Host 实际分派 11 个方法。docs/protocol.md 第 5 节只列了 10 个，漏掉 host.proceed。' },
+    mounts: [], note: 'Host 实际分派 11 个方法。docs/platform/protocol.md 第 5 节只列了 10 个，漏掉 host.proceed。' },
 
   { name: 'agent', label: 'agent', caps: ['loop', 'agent'], status: '当前实现',
-    color: 'var(--teal)', toggleable: false, core: true,
-    desc: 'Turn 编排。创建或复用 Session，读取会话模型，写 Fact，投影上下文，调模型，累计流式增量，执行工具，收口取消与异常。',
+    color: 'var(--teal)', toggleable: false,
+    desc: 'Turn 编排。创建或复用 Session，解析模型，写 Fact，投影上下文，调模型，累计流式增量，执行工具，收口取消与异常。',
     provides: ['loop', 'agent'], dependsOn: ['session', 'llm-openai'],
     requires: ['session', 'llm', 'tools', 'model-context'], priority: null,
-    methods: [['loop.turn', '创建 Turn 并串行化 Session'], ['loop.cancel', '取消活动 Turn'],
-      ['agent.config.get / set', '默认 scheme 与 max_steps'], ['agent.settings.get / save', 'Settings Schema 读写']],
-    mounts: [], note: '只提供 Settings，不渲染聊天正文。' },
+    methods: [['loop.turn', '跑一个 Turn；同一 Session 串行，不同 Session 并发'],
+      ['loop.cancel', '取消该 Session 的活动 Turn'],
+      ['agent.config.get / set', 'default_scheme 与 max_steps'],
+      ['agent.settings.get / save', 'Settings Schema 读写']],
+    mounts: [], note: '默认 scheme 是 tool_calling，chat scheme 不带工具。turn 收 allowed_tools / denied_tools 裁剪工具面；tool_parallelism=auto 且工具都标了 parallel_safe 时并发执行，上限 max_parallel_tools。模型 id 在会话创建时固定，目录里被删掉时回落到默认模型并写 model_fallback_from。只提供 Settings，不渲染聊天正文。' },
 
   { name: 'session', label: 'session', caps: ['session'], status: '当前实现',
-    color: 'var(--green)', toggleable: false, core: true,
+    color: 'var(--green)', toggleable: false,
     desc: 'Session Fact Log、Workspace Registry、模型上下文投影和多会话 UI。拥有 Workspace 归属与当前全部顶层业务 Component。',
     provides: ['session'], dependsOn: [], requires: [], priority: 1000,
     methods: [['session.create', '创建 Session，保存 model / context_window'],
@@ -186,10 +206,10 @@ LA.plugins = [
       ['session.messages / facts', '按 before_seq 翻页读旧消息与旧 Fact'],
       ['session.stream.update', '接收流式快照'], ['session.workspace.*', 'Workspace 注册、选择与改名']],
     mounts: [['session-history', 'left'], ['session-chat', 'center'], ['session-trace', 'right'], ['session-dock', 'bottom']],
-    note: '历史列表按 Workspace 过滤，多会话标签按 Workspace 恢复；dock 聚合 API usage 与最近上下文快照。Fact Log 落在 ./sessions/<id>.jsonl。Component 是 4 个，plugins/README.md 的表格还停在 3 个。' },
+    note: 'Fact Log 落在 ./sessions/<id>.jsonl，只追加。子会话带 origin=subagent 与 parent_session_id，默认不出现在历史列表，父会话聊天区按 subagent_spawned 事实列出子代理入口，子会话是只读视图。sandbox_decision 与 subagent_spawned / subagent_finished 也写进同一份日志，它们不是 message，不进模型上下文。' },
 
   { name: 'llm-openai', label: 'llm-openai', caps: ['llm'], status: '当前实现',
-    color: 'var(--rose)', toggleable: false, core: true,
+    color: 'var(--rose)', toggleable: false,
     desc: '无状态 OpenAI-compatible Completion。流式与 JSON 两种模式，增量以归因事件 llm.chunk 返回。',
     provides: ['llm'], dependsOn: [], requires: [], priority: null,
     methods: [['llm.complete', '按调用方 model 选择流式或 JSON 模式，返回实际 model / context_window'],
@@ -197,50 +217,63 @@ LA.plugins = [
       ['llm.config.get / set', '插件配置读写，api_key 回显时掩码'],
       ['llm.models.list / set', '模型目录与默认模型'],
       ['llm.settings.get / save', '插件中心设置：base_url、模型目录、默认模型、api_key（明文落盘）']],
-    mounts: [], note: '取消会真的中止上游 HTTP 请求：llm.complete 把 ctx 交给 http.NewRequestWithContext。api_key 明文写在插件目录 config.json，读回时掩码。设置保存后 Host 派发 settings-saved，session-history 刷新模型下拉。' },
+    mounts: [], note: '取消会真的中止上游 HTTP 请求：llm.complete 把 ctx 交给 http.NewRequestWithContext。api_key 明文写在插件目录 config.json，读回时掩码。设置保存后 Host 派发 settings-saved，session-history 刷新模型下拉。上游 HTTP 失败统一成 llm_upstream。' },
 
   { name: 'model-context', label: 'model-context', caps: ['model-context'], status: '当前实现',
-    color: 'var(--violet)', toggleable: true, core: false,
+    color: 'var(--violet)', toggleable: true,
     desc: '透明上下文组装。作为 llm.complete 消费者，把 system prompt 与 runtime context 写成 Session Facts，再 derive、预算控制、快照与确定性压缩。',
-    provides: ['model-context'], dependsOn: [], requires: ['session', 'tools'], priority: 2000,
+    provides: ['model-context'], dependsOn: [], requires: ['session', 'tools'],
+    consumes: ['llm.complete（priority 2000）'], priority: 2000,
     methods: [['llm.complete (Consumer, prio 2000)', 'prepare 后 Proceed 到 Provider'],
       ['model-context.build', '干跑下一次请求，不写 Fact'], ['model-context.inspect', '按 session 还原最新快照消息'],
       ['model-context.compact', '手工压缩']],
-    mounts: [], note: 'hash 变化才写 system / runtime Fact；快照记录 surface 与 truncated_seqs，inspect 用 messages_hash 校验还原。manifest 没有 depends_on，只在运行时弱依赖 session 与 tools。' },
+    mounts: [], note: 'manifest 没有 depends_on，只在运行时弱依赖 session 与 tools。预算取 min(max_context_tokens=60000, context_window)，超过 80% 触发压缩，最多 3 轮，压不动报 context_budget_exceeded。system_prompt 与 runtime_context 靠 meta.kind 区分，hash 变了才写。origin=subagent 的会话会追加 subagent_sections 提示段。' },
 
   { name: 'tools', label: 'tools', caps: ['tools'], status: '当前实现',
-    color: 'var(--amber)', toggleable: true, core: false,
+    color: 'var(--amber)', toggleable: true,
     desc: '通用 Tool 注册表与分发器。按 (capability, method) 分发到 Provider，不直连 Provider，不拥有 file.* 与 shell.* 路由。',
     provides: ['tools'], dependsOn: [], requires: [], priority: 0,
     methods: [['tools.sync', 'Provider 原子替换来源工具集'], ['tools.register / unregister', '增量注册与注销'],
-      ['tools.list', 'Generation 与 active 状态过滤'], ['tools.call', '按 target_capability.target_method 发起 Host Call']],
-    mounts: [], note: '注册表缓存到 registry.json。缺少 tools 时 agent 跳过工具阶段并在 request_header.meta.degraded 写入原因，Turn 不失败。' },
+      ['tools.list', '按来源 active、目标方法已注册、Generation 一致过滤'],
+      ['tools.call', '按 target_capability.target_method 发起 Host Call']],
+    mounts: [], note: '注册表缓存到 registry.json。工具名匹配 ^[a-z][a-z0-9_]{0,63}$，一个工具名只能属于一个来源插件。tools.call 分发出去的那一跳会重新进链，所以 sandbox 在 file.write 等键上能再截一次。缺 tools 时 agent 跳过工具阶段并在 request_header.meta.degraded 写入原因，Turn 不失败。' },
 
   { name: 'file-tools', label: 'file-tools', caps: ['file'], status: '当前实现',
-    color: 'var(--amber2)', toggleable: true, core: false,
+    color: 'var(--amber2)', toggleable: true,
     desc: 'Workspace 范围内的文件读写八件套，带风险标注。',
     provides: ['file'], dependsOn: ['tools'], requires: ['tools'], priority: 0,
     methods: [['file.read / list / stat / search / glob', 'RiskLow'],
       ['file.write', '原子写入，RiskHigh'], ['file.replace / patch', '字面替换与有序编辑，RiskHigh']],
-    mounts: [], note: '工具名 file_read … file_patch，TargetCapability 为 file。' },
+    mounts: [], note: '工具名 file_read … file_patch，TargetCapability 为 file。读类 risk 10 并标 parallel_safe，写类 risk 80。路径用 os.Root 限制在 Workspace 内；写类支持 expected_sha256 冲突检测。' },
 
   { name: 'shell-tools', label: 'shell-tools', caps: ['shell'], status: '当前实现',
-    color: 'var(--amber2)', toggleable: true, core: false,
+    color: 'var(--amber2)', toggleable: true,
     desc: '同步命令执行与进程树取消。',
     provides: ['shell'], dependsOn: ['tools'], requires: ['tools'], priority: 0,
     methods: [['shell.execute', '工具名 shell_execute，RiskCritical']],
-    mounts: [], note: '取消时终止进程树（Windows 用 Job Object，Unix 用进程组），这是实现细节不是注册方法。交互式终端与后台 Shell 未实现。' },
+    mounts: [], note: 'risk 90。不解析 Shell 语法：管道、重定向、&& 与内建命令都不解释，要显式写解释器。取消时终止进程树（Windows 用 Job Object，Unix 用进程组），这是实现细节不是注册方法。交互式终端与后台 Shell 未实现。' },
 
   { name: 'sandbox', label: 'sandbox', caps: ['sandbox'], status: '当前实现',
-    color: 'var(--rose)', toggleable: true, core: false,
+    color: 'var(--rose)', toggleable: true,
     desc: '工具调用链上的权限裁决。只裁决，不执行工具。',
-    provides: ['sandbox'], dependsOn: ['tools'], requires: ['session', 'tools'], priority: 500,
+    provides: ['sandbox'], dependsOn: ['tools'], requires: ['session', 'tools'],
+    consumes: ['tools.call', 'file.write', 'file.replace', 'file.patch', 'shell.execute（priority 500）'],
+    priority: 500,
     methods: [['tools.call (Consumer, prio 500)', 'allow / modify / deny 三态裁决'],
-      ['file.write / replace / patch、shell.execute (Consumer)', '直连高危能力也过裁决'],
+      ['file.write / replace / patch (Consumer)', '直连高危能力也过裁决'],
+      ['shell.execute (Consumer)', '直连命令执行也过裁决'],
       ['sandbox.check', '干跑一次裁决，不写审计'],
       ['sandbox.list_rules / set_rule', '规则集读写，规则只升不降'],
       ['sandbox.settings.get / save', '默认动作与审计保留天数']],
-    mounts: [], note: 'autostart 为 false，从插件中心启动后进链。缺席即放行是部署约定，不是平台保证。确认流与确认面板尚未实现。' },
+    mounts: [], note: 'autostart 为 true，是启动根；depends_on tools 决定启动顺序。allow 原样 Proceed，modify 改写 arguments 后 Proceed，deny 短路返回工具结果包络（meta.code=sandbox_denied）。命中规则优先于风险分段；都没命中时按 risk 分段判定。随发行版来的默认分段是 risk ≤ 49 放行、≥ 50 一律拒绝，所以开箱状态下写文件与命令执行都会被挡住——确认流落地后这两档改判 confirm 即可，规则与代码都不用动。当前只有三态，confirm 依赖确认流，尚未实现。缺席即放行是部署约定，不是平台保证。' },
+
+  { name: 'subagent', label: 'subagent', caps: ['subagent'], status: '当前实现',
+    color: 'var(--indigo)', toggleable: true,
+    desc: '把一个自包含的任务委派给子代理，拿回它的最终结论。子代理有独立会话和自己的工具面。',
+    provides: ['subagent'], dependsOn: [], requires: ['session', 'tools', 'loop'], priority: 0,
+    methods: [['subagent.run', '委派一个任务并返回子代理的最终回复'],
+      ['subagent（工具）', '作为工具暴露给 agent，供模型发起委派，risk 20，parallel_safe']],
+    mounts: [], note: 'autostart 为 true，是启动根；requires session / tools / loop 都是弱依赖。子代理有独立会话：session.create 带 origin=subagent、parent_session_id、delegation_depth，深度上限默认 1，子代理工具面去掉 subagent 本身，所以不能嵌套。父会话写 subagent_spawned 与 subagent_finished 两条过程事实；子代理的最终回答只作为一次工具结果回到父代理。' },
 ];
 
 LA.edges = [
@@ -248,11 +281,17 @@ LA.edges = [
   { from: 'agent', to: 'llm-openai', kind: 'depends' },
   { from: 'file-tools', to: 'tools', kind: 'depends' },
   { from: 'shell-tools', to: 'tools', kind: 'depends' },
+  { from: 'sandbox', to: 'tools', kind: 'depends' },
   { from: 'agent', to: 'tools', kind: 'requires', label: 'tools.list / call' },
   { from: 'agent', to: 'model-context', kind: 'requires', label: '仅声明，不直连' },
-  { from: 'model-context', to: 'session', kind: 'requires', label: 'session.derive / append', dip: 132 },
-  { from: 'model-context', to: 'llm-openai', kind: 'pipeline', label: 'Proceed · prio 2000' },
-  { from: 'sandbox', to: 'tools', kind: 'pipeline', label: 'Proceed · prio 500' },
+  { from: 'subagent', to: 'agent', kind: 'requires', label: 'loop.turn' },
+  { from: 'subagent', to: 'session', kind: 'requires', label: '子会话与父会话事实' },
+  { from: 'subagent', to: 'tools', kind: 'requires', label: '子代理自己的工具面' },
+  { from: 'model-context', to: 'session', kind: 'requires', label: 'session.derive / append', dip: 150 },
+  { from: 'model-context', to: 'llm-openai', kind: 'pipeline', label: 'llm.complete · prio 2000', labelDy: 62 },
+  { from: 'sandbox', to: 'tools', kind: 'pipeline', label: 'tools.call · prio 500', bow: { dx: 46 }, labelAt: 0.62 },
+  { from: 'sandbox', to: 'file-tools', kind: 'pipeline', label: 'file.write / patch', bow: { dx: -70 }, labelAt: 0.72 },
+  { from: 'sandbox', to: 'shell-tools', kind: 'pipeline', label: 'shell.execute', bow: { dx: 110 }, labelAt: 0.72 },
 ];
 
 LA.actors = [
@@ -268,7 +307,9 @@ LA.actors = [
   { id: 'llm', label: 'llm-openai', sub: 'Provider' },
   { id: 'api', label: 'Upstream', sub: 'LLM API' },
   { id: 'tools', label: 'tools', sub: 'registry' },
+  { id: 'sb', label: 'sandbox', sub: 'Consumer' },
   { id: 'file', label: 'file-tools', sub: 'Provider' },
+  { id: 'sub', label: 'subagent', sub: 'plugin' },
 ];
 
 /* needs: 依赖的插件开关；altTo: 未满足时改写目标；skip: 未满足时的说明 */
@@ -345,6 +386,40 @@ LA.scenarios = {
       { from: 'agent', to: 'mc', frame: 'req', cap: 'llm', method: 'complete', label: '下一 step 重新投影并请求模型', needs: ['model-context'], altTo: 'llm', altNote: '缺 model-context：基线直接进 llm-openai' },
     ],
   },
+  guard: {
+    label: '沙箱裁决',
+    steps: [
+      { from: 'agent', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'tools.call {name:"file_write"}', needs: ['tools'], skip: '缺 tools：模型看不到任何工具' },
+      { from: 'tools', to: 'sb', frame: 'req', cap: 'tools', method: 'call', label: 'Consumer 截住这一跳', needs: ['sandbox'],
+        skip: '缺 sandbox：这一跳直接进 tools，不产生任何裁决', note: 'sandbox 声明 consumes tools.call，manifest priority 500。第一跳只认 Consumer，Provider 在入口这一跳不可选。' },
+      { from: 'sb', to: 'tools', frame: 'req', cap: 'tools', method: 'list', label: '查工具风险刻度', note: 'sandbox 读 tools.list 的 risk 字段。查不到就按未知风险 70 处理。' },
+      { from: 'sb', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '写 sandbox_decision 事实', note: '裁决条目与被裁决的调用落在同一条时间线上。session 缺席时退化为插件内存里的环形缓冲。' },
+      { from: 'sb', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'allow：原样 Proceed', note: 'modify 改写 arguments 后 Proceed；deny 直接短路返回，不进下一跳。默认分段是 risk ≤ 49 放行、≥ 50 拒绝，所以开箱状态下写文件与命令执行会落到 deny。' },
+      { from: 'tools', to: 'file', frame: 'req', cap: 'file', method: 'write', label: 'tools 分发到 file.write' },
+      { from: 'file', to: 'sb', frame: 'req', cap: 'file', method: 'write', label: '再截一次：直连高危键也过裁决', needs: ['sandbox'], skip: '缺 sandbox：file.write 直达 file-tools' },
+      { from: 'sb', to: 'file', frame: 'req', cap: 'file', method: 'write', label: 'Proceed 到 Provider' },
+      { from: 'file', to: 'tools', frame: 'res', cap: 'file', method: 'write', label: '写入结果' },
+      { from: 'tools', to: 'agent', frame: 'res', cap: 'tools', method: 'call', label: '工具结果回到 agent' },
+    ],
+  },
+  delegate: {
+    label: '子代理委派',
+    steps: [
+      { from: 'llm', to: 'agent', frame: 'evt', cap: 'llm', method: 'chunk', label: '模型要求调用 subagent 工具', note: 'subagent 插件通过 tools.sync 上架工具 subagent，risk 20，parallel_safe。' },
+      { from: 'agent', to: 'tools', frame: 'req', cap: 'tools', method: 'call', label: 'tools.call {name:"subagent"}', needs: ['tools'], skip: '缺 tools：模型看不到委派工具' },
+      { from: 'tools', to: 'sub', frame: 'req', cap: 'subagent', method: 'run', label: '按 target 能力分发', needs: ['subagent'], skip: '缺 subagent：工具没注册，tools.call 返回 tool_not_found' },
+      { from: 'sub', to: 'session', frame: 'req', cap: 'session', method: 'info', label: '读父会话', note: '拿 workspace、model、context_window 与父级 depth。' },
+      { from: 'sub', to: 'session', frame: 'req', cap: 'session', method: 'create', label: '建子会话', note: 'origin=subagent、parent_session_id、delegation_depth 一起写进 session_start。深度上限默认 1。' },
+      { from: 'sub', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '父会话写 subagent_spawned', note: '过程事实，不进模型上下文。' },
+      { from: 'sub', to: 'agent', frame: 'req', cap: 'loop', method: 'turn', label: '子会话跑一个回合', note: '子代理用同一个 agent 循环，工具面去掉 subagent 本身，所以不能嵌套。父轮次的取消会透传下来。' },
+      { from: 'agent', to: 'mc', frame: 'req', cap: 'llm', method: 'complete', label: '子会话的 llm.complete', needs: ['model-context'], altTo: 'llm', altNote: '缺 model-context：基线直接进 llm-openai' },
+      { from: 'agent', to: 'sub', frame: 'res', cap: 'loop', method: 'turn', label: '子代理最终回答' },
+      { from: 'sub', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '父会话写 subagent_finished', note: '带 state、duration_ms、turn_count 与 usage。' },
+      { from: 'sub', to: 'tools', frame: 'res', cap: 'subagent', method: 'run', label: '工具结果包络', note: 'content 是子代理的最终回答；失败时 is_error=true，不是协议错误。' },
+      { from: 'tools', to: 'agent', frame: 'res', cap: 'tools', method: 'call', label: '回到父代理' },
+      { from: 'agent', to: 'session', frame: 'req', cap: 'session', method: 'append', label: '父会话写 role=tool 的 Fact' },
+    ],
+  },
   inspect: {
     label: '上下文明细',
     steps: [
@@ -408,13 +483,13 @@ LA.scenarios = {
   },
 };
 
-LA.turnNote = '取消与异常只影响一个 Session 的活动 Turn。Tool 轮里的 file.* 与 shell.* 由 Provider 执行，tools 只做注册与分发。Turn 结束后的 Dock 用量来自 llm_usage；上下文明细通过 model-context.inspect 还原，下一次预览通过 build，不写 Fact。聊天区按 turns 摘要折叠过程：完成轮默认收起，最终回答与用户消息常显。';
+LA.turnNote = '取消与异常只影响一个 Session 的活动 Turn。工具轮里的 file.* 与 shell.* 由 Provider 执行，tools 只做注册与分发；sandbox 在 tools.call 与 file.write、shell.execute 上各截一次。子代理由模型通过 subagent 工具发起，它在独立会话里跑自己的 loop.turn，最终回答作为一次工具结果回到父代理。Turn 结束后的 Dock 用量来自 llm_usage；上下文明细通过 model-context.inspect 还原，下一次预览通过 build，不写 Fact。聊天区按 turns 摘要折叠过程：完成轮默认收起，最终回答与用户消息常显。';
 
 LA.slots = {
   top: { tag: 'Host 控件', owner: 'Host', mount: '—', body: 'v1 的 top 由 Host 控件保留，插件使用其余四个 Slot。内容：插件中心入口（插件 / 设置 / 依赖关系）与 Diagnostic 悬浮窗。' },
-  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。模型目录在插件中心设置页维护；保存后通过 settings-saved 事件刷新下拉。点击会话发 session.select / session.workspace.select，收到 State 后重绘。' },
-  center: { tag: 'session-chat', owner: 'session', mount: 'chat', body: '多会话 Pane。发送调用 loop.turn，取消调用 loop.cancel；流式增量来自 Stream Command，落盘后由 State 重建。消息按 Turn 折叠：完成轮默认收起过程，保留用户消息和最终回答；Turn 头显示状态、过程条数、工具数和时长。' },
-  right: { tag: 'session-trace', owner: 'session', mount: 'trace', body: 'Fact Log 与上下文快照视图。业务含义由 session 的 communication.md 定义。' },
+  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。模型目录在插件中心设置页维护；保存后通过 settings-saved 事件刷新下拉。点击会话发 session.select / session.workspace.select，收到 State 后重绘。子会话默认不出现在这个列表里。' },
+  center: { tag: 'session-chat', owner: 'session', mount: 'chat', body: '多会话 Pane。发送调用 loop.turn，取消调用 loop.cancel；流式增量来自 Stream Command，落盘后由 State 重建。消息按 Turn 折叠：完成轮默认收起过程，保留用户消息和最终回答；Turn 头显示状态、过程条数、工具数和时长。父会话里按 subagent_spawned 事实列出子代理入口，子会话是只读视图。' },
+  right: { tag: 'session-trace', owner: 'session', mount: 'trace', body: 'Fact Log 与上下文快照视图。sandbox_decision 与 subagent_spawned / subagent_finished 也落在这里，它们是平台事实，不进模型上下文。业务含义由 session 的 communication.md 定义。' },
   bottom: { tag: 'session-dock', owner: 'session', mount: 'dock', body: '模型、API usage 上下文仪表、会话累计用量和 Turn 状态。点击 chip 展开上下文与用量明细；context_snapshot 由 model-context 写入，消息通过 model-context.inspect 还原，下一次请求通过 build 预览。没有选中会话时 dock 与 bottom Slot 一并隐藏。' },
 };
 
@@ -454,7 +529,8 @@ LA.endpoints = [
 
 /* session 的 Fact 词表（plugins/session/types.go）。
    type 是 Fact 类型；system_prompt / runtime_context 是 message Fact 的 meta.kind，
-   不是独立的 Fact 类型。runtime_context 那条在代码里 role 是 user。 */
+   不是独立的 Fact 类型。runtime_context 那条在代码里 role 是 user。
+   host 标记的是平台事实：写进同一份日志，但永远不进模型上下文。 */
 LA.ctxFacts = [
   { seq: 1, type: 'session_start', role: 'host', text: '创建 Session，绑定 workspace_id=w-3', always: true },
   { seq: 2, type: 'message', kind: 'system_prompt', role: 'system', text: 'system prompt 正文，hash 变化才写', mc: true },
@@ -470,6 +546,9 @@ LA.ctxFacts = [
   { seq: 12, type: 'context_snapshot', role: 'host', text: '压缩前的上下文快照', compact: true },
   { seq: 13, type: 'context_compaction', role: 'host', text: 'enforceBudget 触发一次压缩', compact: true },
   { seq: 14, type: 'context_summary', role: 'host', text: 'shadow range：seq 4–10 由摘要替代', compact: true },
+  { seq: 15, type: 'sandbox_decision', role: 'host', text: '一次裁决：decision / rule_id / risk / 参数摘要', host: true },
+  { seq: 16, type: 'subagent_spawned', role: 'host', text: '子代理开始：child_session_id / delegation_depth', host: true },
+  { seq: 17, type: 'subagent_finished', role: 'host', text: '子代理结束：state / duration_ms / turn_count / usage', host: true },
 ];
 
 LA.security = [
@@ -493,11 +572,15 @@ LA.rules = [
   ['UI State 不替代插件自己的持久化', '刷新后不重放事件，State 必须可重建。'],
   ['插件私有结构体不得成为平台契约', '调用方在自己目录内维护适配类型。'],
   ['平台文档与插件文档分别维护', 'Host 文档不定义插件业务契约，插件文档不重写 Frame 协议。'],
+  ['平台概念只有一个事实来源', '同一段代码在两个插件里长得一样，它就不属于插件。'],
+  ['拆分的轴是关注点，不是技术类型', '按能力、阶段或界面分文件，不按 types/util/store 分。'],
+  ['错误码字面量只在 errors.go', '其他文件用常量或具名构造器，全局唯一性可静态检查。'],
+  ['缺席即放行是部署约定', '平台不提供强制拦截。sandbox 这类策略 Consumer 缺席时，调用照常到达 Provider。'],
 ];
 
 LA.nongoals = ['多用户', '远程访问', '跨设备同步', '插件市场', '任意第三方代码沙箱', '调度配额', '在线迁移', '实例状态恢复'];
-LA.removed = ['web-tools', 'subagent'];
-LA.notImplemented = ['交互式终端', '后台 Shell'];
+LA.removed = ['web-tools'];
+LA.notImplemented = ['交互式终端', '后台 Shell', '沙箱确认流与确认面板', '进程级沙箱与网络出口控制'];
 
 LA.cmds = [
   ['go test ./...', '运行平台测试'],
@@ -513,28 +596,38 @@ LA.searchOrder = ['可执行文件旁的 plugins/；', '当前工作目录下的
 LA.docMap = [
   ['ARCHITECTURE.md', 'Host 与 Plugin 的总体结构、六个平台模块与 v1 范围'],
   ['CONTEXT.md', '平台术语表，含 Avoid 用词'],
-  ['CONSTRAINT.md', '文档与代码的九条硬约束'],
-  ['docs/protocol.md', 'Frame、Host 方法、pending 与错误码'],
-  ['docs/development.md', '平台模块、结构体和图解'],
-  ['docs/pluginsdk.md', '插件开发接口'],
-  ['docs/manifest.md', 'Manifest、UI 与 Settings 静态契约'],
-  ['docs/webui.md', 'Host WebUI 与 Browser Bridge'],
-  ['docs/plugin-dev.md', '插件包结构与开发流程'],
-  ['docs/build.md', '构建流程、增量缓存与 dist 布局'],
+  ['CONSTRAINT.md', '文档与代码的十五条硬约束'],
+  ['docs/platform/protocol.md', 'Frame、Host 方法、pending 与错误码'],
+  ['docs/platform/development.md', '平台模块、结构体和图解'],
+  ['docs/platform/pluginsdk.md', '插件开发接口'],
+  ['docs/platform/manifest.md', 'Manifest、UI 与 Settings 静态契约'],
+  ['docs/platform/webui.md', 'Host WebUI 与 Browser Bridge'],
+  ['docs/platform/plugin-dev.md', '插件包结构与开发流程'],
+  ['docs/platform/plugin-standard.md', '插件目录组织、文件划分与拆分轴'],
+  ['docs/platform/build.md', '构建流程、增量缓存与 dist 布局'],
+  ['docs/design/composition-model-context-tools-sandbox.md', '消费链组合方案与缺席语义'],
+  ['docs/design/plugins/', '各插件的设计契约，sandbox 与 subagent 在 08、09'],
+  ['docs/prompts/', '模型侧文本的规格：主 prompt、工具描述、压缩、子代理'],
   ['plugins/<name>/', '该插件的方法、payload、状态与前端交互'],
 ];
 
 LA.reading = [
   'cmd/liteagent-server/server.go — 组装顺序，UI Publisher 必须在挂载前接好；',
   'protocol/frame.go — Frame 结构、版本与 16 MiB 上限；protocol/errors.go — 30 个稳定错误码；',
-  'internal/host/transport.go — routeFrame、pending 与 forwardPipeline；',
+  'internal/host/transport.go — routeFrame、hostRegister、pending 与缺席放行；',
   'internal/host/pipeline.go — priority 选链、Proceed 与流水线终态；',
   'internal/host/call.go — Host 发起 Call 的闭环与 Execution Context 绑定；',
   'internal/webui/bridge.go — Browser Call 到 Host Call 的转换；',
   'internal/webui/publisher.go — State 与 Command 的推送信封；',
   'pluginsdk/plugin.go — Call、Emit、Proceed 与取消；',
   'plugins/agent/turn.go — buildModelContext、runTurn 与终态收口；',
-  'plugins/session/ui_state.go — Fact 到 State 的重建；',
-  'plugins/model-context/builder.go — 上下文 Facts、derive、预算与压缩；',
+  'plugins/agent/turn_tools.go — 工具面裁剪、风险刻度与并行执行；',
+  'plugins/session/ui_chat.go — Fact 到 ChatState 的重建与子代理入口；',
+  'plugins/model-context/assemble.go — 上下文 Facts 与 derive；',
+  'plugins/model-context/budget.go — 预算与压缩；',
+  'plugins/tools/registry.go — 工具注册、Generation 与来源归属；',
+  'plugins/sandbox/seam.go — 裁决三态与 Proceed；',
+  'plugins/sandbox/policy.go — 规则命中优先于风险分段；',
+  'plugins/subagent/runner.go — 子会话创建、委派深度与结果回写；',
   'plugins/llm-openai/openai.go — 流式与 JSON 两种上游模式。',
 ];

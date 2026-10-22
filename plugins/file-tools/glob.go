@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type globIn struct {

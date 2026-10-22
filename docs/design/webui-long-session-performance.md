@@ -147,8 +147,8 @@ sequenceDiagram
 
 | 内容 | 文件 |
 |---|---|
-| Append 类型与推送 | [ui_state.go](../../plugins/session/ui_state.go) |
-| append 入口与游标 | [store.go](../../plugins/session/store.go) |
+| Append 类型与推送 | [ui_state.go](../../plugins/session/ui_publish.go) |
+| append 入口与游标 | [store.go](../../plugins/session/session_ops.go) |
 | 分页方法注册 | [main.go](../../plugins/session/main.go) |
 | 增量协议文档 | [communication.md](../../plugins/session/communication.md) |
 
@@ -264,7 +264,7 @@ node --check plugins/session/ui/main.js
 ## 9. 相关文件
 
 - Session 契约：[plugins/session/communication.md](../../plugins/session/communication.md)
-- Session 实现：[plugins/session/ui_state.go](../../plugins/session/ui_state.go)
+- Session 实现：[plugins/session/ui_state.go](../../plugins/session/ui_publish.go)
 - Session 前端：[plugins/session/ui/main.js](../../plugins/session/ui/main.js)
 - WebUI 传输：[internal/webui/publisher.go](../../internal/webui/publisher.go)
 - 工具契约：[plugins/tools/communication.md](../../plugins/tools/communication.md)

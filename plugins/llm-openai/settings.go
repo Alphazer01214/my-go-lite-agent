@@ -1,6 +1,8 @@
 package main
 
-import "strings"
+import (
+	"strings"
+)
 
 type settingsGetOut struct {
 	Values map[string]any `json:"values"`

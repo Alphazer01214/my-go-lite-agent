@@ -7,10 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 const registryFile = "registry.json"
@@ -46,9 +43,6 @@ func newRegistry() *registry {
 	return &registry{tools: make(map[string]toolEntry)}
 }
 
-// loadRegistry restores the tool declarations cached by the tools plugin. The
-// cache is validated on load; a corrupt entry is skipped rather than poisoning
-// the registry. The runtime availability gate still checks every source.
 func loadRegistry(path string) (*registry, error) {
 	reg := newRegistry()
 	data, err := os.ReadFile(path)
@@ -121,12 +115,11 @@ func (r *registry) save(path string) error {
 	return nil
 }
 
-// replaceSource atomically replaces every Tool owned by source.
 func (r *registry) replaceSource(source string, definitions []Definition, generation int) (int, int, int, error) {
 	incoming := make(map[string]Definition, len(definitions))
 	for _, definition := range definitions {
 		if _, exists := incoming[definition.Name]; exists {
-			return 0, 0, 0, pluginsdk.ErrCode("tool_definition_invalid", "duplicate tool name: "+definition.Name)
+			return 0, 0, 0, errToolDefinitionInvalid("duplicate tool name: " + definition.Name)
 		}
 		definition.SourcePlugin = source
 		definition.SourceGeneration = generation
@@ -138,8 +131,7 @@ func (r *registry) replaceSource(source string, definitions []Definition, genera
 
 	for name := range incoming {
 		if existing, exists := r.tools[name]; exists && existing.definition.SourcePlugin != source {
-			return 0, 0, 0, pluginsdk.ErrCode("tool_name_conflict",
-				fmt.Sprintf("tool %s is owned by %s", name, existing.definition.SourcePlugin))
+			return 0, 0, 0, errToolNameConflict(fmt.Sprintf("tool %s is owned by %s", name, existing.definition.SourcePlugin))
 		}
 	}
 
@@ -195,8 +187,7 @@ func (r *registry) put(definition Definition, generation int) (bool, error) {
 	defer r.mu.Unlock()
 	existing, found := r.tools[definition.Name]
 	if found && existing.definition.SourcePlugin != definition.SourcePlugin {
-		return false, pluginsdk.ErrCode("tool_name_conflict",
-			fmt.Sprintf("tool %s is owned by %s", definition.Name, existing.definition.SourcePlugin))
+		return false, errToolNameConflict(fmt.Sprintf("tool %s is owned by %s", definition.Name, existing.definition.SourcePlugin))
 	}
 	definition.SourceGeneration = generation
 	r.tools[definition.Name] = toolEntry{definition: definition, generation: generation}
@@ -211,7 +202,7 @@ func (r *registry) remove(name, source string) (bool, error) {
 		return false, nil
 	}
 	if entry.definition.SourcePlugin != source {
-		return false, pluginsdk.ErrCode("tool_owner_mismatch", "tool is owned by another plugin")
+		return false, errToolOwnerMismatch("tool is owned by another plugin")
 	}
 	delete(r.tools, name)
 	return true, nil
@@ -255,101 +246,4 @@ func sortedDefinitions(entries map[string]toolEntry) []Definition {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
-}
-
-func validateDefinition(in RegisterInput) (Definition, error) {
-	if !validToolName(in.Name) {
-		return Definition{}, pluginsdk.ErrCode("tool_definition_invalid", "name must match ^[a-z][a-z0-9_]{0,63}$")
-	}
-	descriptionBytes := len([]byte(strings.TrimSpace(in.Description)))
-	if descriptionBytes == 0 || descriptionBytes > 8192 {
-		return Definition{}, pluginsdk.ErrCode("tool_definition_invalid", "description must be 1 to 8192 bytes")
-	}
-	if in.Risk < 0 || in.Risk > MaxRisk {
-		return Definition{}, pluginsdk.ErrCode("tool_definition_invalid",
-			fmt.Sprintf("risk must be between 0 and %d", MaxRisk))
-	}
-	if !capabilityPattern.MatchString(in.TargetCapability) {
-		return Definition{}, pluginsdk.ErrCode("tool_definition_invalid", "invalid target_capability")
-	}
-	if in.TargetCapability == "host" || in.TargetCapability == "tools" {
-		return Definition{}, pluginsdk.ErrCode("tool_target_reserved", "target capability is reserved")
-	}
-	if !targetMethodPattern.MatchString(in.TargetMethod) {
-		return Definition{}, pluginsdk.ErrCode("tool_definition_invalid", "invalid target_method")
-	}
-	tags, err := validateTags(in.Tags)
-	if err != nil {
-		return Definition{}, err
-	}
-	if err := validateSchema(in.InputSchema); err != nil {
-		return Definition{}, err
-	}
-	return Definition{
-		Name:             in.Name,
-		Description:      in.Description,
-		InputSchema:      in.InputSchema,
-		Risk:             in.Risk,
-		ParallelSafe:     in.ParallelSafe,
-		Tags:             tags,
-		TargetCapability: in.TargetCapability,
-		TargetMethod:     in.TargetMethod,
-	}, nil
-}
-
-func validateTags(tags []string) ([]string, error) {
-	if len(tags) > 16 {
-		return nil, pluginsdk.ErrCode("tool_definition_invalid", "at most 16 tags are allowed")
-	}
-	seen := make(map[string]bool, len(tags))
-	out := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if !tagPattern.MatchString(tag) {
-			return nil, pluginsdk.ErrCode("tool_definition_invalid", "invalid tag: "+tag)
-		}
-		if seen[tag] {
-			continue
-		}
-		seen[tag] = true
-		out = append(out, tag)
-	}
-	return out, nil
-}
-
-func validateSchema(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return pluginsdk.ErrCode("tool_definition_invalid", "input_schema is required")
-	}
-	if len(raw) > 64<<10 {
-		return pluginsdk.ErrCode("tool_definition_invalid", "input_schema exceeds 64 KiB")
-	}
-	var schema map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &schema); err != nil || schema == nil {
-		return pluginsdk.ErrCode("tool_definition_invalid", "input_schema must be a JSON object")
-	}
-	var schemaType string
-	if err := json.Unmarshal(schema["type"], &schemaType); err != nil || schemaType != "object" {
-		return pluginsdk.ErrCode("tool_definition_invalid", "input_schema.type must be object")
-	}
-	var properties map[string]json.RawMessage
-	if err := json.Unmarshal(schema["properties"], &properties); err != nil || properties == nil {
-		return pluginsdk.ErrCode("tool_definition_invalid", "input_schema.properties must be an object")
-	}
-	if rawRequired, ok := schema["required"]; ok {
-		var required []string
-		if err := json.Unmarshal(rawRequired, &required); err != nil {
-			return pluginsdk.ErrCode("tool_definition_invalid", "input_schema.required must be a string array")
-		}
-		for _, name := range required {
-			if _, exists := properties[name]; !exists {
-				return pluginsdk.ErrCode("tool_definition_invalid", "required property is missing: "+name)
-			}
-		}
-	}
-	return nil
-}
-
-func validToolName(name string) bool {
-	return toolNamePattern.MatchString(name)
 }

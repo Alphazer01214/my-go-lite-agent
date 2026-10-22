@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type instanceSnapshot struct {
@@ -114,14 +112,14 @@ func containsString(values []string, want string) bool {
 func (p *toolsPlugin) sourceGeneration(ctx context.Context, source string) (hostSnapshot, int, error) {
 	snapshot, err := p.hostPlugins(ctx)
 	if err != nil {
-		return hostSnapshot{}, 0, pluginsdk.ErrCode("tool_source_invalid", "cannot verify source plugin: "+err.Error())
+		return hostSnapshot{}, 0, errToolSourceInvalid("cannot verify source plugin: " + err.Error())
 	}
 	if _, ok := snapshot.plugin(source); !ok {
-		return hostSnapshot{}, 0, pluginsdk.ErrCode("tool_source_invalid", "source plugin is not loaded")
+		return hostSnapshot{}, 0, errToolSourceInvalid("source plugin is not loaded")
 	}
 	generation, ok := snapshot.maxGeneration(source)
 	if !ok {
-		return snapshot, 0, pluginsdk.ErrCode("tool_source_invalid", "source plugin has no instance")
+		return snapshot, 0, errToolSourceInvalid("source plugin has no instance")
 	}
 	return snapshot, generation, nil
 }

@@ -2,98 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-// checkIn is the payload of sandbox.check.
-type checkIn struct {
-	Tool       string          `json:"tool,omitempty"`
-	Arguments  json.RawMessage `json:"arguments,omitempty"`
-	Capability string          `json:"capability,omitempty"`
-	Method     string          `json:"method,omitempty"`
-	SessionID  string          `json:"session_id,omitempty"`
-	Workspace  string          `json:"workspace,omitempty"`
-}
-
-// checkOut is the payload of sandbox.check.
-type checkOut struct {
-	Decision          string          `json:"decision"`
-	RuleID            string          `json:"rule_id"`
-	Reason            string          `json:"reason"`
-	ModifiedArguments json.RawMessage `json:"modified_arguments"`
-	Risk              int             `json:"risk"`
-}
-
-// listRulesIn is the payload of sandbox.list_rules.
-type listRulesIn struct {
-	Lifetime  string `json:"lifetime,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-}
-
-// ruleView is one rule as the list method returns it.
-type ruleView struct {
-	RuleID     string    `json:"rule_id"`
-	Action     string    `json:"action"`
-	Scope      ruleScope `json:"scope"`
-	Priority   int       `json:"priority"`
-	Lifetime   string    `json:"lifetime"`
-	TTLSeconds int       `json:"ttl_seconds"`
-	Note       string    `json:"note,omitempty"`
-	CreatedTS  int64     `json:"created_ts"`
-}
-
-// listRulesOut is the payload of sandbox.list_rules.
-type listRulesOut struct {
-	Rules []ruleView `json:"rules"`
-}
-
-// setRuleIn is the payload of sandbox.set_rule.
-//
-// Delete is an extension of the target contract: the contract fixes the
-// behaviour of deleting a rule but has no method for it, so the delete rides
-// on the same method.
-type setRuleIn struct {
-	RuleID            string          `json:"rule_id,omitempty"`
-	Action            string          `json:"action,omitempty"`
-	Scope             ruleScope       `json:"scope,omitempty"`
-	Priority          int             `json:"priority,omitempty"`
-	Lifetime          string          `json:"lifetime,omitempty"`
-	TTLSeconds        int             `json:"ttl_seconds,omitempty"`
-	Note              string          `json:"note,omitempty"`
-	ModifiedArguments json.RawMessage `json:"modified_arguments,omitempty"`
-	SessionID         string          `json:"session_id,omitempty"`
-	Delete            bool            `json:"delete,omitempty"`
-}
-
-// setRuleOut is the payload of sandbox.set_rule.
-type setRuleOut struct {
-	RuleID       string `json:"rule_id"`
-	Created      bool   `json:"created"`
-	RulesVersion int    `json:"rules_version"`
-}
-
-// settingsGetOut is the payload of sandbox.settings.get.
-type settingsGetOut struct {
-	Values map[string]any `json:"values"`
-}
-
-// settingsSaveIn is the payload of sandbox.settings.save.
-type settingsSaveIn struct {
-	Values struct {
-		DefaultAction      *string `json:"default_action,omitempty"`
-		AuditRetentionDays *int    `json:"audit_retention_days,omitempty"`
-	} `json:"values"`
-}
-
-// settingsSaveOut is the payload of sandbox.settings.save.
-type settingsSaveOut struct {
-	Saved bool `json:"saved"`
-}
-
-// check judges one candidate call without side effects: it writes no audit
-// entry and changes no rule.
 func (p *plugin) check(ctx context.Context, req *pluginsdk.Request) (checkOut, error) {
 	var in checkIn
 	if err := DecodeStrict(req.Payload, &in); err != nil {
@@ -160,7 +71,6 @@ func (p *plugin) check(ctx context.Context, req *pluginsdk.Request) (checkOut, e
 	return out, nil
 }
 
-// listRules returns the rules in effect.
 func (p *plugin) listRules(_ context.Context, req *pluginsdk.Request) (listRulesOut, error) {
 	var in listRulesIn
 	if err := DecodeStrict(req.Payload, &in); err != nil {
@@ -198,7 +108,6 @@ func (p *plugin) listRules(_ context.Context, req *pluginsdk.Request) (listRules
 	return listRulesOut{Rules: views}, nil
 }
 
-// setRule adds, updates or deletes one rule.
 func (p *plugin) setRule(_ context.Context, req *pluginsdk.Request) (setRuleOut, error) {
 	var in setRuleIn
 	if err := DecodeStrict(req.Payload, &in); err != nil {
@@ -237,7 +146,6 @@ func (p *plugin) setRule(_ context.Context, req *pluginsdk.Request) (setRuleOut,
 	return setRuleOut{RuleID: ruleID, Created: created, RulesVersion: version}, nil
 }
 
-// settingsGet reads the settings.
 func (p *plugin) settingsGet(_ context.Context, _ *pluginsdk.Request) (settingsGetOut, error) {
 	p.mu.RLock()
 	cfg := p.cfg
@@ -248,8 +156,6 @@ func (p *plugin) settingsGet(_ context.Context, _ *pluginsdk.Request) (settingsG
 	}}, nil
 }
 
-// settingsSave writes the settings. A rejected value is reported and nothing
-// is written.
 func (p *plugin) settingsSave(_ context.Context, req *pluginsdk.Request) (settingsSaveOut, error) {
 	var in settingsSaveIn
 	if err := DecodeStrict(req.Payload, &in); err != nil {
