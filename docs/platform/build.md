@@ -38,6 +38,17 @@ powershell -File scripts\build.ps1 -Only agent
 powershell -File scripts\build.ps1 -List
 ```
 
+Bash 脚本的参数别名：
+
+| 长参数 | 短参数 |
+|---|---|
+| `--clean` | `-c` |
+| `--verify` | `-V` |
+| `--list` | 无 |
+| `--only` | 无 |
+
+`--only` 有两种写法：`--only agent` 和 `--only=agent`。
+
 构建完成后运行产物：
 
 ```bash
@@ -60,9 +71,53 @@ powershell -File scripts\build.ps1 -List
 | `plugin:tools` | 插件可执行 | `dist/plugins/tools/tools` |
 | `plugin:file-tools` | 插件可执行 | `dist/plugins/file-tools/file-tools` |
 | `plugin:shell-tools` | 插件可执行 | `dist/plugins/shell-tools/shell-tools` |
+| `plugin:subagent` | 插件可执行 | `dist/plugins/subagent/subagent` |
 | `plugin:sandbox` | 插件可执行 | `dist/plugins/sandbox/sandbox` |
 
-清单分三组：`core` 是 autostart 根插件；`tools` 供后续加入非 autostart 的 Tool Provider，当前为空；`optional` 是随发行版交付但不随 Host 启动的插件，从插件中心手动启动后生效。没有 `plugin.json` 的目录不是可挂载插件，脚本跳过并汇总告警，不会进入 dist。
+Windows 上的插件产物带 `.exe` 后缀。产物名由脚本决定，Manifest 里的 `entry` 不带后缀。
+
+清单分三组：
+
+| 组 | 含义 |
+|---|---|
+| `core` | autostart 根插件 |
+| `tools` | 供后续加入非 autostart 的 Tool Provider。当前为空 |
+| `optional` | 随发行版交付但不随 Host 启动。从插件中心手动启动后生效 |
+
+没有 `plugin.json` 的目录不是可挂载插件。脚本跳过并汇总告警，不会进入 dist。
+
+### 3.1 目标筛选
+
+`--only` 接受逗号分隔的列表：
+
+```bash
+bash scripts/build.sh --only agent,session
+bash scripts/build.sh --only plugin:agent,plugin:session
+```
+
+每个元素可以是短名或全名。短名 `agent` 匹配 `plugin:agent`。列表里没有的目标被跳过并打印一行提示。
+
+PowerShell 的 `-Only` 接受同样的逗号分隔写法，也接受真正的数组。
+
+### 3.2 目标清单
+
+`--list` 打印当前发布目标及各自的类型：
+
+```text
+Shipped targets:
+  liteagent-server
+  plugin:agent (binary)
+  plugin:session (binary)
+```
+
+标签有两种：
+
+| 标签 | 含义 |
+|---|---|
+| `binary` | 插件目录有 `plugin.json` 且带 `entry` 字段，会编译出可执行文件 |
+| `assets-only` | 没有 `entry` 字段，只拷贝静态资源 |
+
+清单里列了但目录缺 `plugin.json` 的插件，在 stderr 上单独提示。
 
 ## 4. 产物布局
 
@@ -75,7 +130,7 @@ dist/
 │   ├── README.md               插件目录总览
 │   ├── agent/
 │   │   ├── agent               插件可执行
-│   │   ├── plugin.json         Manifest（entry 已改写为裸名）
+│   │   ├── plugin.json         Manifest
 │   │   ├── config.json         配置种子，构建不覆写
 │   │   ├── config.example.json 配置模板
 │   │   └── README.md           插件文档
@@ -97,12 +152,18 @@ dist/
 │   │   ├── config.json         解释器策略
 │   │   ├── config.example.json
 │   │   └── README.md
+│   ├── subagent/
+│   │   ├── subagent            插件可执行
+│   │   ├── plugin.json
+│   │   ├── config.example.json 配置模板
+│   │   └── README.md
 │   ├── sandbox/                可选件，不随 Host 启动
 │   │   ├── sandbox             插件可执行
 │   │   ├── plugin.json
 │   │   ├── config.json         风险档与默认动作
 │   │   ├── config.example.json
 │   │   ├── rules.json          规则集，运行期写入
+│   │   ├── ui/main.js          插件静态资源
 │   │   └── README.md
 │   └── session/
 │       ├── session             插件可执行
@@ -113,7 +174,23 @@ dist/
 └── .build-cache/               增量哈希印记，不参与运行
 ```
 
-WebUI 静态资源通过 `go:embed` 编译进 `liteagent-server`，不在 dist 中单独落文件。dist 中的 `plugin.json` 由源码拷贝后仅改写 `entry`：源码是 Windows 优先写法（`"entry": "<name>.exe"`），Unix 产物取裸名。
+WebUI 静态资源通过 `go:embed` 编译进 `liteagent-server`，不在 dist 中单独落文件。
+
+每个插件目录只拷贝这些内容：
+
+| 来源 | 落点 |
+|---|---|
+| `plugin.json` | `plugin.json` |
+| `ui/` | `ui/` |
+| `README.md` | `README.md` |
+| `segments.json` | `segments.json` |
+| `config.example.json` | `config.example.json` |
+
+`communication.md` 不进 dist。发行版只带面向用户的 README。
+
+Bash 脚本会把 dist 里的 `"entry": "<name>.exe"` 改写成裸名。PowerShell 脚本不改写。当前仓库的源码 Manifest 用的就是裸名。
+
+裸名 entry 在 Windows 上照样能跑：Host 解析 entry 时，无扩展名会再试一次 `.exe`。
 
 ## 5. 增量构建机制
 
@@ -131,14 +208,19 @@ flowchart LR
 
 | 输入 | 覆盖目标 |
 |---|---|
-| 模块内 Go 依赖目录（`go list -deps` 过滤本模块） | 全部 |
+| 模块内 Go 依赖目录（`go list -deps` 过滤本模块）的 `.go` 文件 | 全部 |
 | `go.mod`、`go.sum` | 全部 |
 | 插件自己的 `plugin.json` | 该插件 |
+| 插件自己的 `config.example.json` | 该插件 |
 | `internal/webui/static/**` | 仅 `liteagent-server` |
+
+`config.example.json` 进入哈希是因为 `model-context` 用 `go:embed` 把它当默认提示词。漏掉会导致只改模板却复用旧二进制。
 
 静态资源进入服务器哈希是必需项：它们被 `go:embed` 编进二进制，漏掉会导致只改前端却复用旧二进制。
 
-哈希按文件内容计算，不看修改时间。`touch` 不会触发重建，真实内容变化才会。以下资产每次构建都刷新，不依赖哈希：`plugin.json`、`ui/`、`README.md`、`segments.json`、`config.example.json`。
+哈希按文件内容计算，不看修改时间。`touch` 不会触发重建，真实内容变化才会。哈希输入是路径加内容摘要的组合。
+
+以下资产每次构建都刷新，不依赖哈希：`plugin.json`、`ui/`、`README.md`、`segments.json`、`config.example.json`。
 
 印记写在 `dist/.build-cache/<target>.sha256`。它与 Go 自身的 `GOCACHE` 是两层：前者决定是否调用 `go build`，后者决定 `go build` 是否复用编译结果。删除印记不会破坏正确性，只会退回全量编译。
 
@@ -157,7 +239,7 @@ flowchart LR
 | 会话记录 | `dist/plugins/session/sessions/` |
 | Workspace Registry | `dist/plugins/session/sessions/workspaces.json` |
 
-非 `--clean` 构建不会清空 dist，保留逻辑是空操作。不再发布的插件目录仍会被裁剪。
+非 `--clean` 构建不会清空 dist，保留逻辑是空操作。不再发布的插件目录仍会被裁剪，裁剪时对应的哈希印记一并删除。
 
 旧版本的 `dist/plugins/workspace/workspaces.json` 会在裁剪前迁移到 `dist/plugins/session/sessions/workspaces.json`。`--clean` 同样会暂存并恢复该文件。
 
@@ -168,6 +250,10 @@ flowchart LR
 1. dist 中已有的 `config.json`；
 2. 仓库内 `plugins/<name>/config.json`（已被 gitignore，仅本机有效）；
 3. 插件自带的 `config.example.json` 模板。
+
+两个脚本的落种子范围不完全一致。Bash 脚本对五个插件都按上面的三级优先级处理。PowerShell 脚本只对 llm-openai 使用仓库内的 `config.json`，其余四个插件直接落到 `config.example.json`。
+
+会落种子的插件是 llm-openai、agent、model-context、shell-tools 和 sandbox。其余插件不生成 `config.json`。
 
 llm-openai 首次构建只有空密钥模板，需要启动后通过设置接口或直接编辑 `dist/plugins/llm-openai/config.json` 填入密钥。后续构建保留该文件。
 
@@ -193,6 +279,8 @@ node --test internal/webui/*.test.mjs   # 无 node 时告警跳过
 
 任一命令失败即中止构建。测试通过同时会预热 Go 构建缓存，随后的编译更快。日常迭代可以跳过 `--verify`；发布前建议执行 `bash scripts/build.sh --clean --verify`。
 
+浏览器脚本有 Go 侧的包装测试。`go test ./...` 会驱动 `node --test`，所以两者都跑才覆盖浏览器脚本。
+
 ## 10. 新增构建目标
 
 把一个插件加入发布布局的步骤：
@@ -210,6 +298,7 @@ node --test internal/webui/*.test.mjs   # 无 node 时告警跳过
 |---|---|---|
 | `cp: config.example.json: No such file or directory` | 旧脚本引用已删除的模板 | 已修复；确保插件带有模板，否则脚本告警跳过 |
 | 改了前端但 dist 行为没变 | 静态资源未进哈希（旧脚本缺陷） | 已修复；或执行 `--clean` |
+| 改了 `config.example.json` 但插件行为没变 | 模板未进哈希 | 已修复；或执行 `--clean` |
 | 目标反复重建 | `dist/.build-cache` 被清或 `go list` 失败 | 检查 `go env`，执行 `--clean` |
 | `unknown flag: xxx` | 参数拼写错误 | 用 `--list` 确认脚本可用参数 |
 | Windows 删除 dist 失败 | 终端停在 dist 内或进程占用 | 关闭相关终端，停止 `liteagent-server.exe` |

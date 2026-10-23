@@ -4,6 +4,8 @@
 
 每个目录的文档有自己的判定标准。放错目录的文档会被读者当成错误依据。
 
+英文版核心文档见 [en/](en/)。中文文档仍是规范源。
+
 ## 1. 目录
 
 | 目录 | 用途 | 判定标准 |
@@ -27,7 +29,15 @@
 | [platform/plugin-dev.md](platform/plugin-dev.md) | 插件包结构和开发流程 |
 | [platform/plugin-standard.md](platform/plugin-standard.md) | 插件目录组织、文件划分和拆分轴 |
 | [platform/build.md](platform/build.md) | 构建流程、增量缓存和 dist 产物布局 |
-| [platform/development.md](platform/development.md) | 平台模块、结构体和图解 |
+| [platform/development.md](platform/development.md) | 平台分层、跨包约定和进程入口 |
+
+平台实现规格按包划分，在 [platform/internal/](platform/internal/README.md)：
+
+| 文档 | 内容 |
+|---|---|
+| [platform/internal/host.md](platform/internal/host.md) | `internal/host` 的路由、流水线、pending、取消、上下文和实例 |
+| [platform/internal/plugin.md](platform/internal/plugin.md) | `internal/plugin` 的 Manifest 加载、诊断、扫描和闭包 |
+| [platform/internal/webui.md](platform/internal/webui.md) | `internal/webui` 的 Registry、Bridge、UI Push 和浏览器脚本 |
 
 ## 3. 目标契约
 

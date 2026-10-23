@@ -1,137 +1,157 @@
-# LiteAgent
+<div align="center">
+  <img src="docs/assets/logo.svg" width="96" alt="LiteAgent">
+  <h1>LiteAgent</h1>
 
-LiteAgent 是一套轻量、可组合的进程外插件 Runtime。Host 提供插件发现、进程管理、Capability 路由和 WebUI 平台壳。具体业务由独立插件提供。
+  <p><b>A process-isolated plugin runtime for coding agents.</b><br>
+  One Go binary. Nine plugins. No frontend build step.</p>
 
-Host 与 Plugin 是两个独立层次。项目整体文档只定义平台契约，不把任何业务插件视为内核组成部分。
+  <p>
+    <img alt="Go 1.25+" src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white">
+    <img alt="Plugins" src="https://img.shields.io/badge/plugins-9-2EA043">
+    <img alt="Dependencies" src="https://img.shields.io/badge/deps-1-6E7681">
+    <img alt="Platforms" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-4B5563">
+  </p>
 
-## 当前状态
+  <p>
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#how-it-works">How it works</a> ·
+    <a href="#plugins">Plugins</a> ·
+    <a href="#documentation">Docs</a>
+  </p>
+</div>
 
-当前代码具备 Host、pluginsdk、Frame 协议、Manifest 发现、Provider 生命周期、执行上下文、取消和 Frame Priority 流水线。`plugins/` 当前发布 `agent`、`llm-openai`、`session`、`model-context`、`tools`、`file-tools`、`shell-tools`、`sandbox` 和 `subagent` 九个插件。
+LiteAgent runs a coding agent as a set of cooperating processes. A small host discovers plugins, routes calls between them, and owns cancellation. Models, sessions, tools, context assembly, permissions and subagents are plugins — each in its own OS process, each replaceable on its own.
 
-Workspace Registry 由 Session 插件拥有。Session 创建后绑定 Workspace；历史列表按 Workspace 过滤，多会话标签按 Workspace 恢复。Agent 从 Session 解析规范 Workspace，拒绝调用方传入的不一致路径。
+## Why LiteAgent
 
-model-context 把 system prompt 与 runtime context 写成 Session Facts，再投影实际模型输入；关闭该插件时，agent 基线直接进入 llm-openai。
+- **Isolation you can rely on.** Every plugin is a separate executable, and the wire between them is a 4-byte length prefix plus JSON. A broken tool kills its own process; the host reports `plugin_down` instead of taking the agent down with it.
 
-消费链上的缺席即放行。插件声明了 `consumes` 但没有活跃实例时，Host 跳过这一跳，调用直接交给该键的 Provider。平台不提供强制拦截。
+- **Calls address capabilities, not vendors.** The routing key is `capability.method`. `llm-openai` is simply one implementation of `llm`; the orchestrator never learns the provider's name.
 
-sandbox 在 `tools.call` 与直连高危能力上做权限裁决，当前实现 allow、modify、deny 三态。它是可选件，`autostart` 是 `false`，从插件中心启动后进链。
+- **Middleware is a plugin, not a branch.** Context compaction and permission checks attach to the call chain with a `priority` and a `Proceed()`. Remove the plugin and the hop disappears — no dead code left in the kernel.
 
-subagent 通过单个 `subagent` 工具把任务委派给独立子会话，复用 agent 的轮次循环，子代理最终回答直接作为工具结果返回。父会话提供只读子会话入口，子会话默认不出现在历史列表。
+- **Sessions you can replay.** Every turn is an append-only JSONL fact log. The UI is a projection of it, compaction appends a summary rather than deleting messages, and `model-context.inspect` shows exactly what the model saw on any step.
 
-Web 工具未在当前源码。设计稿保留在 [docs/design/plugins/README.md](docs/design/plugins/README.md)，作为路线图。
+## Quick start
 
-WebUI 平台契约已形成文档。具体插件的 UI 和通信契约只写在对应插件目录。
+Requires **Go 1.25+**.
 
-## 快速开始
+```bash
+git clone https://github.com/Alphazer01214/my-go-lite-agent.git
+cd my-go-lite-agent
 
-运行平台测试：
-
-```powershell
-go test ./...
-```
-
-构建 Host：
-
-```powershell
 go build ./cmd/liteagent-server
+./liteagent-server
 ```
 
-构建可分发的 dist 布局（增量构建，支持 `--clean`、`--verify`、`--only`）：
+Open <http://127.0.0.1:2333>, then configure `llm-openai` in the plugin center (top right) → Settings. Models from different providers can live in one catalog.
 
-```powershell
-powershell -File scripts/build.ps1 -Verify
+Environment variables work too (they apply to the default model entry):
+
+```bash
+OPENAI_BASE_URL=https://api.deepseek.com/v1 \
+OPENAI_API_KEY=sk-... \
+OPENAI_MODEL=deepseek-chat \
+./liteagent-server
 ```
 
-Host 启动时按以下顺序查找插件目录：
+Build a distributable layout — server, plugin binaries and manifests, incrementally:
 
-1. 可执行文件旁的 `plugins/`；
-2. 当前工作目录下的 `plugins/`。
-
-插件配置由插件自己读写。项目文档不定义插件业务配置。
-
-## 文档地图
-
-文档归属的完整规则见 [CONSTRAINT.md](CONSTRAINT.md)。下表是全部入口。
-
-### 元文档
-
-| 文档 | 内容 |
-|---|---|
-| [CONTEXT.md](CONTEXT.md) | 平台术语 |
-| [CONSTRAINT.md](CONSTRAINT.md) | 行为约束与文档归属 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Host 与 Plugin 的总体结构 |
-| [PRESSURE.md](PRESSURE.md) | 测试规程与压力场景 |
-
-### 平台契约
-
-| 文档 | 内容 |
-|---|---|
-| [docs/platform/protocol.md](docs/platform/protocol.md) | Host 与 Plugin 的 Frame 协议 |
-| [docs/platform/pluginsdk.md](docs/platform/pluginsdk.md) | 插件开发接口 |
-| [docs/platform/manifest.md](docs/platform/manifest.md) | Manifest、UI 和 Settings 静态契约 |
-| [docs/platform/webui.md](docs/platform/webui.md) | Host WebUI 和 Browser Bridge |
-| [docs/platform/plugin-dev.md](docs/platform/plugin-dev.md) | 插件包结构和开发流程 |
-| [docs/platform/build.md](docs/platform/build.md) | 构建流程、增量缓存和 dist 产物布局 |
-| [docs/platform/development.md](docs/platform/development.md) | 平台模块、结构体和图解 |
-
-### 目标契约
-
-| 文档 | 内容 |
-|---|---|
-| [docs/design/composition-model-context-tools-sandbox.md](docs/design/composition-model-context-tools-sandbox.md) | 消费链组合方案 |
-| [docs/design/plugins/README.md](docs/design/plugins/README.md) | 插件设计稿索引、接缝全景与插件地图 |
-| [docs/design/webui-long-session-performance.md](docs/design/webui-long-session-performance.md) | 长会话性能设计与实现 |
-
-### Prompt 契约
-
-| 文档 | 内容 |
-|---|---|
-| [docs/prompts/README.md](docs/prompts/README.md) | Prompt 契约与写作原则 |
-
-### 插件自身
-
-| 文档 | 内容 |
-|---|---|
-| [plugins/README.md](plugins/README.md) | 插件清单和实现状态 |
-| `plugins/<name>/README.md` | 用途、配置、依赖和状态 |
-| `plugins/<name>/communication.md` | 方法、payload、状态、前端交互 |
-
-### 导航、过程与参考
-
-| 文档 | 内容 |
-|---|---|
-| [docs/README.md](docs/README.md) | docs 目录索引 |
-| [docs/reference/project-map/OVERVIEW.md](docs/reference/project-map/OVERVIEW.md) | 运行图与链路 |
-| [docs/reference/project-map/INDEX.md](docs/reference/project-map/INDEX.md) | 核心符号索引 |
-| [docs/reference/project-map/DEPENDENCY.md](docs/reference/project-map/DEPENDENCY.md) | 依赖与调用图 |
-| [docs/archive/progress/README.md](docs/archive/progress/README.md) | 过程记录索引与状态标注 |
-| `docs/research/` | 外部参考材料 |
-
-`docs/reference/` 是易失导航，只指路不定事实。`docs/archive/` 是历史记录，不是规范。
-项目整体文档提到具体插件时，只能作为非核心示例。插件是否可用、如何通信，以该插件自己的文档为准。
-
-## 核心原则
-
-- 路由只看 `(capability, method)`；
-- 插件名只用于身份、日志和观测；
-- 插件之间不直连；
-- 缺席即放行，平台不提供强制拦截；
-- Host 不实现业务面板；
-- Plugin Runtime 驱动自己拥有的 Component；
-- UI State 不替代插件自己的持久化；
-- 插件私有结构体不得直接成为平台契约；
-- 平台文档与插件文档分别维护。
-
-## 项目结构
-
-```text
-cmd/                 Host 可执行入口
-internal/host/       进程管理与 Frame 路由
-internal/plugin/     Manifest 发现
-internal/webui/      WebUI Shell、Browser Bridge 和静态资源
-pluginsdk/           插件开发入口
-protocol/            Host 与 Plugin 线契约
-plugins/             独立插件源码
-docs/                平台契约、设计稿、Prompt 契约与过程记录
-scripts/             构建脚本
+```bash
+./scripts/build.sh                          # or: powershell -File scripts/build.ps1 -Verify
+cd dist && ./liteagent-server
 ```
+
+Set `LITEAGENT_HTTP_ADDR` to change the listen address. Plugins are discovered next to the binary, then under the current directory.
+
+## How it works
+
+Every call is a frame over stdio. Plugins never talk to each other — the host is the only router.
+
+```mermaid
+flowchart LR
+    UI["Browser UI"] <-->|"HTTP · SSE"| H["Host<br/>discovery · routing · cancellation"]
+    H <-->|"stdio · length-prefixed JSON"| P["Plugin processes<br/>agent · session · llm-openai<br/>model-context · tools · file-tools<br/>shell-tools · sandbox · subagent"]
+```
+
+The interesting part is what the host does between two plugins. Consumers register for a method with a priority; the host picks the highest one, and `Proceed()` hands the (possibly rewritten) payload to the next hop.
+
+```mermaid
+flowchart LR
+    Agent[agent] -->|"llm.complete"| Ctx["model-context<br/>priority 2000"]
+    Ctx -->|"Proceed(messages, tools)"| LLM[llm-openai]
+    Agent -->|"tools.call"| Box["sandbox<br/>priority 500"]
+    Box -->|"Proceed(args)"| Tools[tools]
+```
+
+That is how context compaction and permission checks are implemented: not as kernel branches, but as plugins on the chain. A consumer that isn't running is a hop that doesn't happen — the call goes straight to the provider. The host itself stays around 2.8k lines: manifest discovery, a route table keyed by `capability.method`, pending-call bookkeeping, cancellation, and a browser bridge.
+
+Sessions are the other half of the design. `session` writes one JSONL file per conversation, where every turn, step, model request header and tool result is a separate fact. Streaming deltas never enter the log; the final assistant message is the source of truth. Reloading the page rebuilds the UI from facts, and compacting a conversation appends a summary that shadows old messages instead of removing them.
+
+## Plugins
+
+| Plugin | Responsibility |
+|---|---|
+| `agent` | Turn loop: context → model → tools → facts |
+| `session` | Append-only fact log, workspaces, chat UI |
+| `model-context` | System prompt, token budget, deterministic compaction |
+| `llm-openai` | OpenAI-compatible streaming adapter |
+| `tools` | Tool registry and dispatch |
+| `file-tools` | Read, write, patch, search inside the workspace |
+| `shell-tools` | Process execution with tree cancellation |
+| `sandbox` | `allow` / `confirm` / `modify` / `deny` on tool calls |
+| `subagent` | Delegates a self-contained task to a child session |
+
+Optional pieces can be stopped without touching code: without `tools` the agent just talks, without `model-context` it sends the raw transcript, without `sandbox` calls run unguarded. The platform has no hard interception layer — absence means passthrough.
+
+## Write a plugin
+
+A plugin imports only `pluginsdk`. No frame loop, no stdio plumbing.
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
+)
+
+func main() {
+	p := pluginsdk.NewPlugin("hello")
+	p.Register("hello", "ping", pluginsdk.NewHandler(
+		func(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+			return json.RawMessage(`{"pong": true}`), nil
+		},
+	))
+	if err := p.Serve(); err != nil {
+		panic(err)
+	}
+}
+```
+
+Add a `plugin.json` with `name`, `entry`, `provides` and `autostart`, and the host picks it up on the next scan. The SDK handles registration, dispatch, `Call`, cancellation (including a cancel that arrives before its request) and write serialization.
+
+## Status
+
+v0.1. Nine plugins are implemented, and the suite has 345 test functions. Multi-session UI, streaming with cancellation, permission confirmations and subagent delegation all work. Web tools, interactive terminals and background shells are designed but not shipped. The interface is currently Chinese-only, and APIs may change before 1.0.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Architecture](docs/en/architecture.md) | Host, plugins, routing, pipeline, Web UI |
+| [Wire protocol](docs/en/protocol.md) | Frames, cancellation, host methods, error codes |
+| [Plugin development](docs/en/plugin-dev.md) | Package layout, SDK, components, testing |
+| [Design notes](docs/design/) | Composition model, plugin designs, long-session performance *(Chinese)* |
+| [Full index](docs/README.md) | Everything else *(Chinese)* |
+
+## Contributing
+
+Issues and pull requests are welcome. Run `go test ./...` before sending a patch; `scripts/build.ps1 -Verify` also runs vet and the frontend tests.
+
+## License
+
+No license file has been added yet.

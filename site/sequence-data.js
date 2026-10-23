@@ -9,6 +9,7 @@
 const LA_SEQ = {};
 
 LA_SEQ.parts = [
+  { id: 'p0', n: '零', title: '总览：完整数据流转', lead: '一张图看完一次 Turn：浏览器发起、模型请求、工具调用、sandbox 确认、文件写入、结果回模型和 UI 推送。' },
   { id: 'p1', n: '一', title: '线协议：Frame 怎么闭环', lead: '先不谈业务，只看一条 Request 从发出到收到唯一终态之间，id 经历了什么改写。' },
   { id: 'p2', n: '二', title: '浏览器入口：一次点击怎么进 Host', lead: '浏览器的请求不是 Frame。Bridge 把它翻译成 Host Call，并且由 Host 注入可信来源。' },
   { id: 'p3', n: '三', title: '一次 Turn：主链路', lead: '从 loop.turn 到 State Push 的完整序列。注意 agent 不直接调用 model-context。' },
@@ -19,6 +20,82 @@ LA_SEQ.parts = [
 ];
 
 LA_SEQ.diagrams = {
+
+  /* ---------- 零、完整数据流转 ---------- */
+
+  full: {
+    title: '完整数据流转：一次带确认的工具 Turn',
+    where: 'internal/host/ · plugins/agent/turn.go · plugins/tools/ · plugins/sandbox/confirm.go · plugins/file-tools/',
+    lead: '这是端到端总览：浏览器发起 loop.turn，agent 组装上下文并请求模型；模型决定调用 file_write 后，sandbox 在 tools.call 上确认，允许后 tools 分发到 file-tools；写入结果回到模型，最终回答与 State 一起回到浏览器。',
+    mermaid: `sequenceDiagram
+    participant UI as session-chat
+    participant H as Host
+    participant A as agent
+    participant S as session
+    participant M as model-context
+    participant L as llm-openai
+    participant T as tools
+    participant SB as sandbox
+    participant U as sandbox-confirm
+    participant F as file-tools
+    UI->>H: req loop.turn
+    H->>A: req loop.turn
+    A->>S: session.create / info
+    S-->>A: session_id + model + context_window
+    A->>S: append turn_start + message(user)
+    A->>M: req llm.complete
+    M->>S: derive + append system_prompt / runtime_context
+    M->>L: Proceed llm.complete
+    L-->>A: evt llm.chunk + res llm.complete
+    A->>T: tools.call name=file_write
+    T->>SB: req tools.call prio=500
+    SB->>U: ui.state pending[confirm]
+    U->>SB: sandbox.decide allow
+    SB->>S: append sandbox_decision(confirm → allow)
+    SB->>T: Proceed tools.call
+    T->>F: req file.write (same call_id)
+    Note over SB,F: call_id 标记命中，跳过二次裁决
+    F-->>T: res file.write
+    T-->>A: res tools.call
+    A->>S: append message(tool)
+    A->>M: req llm.complete (next step)
+    M->>L: Proceed llm.complete
+    L-->>A: res llm.complete (final)
+    A->>S: append assistant + llm_usage + step_end / turn_end
+    S->>H: host.ui.state
+    H->>UI: State Push
+    A-->>H: res loop.turn
+    H-->>UI: res loop.turn`,
+    steps: {
+      1: { t: '浏览器发起', b: 'session-chat 调用 loop.turn。浏览器不提交 from，Bridge 把 HTTP 请求翻译成 Host Call。', k: 'loop.turn' },
+      2: { t: 'Host 路由', b: 'Host 按 (loop, turn) 找到 agent，分配内部 pending 键，再把 req 投过去。', k: 'pending[host-N]' },
+      3: { t: '创建或读取会话', b: '没有 session_id 就创建；已有会话沿用创建时的 model 与 context_window。', k: 'session.create / info' },
+      4: { t: '会话元数据', b: 'session 返回 id、模型和规范后的 Workspace；后续 Fact 与工具调用都绑定这个会话。', k: 'session_id + workspace' },
+      5: { t: '记录用户输入', b: 'turn_start 与用户消息先落盘。日志只追加，后面出错也不会改写。', k: 'Fact: turn_start / message(user)' },
+      6: { t: '请求模型', b: 'agent 发的是 llm.complete，不直接调用 model-context。Host 选链时先交给 priority 2000 的 Consumer。', k: 'llm.complete → model-context' },
+      7: { t: '组装上下文', b: 'model-context 重新 derive，并写入当前 system prompt 与 runtime context Facts；内容 hash 变化时才写。', k: 'Fact: system_prompt / runtime_context' },
+      8: { t: 'Proceed 到模型', b: 'Consumer 改写 payload 后 Proceed，链位上限降低，下一跳是 llm-openai。', k: 'host.proceed' },
+      9: { t: '模型返回工具调用', b: '上游流式返回增量；模型在本步决定调用 file_write，agent 把 assistant 消息与 tool_calls 落盘。', k: 'evt llm.chunk → tool_calls' },
+      10: { t: '发起工具调用', b: 'agent 把工具名与参数发给 tools.call。', k: 'tools.call name=file_write' },
+      11: { t: 'sandbox 截住接缝', b: 'sandbox 是 tools.call 的 Consumer，priority 500；它读取 tools.list 的风险并做裁决。', k: 'allow / confirm / modify / deny' },
+      12: { t: '推送确认面板', b: '命中 confirm 后阻塞调用，创建一次性令牌，把待确认列表推给右下角 sandbox-confirm。', k: 'host.ui.state → confirm' },
+      13: { t: '用户允许一次', b: '用户点击允许，sandbox.decide 删除令牌并把决定交给等待中的 handler。', k: 'sandbox.decide allow' },
+      14: { t: '记录确认结果', b: '先写 confirm 审计，再写 allow 终态审计；两次审计使用同一个 confirm_token。', k: 'Fact: sandbox_decision' },
+      15: { t: '继续外层调用', b: '允许后同一次 tools.call 继续，不需要模型重发；Proceed 后下一跳是 tools。', k: 'Proceed tools.call' },
+      16: { t: '分发到直连键', b: 'tools 用 target_capability.target_method 再发一次 Host Call，并带上同一个 call_id；sandbox 的 60 秒标记命中，跳过二次裁决。', k: 'file.write (same call_id)' },
+      17: { t: 'Provider 执行', b: 'file-tools 在 Workspace 范围内原子写入，路径越界会被拒绝；返回工具结果包络。', k: 'file.write' },
+      18: { t: '工具结果回 agent', b: '结果统一为 content、is_error、truncated、meta 四段，经 tools 回到 agent。', k: 'res tools.call' },
+      19: { t: '写 tool Fact', b: 'agent 把工具结果写成 role=tool 的 Fact，成为下一轮投影的一部分。', k: 'Fact: message(tool)' },
+      20: { t: '下一 step 再请求模型', b: 'agent 重新投影上下文，再次发 llm.complete；工具结果已经在消息序列里。', k: 'llm.complete (next step)' },
+      21: { t: '再次 Proceed', b: 'model-context 再次经过，链位与第一次相同。', k: 'host.proceed' },
+      22: { t: '模型给出最终回答', b: '这一次不再有 tool_calls，agent 拿到最终正文。', k: 'res llm.complete' },
+      23: { t: '写终态 Facts', b: 'assistant 正文、llm_usage、step_end 与 turn_end 落盘；reason 为 completed。', k: 'Fact: assistant / llm_usage / turn_end' },
+      24: { t: 'session 重建 State', b: 'session 从 Fact Log 投影 chat、history、trace 与 dock，revision 单调递增。', k: 'host.ui.state' },
+      25: { t: 'State Push', b: '浏览器把 State 交给对应 Mount 的 setData；刷新后可以用同一份 Fact 重建。', k: 'kind = state' },
+      26: { t: 'Turn 返回', b: 'agent 的 handler 返回，SDK 写 res。', k: 'res loop.turn' },
+      27: { t: '回浏览器', b: 'Host 把 res 还原成浏览器请求 id，NDJSON 流结束。', k: 'NDJSON 收尾' },
+    },
+  },
 
   /* ---------- 一、线协议 ---------- */
 
@@ -500,6 +577,7 @@ LA_SEQ.diagrams = {
 
 /* 每张图属于哪一部分。 */
 LA_SEQ.diagramParts = {
+  full: 'p0',
   frame: 'p1', cancel: 'p1',
   browser: 'p2',
   turn: 'p3',

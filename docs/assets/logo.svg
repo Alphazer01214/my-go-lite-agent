@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="LiteAgent">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#151d28"/>
+      <stop offset="1" stop-color="#080b10"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a5f3fc"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.22" r="0.72">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#bg)" stroke="#1f2937" stroke-width="2"/>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#glow)"/>
+
+  <g stroke="#22d3ee" stroke-opacity="0.32" stroke-width="3" stroke-linecap="round">
+    <line x1="128" y1="128" x2="128" y2="80"/>
+    <line x1="128" y1="128" x2="176" y2="128"/>
+    <line x1="128" y1="128" x2="128" y2="176"/>
+    <line x1="128" y1="128" x2="80" y2="128"/>
+  </g>
+
+  <g fill="#0d1a21" stroke="#2c4c58" stroke-width="2.5">
+    <rect x="112" y="64" width="32" height="32" rx="10"/>
+    <rect x="160" y="112" width="32" height="32" rx="10"/>
+    <rect x="112" y="160" width="32" height="32" rx="10"/>
+    <rect x="64" y="112" width="32" height="32" rx="10"/>
+  </g>
+  <g fill="#22d3ee" opacity="0.8">
+    <rect x="121" y="73" width="14" height="14" rx="4"/>
+    <rect x="169" y="121" width="14" height="14" rx="4"/>
+    <rect x="121" y="169" width="14" height="14" rx="4"/>
+    <rect x="73" y="121" width="14" height="14" rx="4"/>
+  </g>
+
+  <circle cx="128" cy="128" r="22" fill="url(#accent)"/>
+  <circle cx="128" cy="128" r="8.5" fill="#06222a"/>
+</svg>

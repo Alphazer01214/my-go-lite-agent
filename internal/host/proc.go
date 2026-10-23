@@ -111,7 +111,7 @@ func resolveEntry(dir, entry string) (string, error) {
 }
 
 // markUnhealthy 标记插件不健康并做死亡闭包：该插件相关的 pending 全部闭环，
-// 防止调用方永久挂起（v1 无调用超时）。合成响应在锁外写，避免与 read/write 互锁。
+// 防止调用方永久挂起（暂时还没实现）。合成响应在锁外写，避免与 read/write 互锁。
 func (h *Host) markUnhealthy(instanceID string, gen int) {
 	h.mu.Lock()
 	if h.closed {

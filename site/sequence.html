@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiteAgent 数据流转 · 序列图</title>
-<meta name="description" content="用 mermaid sequenceDiagram 风格逐跳展示 LiteAgent 的数据传输：Frame 的 id 改写、pending 闭环、Browser Call、Turn 主链路、流式增量、上下文组装、工具轮、沙箱裁决、子代理委派、取消、异常与刷新重连。">
+<meta name="description" content="用 mermaid sequenceDiagram 风格逐跳展示 LiteAgent 的数据传输：完整 Turn 总览、Frame 的 id 改写、pending 闭环、Browser Call、Turn 主链路、流式增量、上下文组装、工具轮、沙箱裁决与确认、子代理委派、取消、异常与刷新重连。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -108,7 +108,7 @@
       <span class="idx">05</span>
       <div>
         <h2>全部图索引</h2>
-        <p class="block-lede">十四张图，按数据流方向排。</p>
+        <p class="block-lede">十五张图，按数据流方向排；第一张是完整链路总览。</p>
       </div>
     </header>
     <div class="panel">

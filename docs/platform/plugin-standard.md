@@ -50,13 +50,17 @@ plugins/<name>/
 | `plugin.go` | plugin 结构体、config、锁、生命周期状态 | 业务规则 |
 | `<feature>.go` | 一个关注点的全部：类型、专属 payload、逻辑、编码 | 别的关注点 |
 
+`config.go` 是常见的功能文件名，专门放配置的读取、校验和持久化。
+
+`config.json` 是运行期可写配置，不提交 Git。`config.example.json` 是配置模板，随发行版分发。
+
 ### 2.1 `wire.go` 是 Provider 侧本地副本
 
 工具提供方的调用契约是 `tools` 插件与 Provider 插件之间的业务契约，不是 Host 契约。
 
 所以它不进 `pluginsdk`。`pluginsdk` 只共享 JSON 字段名，不共享 Go 类型。Provider 侧各维护一份本地副本，文件名统一为 `wire.go`。
 
-三份副本是**有意的代价**，不是待清理的重复。契约归 `tools` 插件所有，平台树只认 JSON 字段名；Provider 之间不互相依赖。
+多份副本是**有意的代价**，不是待清理的重复。契约归 `tools` 插件所有，平台树只认 JSON 字段名；Provider 之间不互相依赖。
 
 | 归属 | 内容 |
 |---|---|
@@ -64,6 +68,8 @@ plugins/<name>/
 | `protocol/` | Host 线契约 |
 | `plugins/tools/wire.go` | tools 插件的注册与调用信封（工具插件自己的副本） |
 | `plugins/<provider>/wire.go` | Provider 侧本地副本 |
+
+当前持有 `wire.go` 的插件是 `tools`、`file-tools`、`shell-tools`、`sandbox` 和 `subagent`，共五份。
 
 Provider 侧副本要抄全：`Definition`、`ProviderInput`、`Result`、`RegisterInput`、`SyncInput`、`SyncOutput`、`Caller`，以及编解码函数。
 
@@ -77,9 +83,11 @@ Provider 侧副本要抄全：`Definition`、`ProviderInput`、`Result`、`Regis
 
 | 函数 | 去处 |
 |---|---|
-| `hashBytes`、`hashString`、`hashJSON` | 用到它的插件各留一份 |
-| `truncateUTF8`、`truncateString` | 各 Provider 的 `wire.go`（截断信封正文用） |
-| `displayPath`、`joinRelative` | file-tools 的 `workspace.go` |
+| `hashBytes` | model-context 的 `prompt.go`；file-tools 的 `util.go` |
+| `hashString`、`hashJSON` | model-context 的 `prompt.go` |
+| `truncateUTF8` | file-tools 的 `util.go`；model-context 的 `compact.go` |
+| `truncateString` | `tools` 与 `shell-tools` 的 `wire.go`（截断信封正文用） |
+| `displayPath`、`joinRelative` | file-tools 的 `util.go` |
 | `sortedUnique`、`formatInt`、`intDefault` | file-tools 的 `util.go`（仅本插件使用） |
 
 一个插件内部用得到的通用小函数可以留在自己的 `util.go`。但它不能出现在两个插件里，除非它是工具提供方契约的一部分——那属于 `wire.go`。
@@ -96,6 +104,8 @@ Provider 侧副本要抄全：`Definition`、`ProviderInput`、`Result`、`Regis
 | 禁止 | `builder.go`、`handler.go`、`manager.go`、`helper.go`、`common.go`、`misc.go` | 技术角色名。按它拆完仍然是一坨 |
 
 `builder.go`、`handler.go` 这类名字的问题是它们描述的是**代码的形态**而不是**代码的职责**。`turn.go` 描述职责，`builder.go` 不描述。
+
+按操作系统拆文件是例外。`process_unix.go` 与 `process_windows.go` 用构建标签分开，文件名加后缀即可。
 
 ## 4. 拆分轴
 
@@ -137,9 +147,11 @@ Provider 侧副本要抄全：`Definition`、`ProviderInput`、`Result`、`Regis
 | 情况 | 形态 |
 |---|---|
 | payload 只服务于一个方法 | 跟功能文件走。`file-tools` 的 `readIn` 留在 `read.go` |
-| payload 被多个方法共用 | 进 `types.go`。session 的 `factIn` 被 store、derive、ui_state 共用，进 `types.go` |
+| payload 被多个方法共用 | 进 `types.go`。session 的 `factIn` 被 store、session_ops、lifecycle 共用，进 `types_ops.go` |
 
 在 `types.go` 里，In 与 Out 放在一起。调用方读一个契约面只需要打开一个文件。
+
+payload 类型按拆分轴细分时，可以另开 `types_<concern>.go`。session 的 `types.go`、`types_ops.go`、`types_workspace.go` 是这种形态。
 
 ## 6. 错误码
 
@@ -154,8 +166,8 @@ import "github.com/tomori/my-go-lite-agent/pluginsdk"
 // Error codes this plugin raises. Platform codes (bad_arguments, handler_error)
 // and the shared tool result code come from pluginsdk and are not repeated here.
 const (
-	codePathEscape   = "path_escape"
-	codePathNotFound = "path_not_found"
+    codePathEscape   = "path_escape"
+    codePathNotFound = "path_not_found"
 )
 
 // Constructors keep the code and the message together at the raise site.
@@ -185,14 +197,16 @@ session 的 `errors.go` 用本地 `coded` 类型，不走 `pluginsdk.ErrCode`。
 ```text
 errors.go   types.go        ← 叶子，只依赖 SDK 与标准库
     ↓          ↓
-         plugin.go            ← 生命周期
+          plugin.go            ← 生命周期
     ↓          ↓
-      <feature>.go            ← 功能实现
+       <feature>.go            ← 功能实现
     ↓
-         main.go               ← 只做装配
+          main.go               ← 只做装配
 ```
 
 插件之间不直连。跨插件调用一律发 Call，由 Host 路由。路由键是 `(capability, method)`，插件名不参与寻址。
+
+`wire.go` 是例外路径。它复制的是 JSON 字段名和编解码逻辑，不 import 任何插件包。
 
 ## 8. 迁移记录
 
@@ -208,7 +222,7 @@ errors.go   types.go        ← 叶子，只依赖 SDK 与标准库
 | sandbox | `main.go`、`methods.go` 按 seam 与方法族拆开 |
 | 全部 | 错误码字面量归入各自的 `errors.go` |
 
-工具提供方契约没有归并到 `pluginsdk`。三份 `wire.go` 保持本地副本，平台树不含插件私有格式。
+工具提供方契约没有归并到 `pluginsdk`。五份 `wire.go` 保持本地副本，平台树不含插件私有格式。
 
 ## 9. 验收
 
@@ -221,6 +235,8 @@ errors.go   types.go        ← 叶子，只依赖 SDK 与标准库
 | 错误码归位 | 全仓检索错误码字面量，只在 `errors.go` 出现 |
 | 依赖方向 | 插件不 import 其他插件的包 |
 | 声明集合不变 | 拆分前后顶层声明集合逐项相等 |
+
+必备文件一项当前有偏差：`subagent` 还没有 `errors.go` 和 `communication.md`。补齐之前它不满足本节的验收标准。
 
 ## 10. 与其他文档的关系
 
