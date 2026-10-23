@@ -13,6 +13,7 @@
 | 标注 | 含义 | 怎么用 |
 |---|---|---|
 | 当前实现 | 结论对当前代码仍然成立 | 可以直接照做 |
+| 待实现 | 设计已确认，代码尚未落地 | 按文档实施；完成后改为当前实现 |
 | 部分有效 | 主体成立，个别结论已过时 | 照做前先核对标注里点名的部分 |
 | 已废止 | 结论已被取代 | 只作历史参考，不要照做 |
 | 未采纳 | 设计没有落地 | 只作决策记录，不要照做 |
@@ -24,6 +25,7 @@
 
 | 文档 | 主题 |
 |---|---|
+| [2026-10-24-git-sidebar-plan-handoff.md](2026-10-24-git-sidebar-plan-handoff.md) | 待实现：Git 侧边栏、右侧自动 tab、plan 悬浮窗与 Session facts 注入 |
 | [2026-10-15-host-runtime-infrastructure-development-log.md](2026-10-15-host-runtime-infrastructure-development-log.md) | Plugin Instance、执行上下文、Generation 隔离。三条并发规则在此 |
 | [2026-10-16-conversation-cancel-recovery-debug-log.md](2026-10-16-conversation-cancel-recovery-debug-log.md) | `turn_end` 缺失导致会话卡在 `running` |
 | [2026-10-18-session-workspace-multichat.md](2026-10-18-session-workspace-multichat.md) | Session 恢复缺陷、Workspace 绑定、多会话标签 |

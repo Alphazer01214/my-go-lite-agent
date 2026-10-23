@@ -1,6 +1,7 @@
 # git-tools
 
 > 状态：目标契约（本文全部章节均为待实现的目标契约）
+> 2026-10-24 更新：UI、stage/unstage 拆分、checkout 语义与风险值以 [git 侧边栏与 plan 悬浮窗交接](../../archive/progress/2026-10-24-git-sidebar-plan-handoff.md) 为准；实现前先把两份文档合并。
 > 涉及能力：`git`
 > 依赖：弱依赖 `tools`，硬依赖 `tools`
 

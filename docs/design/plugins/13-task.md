@@ -1,6 +1,7 @@
 # task
 
 > 状态：目标契约。插件尚未实现，当前实现没有这个能力。
+> 2026-10-24 更新：本轮改为更窄的 `plan` 插件，见 [git 侧边栏与 plan 悬浮窗交接](../../archive/progress/2026-10-24-git-sidebar-plan-handoff.md)。本文的完整 task 设计暂不实施。
 > 涉及能力：`task`
 > 依赖：弱依赖 `session`、`tools`
 
