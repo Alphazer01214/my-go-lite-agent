@@ -13,8 +13,8 @@
 | [platform/](platform/) | 平台契约 | 照着它能实现 |
 | [design/](design/) | 目标契约 | 照着它能规划 |
 | [prompts/](prompts/) | Prompt 契约 | 独立体系，自成一类 |
-| [archive/](archive/) | 过程记录 | 写完就冻结，只增不改，不作为参考 |
-| [research/](research/) | 参考材料 | 除非指定，否则不打开。外部资料，不作为依据 |
+| [archive/](archive/) | 过程记录 | 写完就冻结，只增不改 |
+| [research/](research/) | 参考材料 | 外部资料，不作为依据 |
 
 ## 2. 平台契约
 
