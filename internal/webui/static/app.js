@@ -1,14 +1,13 @@
 import { createMountLoader, mountKeyFor } from "./loader.mjs";
 import { LiteAgent } from "./lite-agent.js";
 import {
-	renderDependencyDetails,
 	renderDependencyEdgeList,
 	renderDependencyGraph,
-	renderPluginList,
+	renderPluginDetail,
 } from "./plugins.mjs";
 import {
 	pluginSettingsAvailability,
-	renderSettingsList,
+	renderSettingsForm,
 	setSettingsFormValues,
 	setSettingsStatus,
 	settingsValuesFromResponse,
@@ -23,23 +22,24 @@ const elements = {
 	diagnosticClose: document.querySelector("#diagnostic-close"),
 	pluginsButton: document.querySelector("#plugins-toggle"),
 	pluginCount: document.querySelector("#plugin-count"),
-	pluginPanel: document.querySelector("#plugins"),
+	pluginDrawer: document.querySelector("#plugins"),
 	pluginsClose: document.querySelector("#plugins-close"),
 	pluginSummary: document.querySelector("#plugin-summary"),
-	pluginList: document.querySelector("#plugin-list"),
 	pluginRescan: document.querySelector("#plugin-rescan"),
 	pluginActionStatus: document.querySelector("#plugin-action-status"),
-	settingsSummary: document.querySelector("#settings-summary"),
-	settingsList: document.querySelector("#settings-list"),
 	pluginGraph: document.querySelector("#plugin-graph"),
-	pluginGraphDetails: document.querySelector("#plugin-graph-details"),
 	pluginEdgeList: document.querySelector("#plugin-edge-list"),
+	pluginEdgeCount: document.querySelector("#plugin-edge-count"),
+	pluginDetail: document.querySelector("#plugin-detail"),
+	pluginSelectionStatus: document.querySelector("#plugin-selection-status"),
 };
 
 const localDiagnostics = [];
 const serverDiagnostics = [];
 let mountLoader = null;
 let currentMounts = [];
+let latestPlugins = [];
+let latestGraphModel = { nodes: [], edges: [] };
 let selectedPluginName = "";
 const selectedPluginInstances = new Map();
 
@@ -161,47 +161,95 @@ function setPluginActionStatus(message, kind = "info") {
 	elements.pluginActionStatus.className = `plugin-action-status plugin-action-${kind}`;
 }
 
-function renderSettings(plugins) {
-	const configurable = plugins.filter((plugin) => plugin?.settings?.schema?.length);
-	renderSettingsList(document, elements.settingsList, configurable, {
+const summaryLabels = Object.freeze({
+	active: "运行中",
+	loading: "加载中",
+	stopping: "停止中",
+	inactive: "未激活",
+	failed: "失败",
+	missing: "缺失",
+});
+
+function pluginSummary(plugins) {
+	const counts = new Map();
+	for (const plugin of plugins) {
+		const state = plugin?.missing ? "missing" : (plugin?.state || "inactive");
+		counts.set(state, (counts.get(state) || 0) + 1);
+	}
+	const parts = [`${plugins.length} 个插件`];
+	for (const state of ["active", "inactive", "loading", "stopping", "failed", "missing"]) {
+		const count = counts.get(state) || 0;
+		if (count > 0) parts.push(`${count} ${summaryLabels[state]}`);
+	}
+	return parts.join(" · ");
+}
+
+function renderPluginDetails({ preserveSettings = false } = {}) {
+	const previousForm = preserveSettings
+		? elements.pluginDetail.querySelector?.(".plugin-settings form")
+		: null;
+	const previousPlugin = previousForm?.dataset?.plugin || "";
+	const result = renderPluginDetail(
+		document,
+		elements.pluginDetail,
+		latestGraphModel,
+		latestPlugins,
+		selectedPluginName,
+		{
+			selectedInstanceIds: selectedPluginInstances,
+			onSelectPlugin: selectPlugin,
+			onSelectInstance: (name, instanceID) => {
+				selectedPluginInstances.set(name, instanceID);
+				renderPluginDetails({ preserveSettings: true });
+			},
+			onClear: () => selectPlugin(""),
+			onStart: (plugin, button) => runPluginAction(plugin, "start", button),
+			onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
+		},
+	);
+	elements.pluginSelectionStatus.textContent = selectedPluginName
+		? `已选择插件 ${selectedPluginName}`
+		: "未选择插件";
+	if (!result?.settingsRoot || !result.plugin) return;
+	if (previousForm && previousPlugin === result.plugin.name) {
+		result.settingsRoot.append(previousForm);
+		return;
+	}
+	renderSettingsForm(document, result.settingsRoot, result.plugin, {
 		availability: pluginSettingsAvailability,
 		onLoad: loadPluginSettings,
 		onSave: savePluginSettings,
 	});
-	elements.settingsSummary.textContent = `${configurable.length} 个可配置插件`;
 }
 
 function renderPluginCenter(plugins) {
-	if (!plugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
-	for (const plugin of plugins) {
+	latestPlugins = Array.isArray(plugins) ? plugins : [];
+	if (!latestPlugins.some((plugin) => plugin.name === selectedPluginName)) selectedPluginName = "";
+	for (const plugin of latestPlugins) {
 		const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
 		const selectedID = selectedPluginInstances.get(plugin?.name);
 		if (selectedID && !instances.some((instance) => instance.instance_id === selectedID)) {
 			selectedPluginInstances.delete(plugin.name);
 		}
 	}
-	renderPluginList(document, elements.pluginList, plugins, {
-		selectedInstanceIds: selectedPluginInstances,
-		onSelectInstance: (name, instanceID) => {
-			selectedPluginInstances.set(name, instanceID);
-			renderPluginCenter(plugins);
-		},
-		onStart: (plugin, button) => runPluginAction(plugin, "start", button),
-		onStop: (plugin, button) => runPluginAction(plugin, "stop", button),
-	});
-	renderSettings(plugins);
-	const graphModel = renderDependencyGraph(document, elements.pluginGraph, plugins, {
+	latestGraphModel = renderDependencyGraph(document, elements.pluginGraph, latestPlugins, {
 		selectedId: selectedPluginName,
-		onSelect: (name) => {
-			selectedPluginName = name;
-			renderPluginCenter(plugins);
-		},
+		onSelect: selectPlugin,
 	});
-	renderDependencyEdgeList(document, elements.pluginEdgeList, graphModel);
-	renderDependencyDetails(document, elements.pluginGraphDetails, graphModel, selectedPluginName);
-	elements.pluginCount.textContent = String(plugins.length);
-	elements.pluginSummary.textContent = `${plugins.length} 个插件`;
+	renderDependencyEdgeList(document, elements.pluginEdgeList, latestGraphModel);
+	elements.pluginEdgeCount.textContent = String(latestGraphModel.edges.length);
+	renderPluginDetails();
+	elements.pluginCount.textContent = String(latestPlugins.length);
+	elements.pluginSummary.textContent = pluginSummary(latestPlugins);
 }
+
+function selectPlugin(name) {
+	const next = name || "";
+	if (next === selectedPluginName) return;
+	selectedPluginName = next;
+	renderPluginCenter(latestPlugins);
+}
+
 async function parseManagementResponse(response) {
 	let payload = null;
 	try {
@@ -289,40 +337,44 @@ async function rescanPlugins() {
 	}
 }
 
-const panels = [
-	{ panel: elements.diagnosticPanel, button: elements.diagnosticButton },
-	{ panel: elements.pluginPanel, button: elements.pluginsButton },
-];
-
-function setPanel(entry, open) {
-	entry.panel.hidden = !open;
-	entry.button.setAttribute("aria-expanded", String(open));
-	entry.button.classList.toggle("is-active", open);
-	if (open) entry.panel.focus({ preventScroll: true });
+function setDiagnosticPanel(open) {
+	elements.diagnosticPanel.hidden = !open;
+	elements.diagnosticButton.setAttribute("aria-expanded", String(open));
+	elements.diagnosticButton.classList.toggle("is-active", open);
+	if (open) elements.diagnosticPanel.focus({ preventScroll: true });
 }
 
-function closePanels(except) {
-	for (const entry of panels) {
-		if (entry !== except) setPanel(entry, false);
-	}
+function closeDiagnostics() {
+	setDiagnosticPanel(false);
 }
 
-function togglePanel(entry) {
-	const open = entry.panel.hidden;
-	if (open) closePanels(entry);
-	setPanel(entry, open);
-	if (!open) entry.button.focus({ preventScroll: true });
+function toggleDiagnostics() {
+	const open = elements.diagnosticPanel.hidden;
+	setDiagnosticPanel(open);
+	if (!open) elements.diagnosticButton.focus({ preventScroll: true });
 }
 
-function setPluginView(name) {
-	for (const tab of document.querySelectorAll("[data-plugin-view]")) {
-		const active = tab.dataset.pluginView === name;
-		tab.classList.toggle("is-active", active);
-		tab.setAttribute("aria-selected", String(active));
-	}
-	for (const view of document.querySelectorAll(".plugin-view")) {
-		view.hidden = view.id !== `plugin-view-${name}`;
-	}
+function syncPluginDrawerState() {
+	const open = elements.pluginDrawer.open;
+	elements.pluginsButton.classList.toggle("is-active", open);
+	elements.pluginsButton.setAttribute("aria-expanded", String(open));
+	document.body.classList.toggle("plugin-drawer-open", open);
+	if (!open) elements.pluginsButton.focus({ preventScroll: true });
+}
+
+function openPluginDrawer() {
+	if (elements.pluginDrawer.open) return;
+	closeDiagnostics();
+	elements.pluginDrawer.showModal();
+	syncPluginDrawerState();
+	elements.pluginsClose.focus({ preventScroll: true });
+}
+
+function closePluginDrawer() {
+	if (!elements.pluginDrawer.open) return;
+	elements.pluginDrawer.close();
+	// Some embedded browser surfaces do not dispatch the dialog close event.
+	syncPluginDrawerState();
 }
 
 function slotElements() {
@@ -407,39 +459,44 @@ async function bootstrap() {
 	}
 }
 
-elements.diagnosticButton.addEventListener("click", () => togglePanel(panels[0]));
-elements.pluginsButton.addEventListener("click", () => togglePanel(panels[1]));
+elements.diagnosticButton.addEventListener("click", toggleDiagnostics);
 elements.diagnosticClose.addEventListener("click", () => {
-	setPanel(panels[0], false);
+	closeDiagnostics();
 	elements.diagnosticButton.focus({ preventScroll: true });
 });
-elements.pluginsClose.addEventListener("click", () => {
-	setPanel(panels[1], false);
-	elements.pluginsButton.focus({ preventScroll: true });
+elements.pluginsButton.addEventListener("click", () => {
+	if (elements.pluginDrawer.open) closePluginDrawer();
+	else openPluginDrawer();
+});
+elements.pluginsClose.addEventListener("click", closePluginDrawer);
+elements.pluginDrawer.addEventListener("close", syncPluginDrawerState);
+elements.pluginDrawer.addEventListener("cancel", (event) => {
+	event.preventDefault();
+	closePluginDrawer();
+});
+elements.pluginDrawer.addEventListener("click", (event) => {
+	if (event.target !== elements.pluginDrawer) return;
+	const rect = elements.pluginDrawer.getBoundingClientRect();
+	const outside = event.clientX < rect.left || event.clientX > rect.right
+		|| event.clientY < rect.top || event.clientY > rect.bottom;
+	if (outside) closePluginDrawer();
 });
 elements.pluginRescan.addEventListener("click", rescanPlugins);
 
-for (const tab of document.querySelectorAll("[data-plugin-view]")) {
-	tab.addEventListener("click", () => setPluginView(tab.dataset.pluginView));
-}
-
 document.addEventListener("keydown", (event) => {
-	if (event.key !== "Escape") return;
-	const open = panels.find((entry) => !entry.panel.hidden);
-	if (open) {
-		setPanel(open, false);
-		open.button.focus({ preventScroll: true });
-	}
+	if (event.key !== "Escape" || elements.pluginDrawer.open) return;
+	if (elements.diagnosticPanel.hidden) return;
+	closeDiagnostics();
+	elements.diagnosticButton.focus({ preventScroll: true });
 });
 
 document.addEventListener("click", (event) => {
 	const target = event.target;
 	if (!(target instanceof Element)) return;
-	if (panels.some((entry) => entry.panel.contains(target) || entry.button.contains(target))) return;
-	closePanels();
+	if (elements.diagnosticPanel.contains(target) || elements.diagnosticButton.contains(target)) return;
+	closeDiagnostics();
 });
 
 renderDiagnostics(combinedDiagnostics());
 renderPluginCenter([]);
-setPluginView("manage");
 bootstrap();

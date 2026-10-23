@@ -248,6 +248,7 @@ URL 中出现 `..` 段时直接返回 404。
     {
       "name": "example-plugin",
       "version": "1.0.0",
+      "description": "Example plugin",
       "state": "active",
       "selected_instance_id": "example-plugin",
       "instances": [
@@ -280,7 +281,7 @@ Bootstrap 返回插件状态、静态 Mount 和当前 Diagnostic 快照，不返
 
 `plugins[]` 按插件名分组。`instances[]` 列出该插件的全部 Plugin Instance。Provider `state` 使用 `inactive`、`loading`、`active`、`stopping` 或 `failed`。
 
-`selected_instance_id` 指出默认展示的实例。插件中心可以选择其他实例。`enabled` 表示插件是否允许启动；`missing` 表示依赖目标未发现。`provides`、`depends_on` 和 `mounts` 只返回静态 Manifest 信息。快照不包含插件目录或可执行文件路径。
+`selected_instance_id` 指出默认展示的实例。插件中心可以选择其他实例。`description`、`provides`、`depends_on` 和 `mounts` 返回静态 Manifest 信息；其中描述展示在插件详情顶部。`enabled` 表示插件是否允许启动；`missing` 表示依赖目标未发现。快照不包含插件目录或可执行文件路径。
 
 `slots` 数组由 Host 固定给出。Shell 实际使用 DOM 中的槽位元素，不读这个数组。
 
@@ -540,11 +541,11 @@ Host Shell 拥有 Diagnostic 悬浮窗。它与插件 Component 分离。
 
 ## 10. Settings Renderer
 
-插件中心提供 `Settings` 页签。页面读取 Manifest 中的 `settings.schema`，并用现有 Browser Call 执行 `settings.get` 和 `settings.save`。
+插件详情提供设置区块。选中插件后，详情读取 Manifest 中的 `settings.schema`，并用现有 Browser Call 执行 `settings.get` 和 `settings.save`。
 
-插件未处于 `active` 时，页面不发 `settings.get`，按状态显示未启动、加载中或启动失败提示，并禁用保存。插件启动落定后页面自动刷新快照并加载设置。
+插件未处于 `active` 时，详情不渲染表单，也不发 `settings.get`，只按状态显示未启动、加载中或启动失败提示。插件启动落定后快照刷新，详情自动加载设置。
 
-页面支持 `string`、`secret`、`number`、`boolean`、`select` 和 `list` 六种控件。`required` 只显示必填提示，不阻止提交。每个插件独立读取和保存。
+详情支持 `string`、`secret`、`number`、`boolean`、`select` 和 `list` 六种控件。`required` 只显示必填提示，不阻止提交。每个插件独立读取和保存。
 
 Secret 输入不回显明文。已有 Secret 显示“已配置，留空保持不变”，空输入是否覆盖由插件定义。保存失败时保留当前输入。
 
@@ -568,7 +569,7 @@ Secret 为空时不出现在 payload 中，插件据此保持原有密钥不变�
 
 ### 10.2 联动选择
 
-`options_from` 的选项来自被引用 `list` 字段在页面上的当前行，不是已保存的值。
+`options_from` 的选项来自被引用 `list` 字段在表单里的当前行，不是已保存的值。
 
 `option_value` 默认 `id`，`option_label` 默认 `label`。取值字段为空白的选项会被过滤掉。
 
@@ -578,15 +579,17 @@ Secret 为空时不出现在 payload 中，插件据此保持原有密钥不变�
 
 ## 11. 插件中心
 
-Host Shell 的顶栏提供统一的 `插件中心` 入口。中心包含三个页签：
+Host Shell 的顶栏提供统一的 `插件中心` 入口。中心是一个右侧 Drawer，依赖图是主视图，选中节点后右侧详情完成插件信息、启停、实例和设置。
 
-- `插件`：扫描和启停管理；
-- `设置`：Settings Renderer；
-- `依赖关系`：Host 与插件拓扑图。
+Drawer 内部左右两列：左侧是 Host 与插件拓扑图，右侧是选中插件详情；窄屏改为上下排列。图下保留可折叠的文本关系列表。
 
-插件页按名称展示插件，并列出全部实例。用户可选择一个实例查看 Generation、注册项和失败信息。用户可手动重新扫描，也可启动或停止单个插件。
+插件没有独立列表，所有插件都是图节点。点击节点后，详情显示 Manifest 描述、状态、启停按钮、全部实例、Capability、硬依赖、被依赖方、UI Mount 和设置。用户可选择一个实例查看 Generation、注册项和失败信息；依赖与被依赖项可点击跳转到对应节点。
 
-实例下拉框每项显示实例 id、Generation 和状态。
+Drawer 使用原生 `dialog`：带遮罩，支持 Esc、遮罩点击和关闭按钮关闭，并恢复焦点。
+
+设置只在选中插件且处于 `active` 时加载。不可用时详情只显示原因，不渲染不可保存的表单。切换插件会重建表单；切换实例只刷新实例信息，不重建设置表单。
+
+用户可手动重新扫描，也可启动或停止单个插件。实例下拉框每项显示实例 id、Generation 和状态。
 
 启动只对硬依赖做提示，不做拦截。
 
@@ -596,11 +599,9 @@ Host Shell 的顶栏提供统一的 `插件中心` 入口。中心包含三个�
 
 依赖图由 Bootstrap 中的插件快照和 `depends_on` 生成。Host 节点使用虚线连接已发现插件，表示装载和路由。
 
-硬依赖实线从依赖方指向被依赖插件。缺失节点显示为 `missing`。实例选择只改变详情展示，不改变依赖图。图下保留同方向的文本关系列表。
+硬依赖实线从依赖方指向被依赖插件。缺失节点显示为 `missing`。实例选择只改变详情展示，不改变依赖图。图下的文本关系列表默认折叠。
 
-点击插件节点后，右侧显示 Capability、硬依赖、被依赖方和 UI Mount。节点高亮当前插件及其一跳关系。
-
-管理接口返回最新 Bootstrap。成功后 Shell 更新插件快照并按新列表对齐 Mount：新增的 Mount 被装载，Bootstrap 中已消失的 Mount 被卸载。面板关闭只影响当前浏览器显示，不改变插件状态。
+管理接口返回最新 Bootstrap。成功后 Shell 更新插件快照并按新列表对齐 Mount：新增的 Mount 被装载，Bootstrap 中已消失的 Mount 被卸载。Drawer 关闭只影响当前浏览器显示，不改变插件状态。
 
 启动插件后，Shell 会轮询 Bootstrap 直到该插件不再是 `loading`，最长等待 5 秒，再按新列表对齐 Mount。
 

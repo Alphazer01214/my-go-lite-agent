@@ -23,7 +23,7 @@ export function pluginSettingsAvailability(plugin) {
 		case "stopping":
 			return { available: false, message: "插件停止中，停止完成后可重新启动" };
 		case "failed":
-			return { available: false, message: "插件启动失败，请先在“插件”页签重新启动" };
+			return { available: false, message: "插件启动失败，请先重新启动插件" };
 		default:
 			return { available: false, message: "插件未启动，启动后可编辑设置" };
 	}
@@ -305,107 +305,90 @@ function renderListField(document, form, field) {
 	return row;
 }
 
-// renderSettingsList renders the plugins it is given. Filtering by schema is the
-// caller's job so the summary count and the list cannot drift apart.
-export function renderSettingsList(document, root, plugins, handlers = {}) {
-	const entries = Array.isArray(plugins) ? plugins : [];
+// renderSettingsForm renders one plugin's settings. The detail pane owns the
+// plugin header and availability message so a stopped plugin never exposes form
+// inputs that cannot be saved.
+export function renderSettingsForm(document, root, plugin, handlers = {}) {
 	root.replaceChildren();
-
-	if (entries.length === 0) {
+	const availability = handlers.availability?.(plugin) ?? { available: true };
+	if (!availability.available) {
+		const message = document.createElement("p");
+		message.className = "settings-unavailable";
+		message.textContent = availability.message || "插件未启动";
+		root.append(message);
+		return null;
+	}
+	const schema = Array.isArray(plugin?.settings?.schema) ? plugin.settings.schema : [];
+	if (schema.length === 0) {
 		const empty = document.createElement("p");
 		empty.className = "settings-empty";
-		empty.textContent = "暂无可配置插件";
+		empty.textContent = "该插件未提供可配置项。";
 		root.append(empty);
-		return;
+		return null;
 	}
 
-	for (const plugin of entries) {
-		const availability = handlers.availability?.(plugin) ?? { available: true };
-		const section = document.createElement("section");
-		section.className = availability.available
-			? "settings-plugin"
-			: "settings-plugin settings-plugin-unavailable";
+	const form = document.createElement("form");
+	form.className = "settings-form";
+	form.dataset.plugin = plugin.name || "";
+	form.__settingsSchema = schema;
+	const fields = document.createElement("div");
+	fields.className = "settings-fields";
 
-		const header = document.createElement("div");
-		header.className = "settings-plugin-header";
-		const name = document.createElement("strong");
-		name.textContent = plugin.name || "未命名插件";
-		header.append(name);
-		if (plugin.version) {
-			const version = document.createElement("span");
-			version.textContent = plugin.version;
-			header.append(version);
+	for (const field of schema) {
+		if (field.type === "list") {
+			fields.append(renderListField(document, form, field));
+			continue;
 		}
-		section.append(header);
+		const row = document.createElement("label");
+		row.className = "setting-field";
+		row.htmlFor = `${plugin.name || "plugin"}-${field.key}`;
 
-		const form = document.createElement("form");
-		form.className = "settings-form";
-		form.__settingsSchema = plugin.settings.schema;
-		const fields = document.createElement("div");
-		fields.className = "settings-fields";
+		const title = document.createElement("span");
+		title.className = "setting-label";
+		title.textContent = field.label || field.key;
+		row.append(title);
+		if (field.required) {
+			const required = document.createElement("span");
+			required.className = "setting-required";
+			required.textContent = "必填";
+			row.append(required);
+		}
 
-		for (const field of plugin.settings.schema) {
+		const input = createInput(document, plugin.name || "plugin", field);
+		row.append(input);
+		appendHint(document, row, field);
+		fields.append(row);
+	}
+	form.append(fields);
+
+	const actions = document.createElement("div");
+	actions.className = "settings-actions";
+	const status = document.createElement("span");
+	status.className = "settings-status settings-status-info";
+	status.textContent = "加载中…";
+	actions.append(status);
+	const save = document.createElement("button");
+	save.type = "submit";
+	save.className = "settings-save";
+	save.textContent = "保存";
+	actions.append(save);
+	form.append(actions);
+
+	form.addEventListener("submit", (event) => {
+		event.preventDefault();
+		const raw = {};
+		for (const field of schema) {
 			if (field.type === "list") {
-				fields.append(renderListField(document, form, field));
+				const container = form.querySelector?.(`[data-list-key="${field.key}"]`);
+				raw[field.key] = readRawListValues(container);
 				continue;
 			}
-			const row = document.createElement("label");
-			row.className = "setting-field";
-			row.htmlFor = `${plugin.name}-${field.key}`;
-
-			const title = document.createElement("span");
-			title.className = "setting-label";
-			title.textContent = field.label || field.key;
-			row.append(title);
-			if (field.required) {
-				const required = document.createElement("span");
-				required.className = "setting-required";
-				required.textContent = "必填";
-				row.append(required);
-			}
-
-			const input = createInput(document, plugin.name || "plugin", field);
-			row.append(input);
-			appendHint(document, row, field);
-			fields.append(row);
+			const input = form.elements.namedItem(field.key);
+			raw[field.key] = field.type === "boolean" ? Boolean(input?.checked) : input?.value;
 		}
-		form.append(fields);
-
-		const actions = document.createElement("div");
-		actions.className = "settings-actions";
-		const status = document.createElement("span");
-		status.className = availability.available
-			? "settings-status settings-status-info"
-			: "settings-status settings-status-muted";
-		status.textContent = availability.available
-			? "加载中…"
-			: availability.message || "插件未启动";
-		actions.append(status);
-		const save = document.createElement("button");
-		save.type = "submit";
-		save.className = "settings-save";
-		save.textContent = "保存";
-		save.disabled = !availability.available;
-		actions.append(save);
-		form.append(actions);
-
-		form.addEventListener("submit", (event) => {
-			event.preventDefault();
-			if (!availability.available) return;
-			const raw = {};
-			for (const field of plugin.settings.schema) {
-				if (field.type === "list") {
-					const container = form.querySelector?.(`[data-list-key="${field.key}"]`);
-					raw[field.key] = readRawListValues(container);
-					continue;
-				}
-				const input = form.elements.namedItem(field.key);
-				raw[field.key] = field.type === "boolean" ? Boolean(input?.checked) : input?.value;
-			}
-			handlers.onSave?.(plugin, collectSettingsValues(plugin.settings.schema, raw), form);
-		});
-		section.append(form);
-		root.append(section);
-		if (availability.available) handlers.onLoad?.(plugin, form);
-	}
+		handlers.onSave?.(plugin, collectSettingsValues(schema, raw), form);
+	});
+	root.append(form);
+	handlers.onLoad?.(plugin, form);
+	return form;
 }

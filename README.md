@@ -45,7 +45,7 @@ go build ./cmd/liteagent-server
 ./liteagent-server
 ```
 
-Open <http://127.0.0.1:2333>, then configure `llm-openai` in the plugin center (top right) → Settings. Models from different providers can live in one catalog.
+Open <http://127.0.0.1:2333>, then configure `llm-openai` in the plugin center (top right) → click its graph node → Settings. Models from different providers can live in one catalog.
 
 Environment variables work too (they apply to the default model entry):
 

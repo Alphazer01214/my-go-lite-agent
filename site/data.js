@@ -219,7 +219,7 @@ LA.plugins = [
       ['llm.chunk (evt)', '归因增量事件'], ['llm.cancel', '按 call_id 取消上游 HTTP 请求'],
       ['llm.config.get / set', '插件配置读写，api_key 回显时掩码'],
       ['llm.models.list / set', '模型目录与默认模型'],
-      ['llm.settings.get / save', '插件中心设置：base_url、模型目录、默认模型、api_key（明文落盘）']],
+      ['llm.settings.get / save', '插件详情设置：base_url、模型目录、默认模型、api_key（明文落盘）']],
     mounts: [], note: '取消会真的中止上游 HTTP 请求：llm.complete 把 ctx 交给 http.NewRequestWithContext。api_key 明文写在插件目录 config.json，读回时掩码。设置保存后 Host 派发 settings-saved，session-history 刷新模型下拉。上游 HTTP 失败统一成 llm_upstream。' },
 
   { name: 'model-context', label: 'model-context', caps: ['model-context'], status: '当前实现',
@@ -270,7 +270,7 @@ LA.plugins = [
       ['sandbox.list_rules / set_rule', '规则集读写，set_rule 保持只升不降'],
       ['sandbox.settings.get / save', '默认动作、风险档、确认超时、审计保留与持久规则']],
     mounts: [['sandbox-confirm', 'right']],
-    note: 'autostart 为 true，是启动根；depends_on tools 决定启动顺序。allow 原样 Proceed，modify 改写 arguments 后 Proceed，deny 短路返回工具结果包络（meta.code=sandbox_denied）。confirm 会阻塞当前调用：创建一次性令牌、写 confirm 审计、把待确认列表推给右下角 sandbox-confirm；用户允许后同一次调用继续，拒绝或超时返回错误包络，取消则清理令牌。默认分段是 risk ≤ 49 放行、≥ 50 确认。设置页可直接增删改持久规则（允许删除 deny 规则），sandbox.set_rule 仍保持只升不降。tools.call 放行后，tools 会带同一个 call_id 再调直连键，sandbox 用 60 秒标记跳过第二遍裁决。缺席即放行是部署约定，不是平台保证。' },
+    note: 'autostart 为 true，是启动根；depends_on tools 决定启动顺序。allow 原样 Proceed，modify 改写 arguments 后 Proceed，deny 短路返回工具结果包络（meta.code=sandbox_denied）。confirm 会阻塞当前调用：创建一次性令牌、写 confirm 审计、把待确认列表推给右下角 sandbox-confirm；用户允许后同一次调用继续，拒绝或超时返回错误包络，取消则清理令牌。默认分段是 risk ≤ 49 放行、≥ 50 确认。插件详情设置可直接增删改持久规则（允许删除 deny 规则），sandbox.set_rule 仍保持只升不降。tools.call 放行后，tools 会带同一个 call_id 再调直连键，sandbox 用 60 秒标记跳过第二遍裁决。缺席即放行是部署约定，不是平台保证。' },
 
   { name: 'subagent', label: 'subagent', caps: ['subagent'], status: '当前实现',
     color: 'var(--indigo)', toggleable: true,
@@ -323,7 +323,7 @@ LA.scenarios = {
   model: {
     label: '模型选择',
     steps: [
-      { from: 'center', to: 'bridge', frame: 'http', cap: 'llm', method: 'settings.get', label: '插件中心 → 设置 → llm-openai', note: 'Host Settings Renderer 读取 values，包括 models / default_model。' },
+      { from: 'center', to: 'bridge', frame: 'http', cap: 'llm', method: 'settings.get', label: '插件中心 → 点击 llm-openai → 设置', note: 'Host Settings Renderer 读取 values，包括 models / default_model。' },
       { from: 'bridge', to: 'host', frame: 'req', cap: 'llm', method: 'settings.get' },
       { from: 'host', to: 'llm', frame: 'req', cap: 'llm', method: 'settings.get' },
       { from: 'llm', to: 'host', frame: 'res', cap: 'llm', method: 'settings.get', label: 'models / default_model / api_key configured' },
@@ -494,8 +494,8 @@ LA.scenarios = {
 LA.turnNote = '取消与异常只影响一个 Session 的活动 Turn。工具轮里的 file.* 与 shell.* 由 Provider 执行，tools 只做注册与分发；sandbox 在 tools.call 与 file.write、shell.execute 上各截一次，命中 confirm 时阻塞等待 sandbox-confirm 面板，允许后同一次调用继续；外层放行的 call_id 会让直连那一跳跳过二次裁决。子代理由模型通过 subagent 工具发起，它在独立会话里跑自己的 loop.turn，最终回答作为一次工具结果回到父代理。Turn 结束后的 Dock 用量来自 llm_usage；上下文明细通过 model-context.inspect 还原，下一次预览通过 build，不写 Fact。聊天区按 turns 摘要折叠过程：完成轮默认收起，最终回答与用户消息常显。';
 
 LA.slots = {
-  top: { tag: 'Host 控件', owner: 'Host', mount: '—', body: 'v1 的 top 由 Host 控件保留，插件使用其余四个 Slot。内容：插件中心入口（插件 / 设置 / 依赖关系）与 Diagnostic 悬浮窗。' },
-  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。列表行支持改名、置顶与删除：改名走 session.update，置顶写入 session_meta 并跨重启恢复，删除走 session.delete 且运行中的会话会被拒绝。模型目录在插件中心设置页维护；保存后通过 settings-saved 事件刷新下拉。子会话默认不出现在这个列表里。' },
+  top: { tag: 'Host 控件', owner: 'Host', mount: '—', body: 'v1 的 top 由 Host 控件保留，插件使用其余四个 Slot。内容：插件中心入口（依赖图与选中插件详情：启停、实例、关系、设置）与 Diagnostic 悬浮窗。' },
+  left: { tag: 'session-history', owner: 'session', mount: 'history', body: 'Workspace 分组、会话列表和新会话模型下拉。列表行支持改名、置顶与删除：改名走 session.update，置顶写入 session_meta 并跨重启恢复，删除走 session.delete 且运行中的会话会被拒绝。模型目录在插件中心 llm-openai 详情里维护；保存后通过 settings-saved 事件刷新下拉。子会话默认不出现在这个列表里。' },
   center: { tag: 'session-chat', owner: 'session', mount: 'chat', body: '多会话 Pane。发送调用 loop.turn，取消调用 loop.cancel；流式增量来自 Stream Command，落盘后由 State 重建。消息按 Turn 折叠：完成轮默认收起过程，保留用户消息和最终回答；Turn 头显示状态、过程条数、工具数和时长。父会话里按 subagent_spawned 事实列出子代理入口，子会话是只读视图。' },
   right: { tag: 'session-trace + sandbox-confirm', owner: 'session + sandbox', mount: 'trace + confirm', body: '同一 Slot 容纳两个 Mount。session-trace 展示 Fact Log 与上下文快照；sandbox_decision、subagent_spawned / subagent_finished 也落在这里，它们是平台事实，不进模型上下文。sandbox-confirm 固定在视口右下角，显示待确认工具、风险、理由、参数摘要、会话与剩余时间，提供允许一次、拒绝和查看会话。' },
   bottom: { tag: 'session-dock', owner: 'session', mount: 'dock', body: '模型、API usage 上下文仪表、会话累计用量和 Turn 状态。点击 chip 展开上下文与用量明细；context_snapshot 由 model-context 写入，消息通过 model-context.inspect 还原，下一次请求通过 build 预览。没有选中会话时 dock 与 bottom Slot 一并隐藏。' },

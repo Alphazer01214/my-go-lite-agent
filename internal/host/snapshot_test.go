@@ -14,7 +14,7 @@ func TestPluginSnapshotReportsProviderLifecycleStates(t *testing.T) {
 		{Manifest: plugin.Manifest{Name: "failed", Version: "2.0.0", Entry: "failed", Autostart: true}},
 		{Manifest: plugin.Manifest{Name: "disabled", Version: "4.0.0", Entry: "disabled", Autostart: true}},
 		{Manifest: plugin.Manifest{Name: "missing-user", Version: "5.0.0", Entry: "missing-user", DependsOn: []string{"missing"}}},
-		{Manifest: plugin.Manifest{Name: "active", Version: "1.0.0", Entry: "active", Autostart: true, Provides: []string{"one"}}},
+		{Manifest: plugin.Manifest{Name: "active", Version: "1.0.0", Description: "Active plugin", Entry: "active", Autostart: true, Provides: []string{"one"}}},
 	}}
 	h.plugins["active"] = &proc{instanceID: "active", pluginName: "active", state: ProviderStateActive, gen: 1}
 	h.plugins["failed"] = &proc{instanceID: "failed", pluginName: "failed", state: ProviderStateFailed, gen: 1, failureCode: CodePluginDown}
@@ -22,7 +22,7 @@ func TestPluginSnapshotReportsProviderLifecycleStates(t *testing.T) {
 
 	got := h.PluginSnapshot()
 	want := []PluginSnapshot{
-		{Name: "active", Version: "1.0.0", State: ProviderStateActive, SelectedInstanceID: "active", Enabled: true, Provides: []string{"one"}},
+		{Name: "active", Version: "1.0.0", Description: "Active plugin", State: ProviderStateActive, SelectedInstanceID: "active", Enabled: true, Provides: []string{"one"}},
 		{Name: "disabled", Version: "4.0.0", State: ProviderStateInactive, Enabled: false},
 		{Name: "failed", Version: "2.0.0", State: ProviderStateFailed, SelectedInstanceID: "failed", Enabled: true},
 		{Name: "inactive", Version: "3.0.0", State: ProviderStateInactive, Enabled: true},
@@ -68,7 +68,8 @@ func assertPluginSnapshot(t *testing.T, got, want []PluginSnapshot) {
 	}
 	for i := range want {
 		g, w := got[i], want[i]
-		if g.Name != w.Name || g.Version != w.Version || g.State != w.State || g.Enabled != w.Enabled ||
+		if g.Name != w.Name || g.Version != w.Version || g.Description != w.Description ||
+			g.State != w.State || g.Enabled != w.Enabled ||
 			g.Missing != w.Missing || g.SelectedInstanceID != w.SelectedInstanceID {
 			t.Fatalf("snapshot[%d] = %#v, want %#v", i, g, w)
 		}

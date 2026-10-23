@@ -59,6 +59,7 @@ func TestBootstrapIncludesPluginStatusSnapshot(t *testing.T) {
 func TestBootstrapPluginSnapshotFallsBackToDiscoveredState(t *testing.T) {
 	discovery := testDiscovery(t)
 	discovery.Manifest.Version = "2.3.4"
+	discovery.Manifest.Description = "Demo plugin"
 	discovery.Manifest.Provides = []string{"demo"}
 	registry, _ := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
 	server := NewServer(registry, nil)
@@ -68,7 +69,8 @@ func TestBootstrapPluginSnapshotFallsBackToDiscoveredState(t *testing.T) {
 		t.Fatalf("plugins = %#v", bootstrap.Plugins)
 	}
 	got := bootstrap.Plugins[0]
-	if got.Name != "demo" || got.Version != "2.3.4" || got.State != host.ProviderStateInactive || !got.Enabled {
+	if got.Name != "demo" || got.Version != "2.3.4" || got.Description != "Demo plugin" ||
+		got.State != host.ProviderStateInactive || !got.Enabled {
 		t.Fatalf("plugin = %#v", got)
 	}
 }

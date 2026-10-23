@@ -4,8 +4,7 @@ import assert from "node:assert/strict";
 import {
 	dependencyGraphModel,
 	relationshipGraphModel,
-	renderDependencyDetails,
-	renderPluginList,
+	renderPluginDetail,
 } from "./static/plugins.mjs";
 
 function fakeDocument() {
@@ -19,6 +18,9 @@ function fakeDocument() {
 				title: "",
 				textContent: "",
 				attributes: {},
+				type: "",
+				value: "",
+				disabled: false,
 				setAttribute(name, value) {
 					this.attributes[name] = String(value);
 				},
@@ -43,51 +45,14 @@ function textOf(node) {
 	return [node.textContent, ...node.children.map(textOf)].filter(Boolean).join(" ");
 }
 
-test("renders plugin lifecycle, capabilities and UI mounts", () => {
-	const document = fakeDocument();
-	const list = document.createElement("ul");
-	renderPluginList(document, list, [
-		{
-			name: "session",
-			version: "0.1.0",
-			state: "active",
-			enabled: true,
-			provides: ["session"],
-			depends_on: [],
-			mounts: [{ plugin: "session", id: "chat" }],
-		},
-		{
-			name: "missing-user",
-			state: "inactive",
-			missing: true,
-			enabled: true,
-			depends_on: ["missing"],
-		},
-	]);
-
-	assert.equal(list.children.length, 2);
-	const rendered = list.children.map(textOf).join("\n");
-	assert.match(rendered, /session/);
-	assert.match(rendered, /0\.1\.0/);
-	assert.match(rendered, /运行中/);
-	assert.match(rendered, /启用/);
-	assert.match(rendered, /session/);
-	assert.match(rendered, /Capability/);
-	assert.match(rendered, /UI Mount/);
-	assert.match(rendered, /session:chat/);
-	assert.match(rendered, /缺失/);
-	assert.match(rendered, /missing/);
-});
-
-test("renders a stable empty state", () => {
-	const document = fakeDocument();
-	const list = document.createElement("ul");
-	renderPluginList(document, list, []);
-	assert.equal(list.children.length, 1);
-	assert.equal(textOf(list.children[0]), "暂无插件");
-});
-
-
+function findNode(node, predicate) {
+	if (predicate(node)) return node;
+	for (const child of node.children || []) {
+		const found = findNode(child, predicate);
+		if (found) return found;
+	}
+	return null;
+}
 
 test("derives a deterministic dependency graph model", () => {
 	const model = dependencyGraphModel([
@@ -123,52 +88,109 @@ test("adds Host lifecycle edges without changing plugin dependency depth", () =>
 	assert.equal(session.mounts.length, 1);
 });
 
-test("renders selected plugin relationship details", () => {
+test("renders plugin info, lifecycle action, instances and relations", () => {
 	const document = fakeDocument();
 	const root = document.createElement("aside");
-	const model = relationshipGraphModel([
-		{ name: "agent", state: "active", provides: ["loop"], depends_on: ["session"], mounts: [] },
-		{ name: "session", state: "active", provides: ["session"], depends_on: [], mounts: [{ plugin: "session", id: "chat" }] },
-	]);
+	const plugins = [
+		{ name: "agent", state: "active", provides: ["loop"], depends_on: ["session"] },
+		{
+			name: "session",
+			version: "0.1.0",
+			description: "Session storage and chat UI",
+			state: "active",
+			selected_instance_id: "session",
+			enabled: true,
+			provides: ["session"],
+			depends_on: [],
+			mounts: [{ plugin: "session", id: "chat" }],
+			instances: [{
+				instance_id: "session",
+				generation: 3,
+				state: "active",
+				registrations: [{ capability: "session", method: "history" }],
+			}],
+			settings: { schema: [{ key: "limit", type: "number" }] },
+		},
+	];
+	const model = relationshipGraphModel(plugins);
+	let stopped = "";
+	const result = renderPluginDetail(document, root, model, plugins, "session", {
+		onStop: (plugin) => {
+			stopped = plugin.name;
+		},
+	});
 
-	renderDependencyDetails(document, root, model, "agent");
+	assert.equal(result.plugin.name, "session");
+	assert.ok(result.settingsRoot);
 	const rendered = textOf(root);
-	assert.match(rendered, /agent/);
-	assert.match(rendered, /运行中/);
-	assert.match(rendered, /Capability/);
-	assert.match(rendered, /loop/);
-	assert.match(rendered, /硬依赖/);
 	assert.match(rendered, /session/);
-	assert.match(rendered, /无 UI Mount/);
+	assert.match(rendered, /0\.1\.0/);
+	assert.match(rendered, /Session storage and chat UI/);
+	assert.match(rendered, /运行中/);
+	assert.match(rendered, /启用/);
+	assert.match(rendered, /G3/);
+	assert.match(rendered, /session\.history/);
+	assert.match(rendered, /Capability/);
+	assert.match(rendered, /被依赖/);
+	assert.match(rendered, /agent/);
+	assert.match(rendered, /session:chat/);
+
+	const stop = findNode(root, (node) => node.dataset?.action === "stop");
+	assert.ok(stop);
+	stop.listeners.click();
+	assert.equal(stopped, "session");
 });
 
-
-function findNode(node, predicate) {
-	if (predicate(node)) return node;
-	for (const child of node.children || []) {
-		const found = findNode(child, predicate);
-		if (found) return found;
-	}
-	return null;
-}
-
-test("selects one provider instance for display", () => {
+test("opens dependency links and clears the selection", () => {
 	const document = fakeDocument();
-	const list = document.createElement("ul");
-	const selectedInstanceIds = new Map();
-	let selection = null;
-	const plugin = {
+	const root = document.createElement("aside");
+	const plugins = [
+		{ name: "agent", state: "active", provides: ["loop"], depends_on: ["session"] },
+		{ name: "session", state: "active", provides: ["session"], depends_on: [] },
+	];
+	const model = relationshipGraphModel(plugins);
+	let selected = "";
+	let cleared = false;
+	renderPluginDetail(document, root, model, plugins, "agent", {
+		onSelectPlugin: (name) => {
+			selected = name;
+		},
+		onClear: () => {
+			cleared = true;
+		},
+	});
+
+	const sessionLink = findNode(
+		root,
+		(node) => node.tag === "button" && node.textContent === "session" && node.className.includes("plugin-relation-link"),
+	);
+	assert.ok(sessionLink);
+	sessionLink.listeners.click();
+	assert.equal(selected, "session");
+
+	const clear = findNode(root, (node) => node.className === "plugin-detail-clear");
+	assert.ok(clear);
+	clear.listeners.click();
+	assert.equal(cleared, true);
+});
+
+test("selects one provider instance and reports changes", () => {
+	const document = fakeDocument();
+	const root = document.createElement("aside");
+	const plugins = [{
 		name: "demo",
 		state: "active",
 		selected_instance_id: "demo-a",
 		enabled: true,
 		instances: [
-			{ instance_id: "demo-a", generation: 1, state: "active", registrations: [{ capability: "agent", method: "run" }] },
+			{ instance_id: "demo-a", generation: 1, state: "active", registrations: [] },
 			{ instance_id: "demo-b", generation: 2, state: "loading", registrations: [] },
 		],
-	};
-
-	renderPluginList(document, list, [plugin], {
+	}];
+	const model = relationshipGraphModel(plugins);
+	const selectedInstanceIds = new Map();
+	let selection = null;
+	renderPluginDetail(document, root, model, plugins, "demo", {
 		selectedInstanceIds,
 		onSelectInstance: (name, instanceID) => {
 			selection = { name, instanceID };
@@ -176,20 +198,61 @@ test("selects one provider instance for display", () => {
 		},
 	});
 
-	let rendered = list.children.map(textOf).join("\n");
-	assert.match(rendered, /demo-a/);
-	assert.match(rendered, /demo-b/);
-	assert.match(rendered, /运行中/);
-	assert.match(rendered, /agent\.run/);
-
-	const select = findNode(list, (node) => node.className === "plugin-instance-select");
+	let select = findNode(root, (node) => node.className === "plugin-instance-select");
 	assert.ok(select);
 	assert.equal(select.value, "demo-a");
 	select.value = "demo-b";
 	select.listeners.change();
 	assert.deepEqual(selection, { name: "demo", instanceID: "demo-b" });
 
-	renderPluginList(document, list, [plugin], { selectedInstanceIds });
-	rendered = list.children.map(textOf).join("\n");
-	assert.match(rendered, /加载中/);
+	root.replaceChildren();
+	renderPluginDetail(document, root, model, plugins, "demo", { selectedInstanceIds });
+	select = findNode(root, (node) => node.className === "plugin-instance-select");
+	assert.equal(select.value, "demo-b");
+	assert.match(textOf(root), /加载中/);
+	assert.match(textOf(root), /设置作用于当前活跃实例/);
+});
+
+test("renders a missing dependency without actions or settings", () => {
+	const document = fakeDocument();
+	const root = document.createElement("aside");
+	const plugins = [{ name: "agent", state: "active", provides: ["loop"], depends_on: ["missing"] }];
+	const model = relationshipGraphModel(plugins);
+	const result = renderPluginDetail(document, root, model, plugins, "missing", {});
+
+	assert.equal(result.plugin, null);
+	assert.equal(result.settingsRoot, null);
+	const rendered = textOf(root);
+	assert.match(rendered, /missing/);
+	assert.match(rendered, /缺失/);
+	assert.match(rendered, /未在插件目录中发现该依赖/);
+	assert.match(rendered, /agent/);
+	assert.equal(findNode(root, (node) => node.dataset?.action === "start"), null);
+	assert.equal(findNode(root, (node) => node.tag === "form"), null);
+});
+
+test("renders an overview with configurable plugin shortcuts", () => {
+	const document = fakeDocument();
+	const root = document.createElement("aside");
+	const plugins = [
+		{ name: "agent", state: "active", enabled: true, settings: { schema: [{ key: "a" }] } },
+		{ name: "session", state: "inactive", enabled: true },
+	];
+	const model = relationshipGraphModel(plugins);
+	let selected = "";
+	renderPluginDetail(document, root, model, plugins, "", {
+		onSelectPlugin: (name) => {
+			selected = name;
+		},
+	});
+
+	const rendered = textOf(root);
+	assert.match(rendered, /选择一个插件节点/);
+	assert.match(rendered, /1 运行中/);
+	assert.match(rendered, /1 未激活/);
+	assert.match(rendered, /可配置插件/);
+	const shortcut = findNode(root, (node) => node.tag === "button" && node.textContent === "agent");
+	assert.ok(shortcut);
+	shortcut.listeners.click();
+	assert.equal(selected, "agent");
 });

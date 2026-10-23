@@ -16,7 +16,7 @@
         <span id="host-status" class="host-status" data-state="connecting" role="status" aria-live="polite">连接中…</span>
       </div>
       <div class="topbar-actions">
-        <button id="plugins-toggle" class="toolbar-button" type="button" aria-controls="plugins" aria-expanded="false" title="插件中心：管理插件、设置和依赖关系（Esc 关闭）">
+        <button id="plugins-toggle" class="toolbar-button" type="button" aria-controls="plugins" aria-expanded="false" title="插件中心：启停、实例与设置（Esc 关闭）">
           插件中心
           <span id="plugin-count" class="count">0</span>
         </button>
@@ -36,56 +36,40 @@
     <section class="slot slot-bottom" data-slot="bottom" aria-label="底部区域"></section>
   </div>
 
-  <aside id="plugins" class="plugin-panel" hidden tabindex="-1" aria-label="插件中心">
-    <div class="plugin-header">
-      <strong>插件中心</strong>
-      <div class="panel-actions">
+  <dialog id="plugins" class="plugin-drawer" aria-labelledby="plugin-drawer-title">
+    <header class="plugin-drawer-header">
+      <div class="plugin-drawer-heading">
+        <strong id="plugin-drawer-title">插件中心</strong>
         <span id="plugin-summary">0 个插件</span>
+      </div>
+      <div class="plugin-drawer-actions">
+        <button id="plugin-rescan" class="secondary-button" type="button">重新扫描</button>
         <button id="plugins-close" class="icon-button" type="button" aria-label="关闭插件中心" title="关闭插件中心">×</button>
       </div>
-    </div>
-
-    <nav class="plugin-tabs" role="tablist" aria-label="插件中心视图">
-      <button class="plugin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="plugin-view-manage" data-plugin-view="manage">插件</button>
-      <button class="plugin-tab" type="button" role="tab" aria-selected="false" aria-controls="plugin-view-settings" data-plugin-view="settings">设置</button>
-      <button class="plugin-tab" type="button" role="tab" aria-selected="false" aria-controls="plugin-view-graph" data-plugin-view="graph">依赖关系</button>
-    </nav>
-
-    <section id="plugin-view-manage" class="plugin-view" role="tabpanel">
-      <div class="plugin-toolbar">
-        <span class="hint">启动时自动扫描；运行时可手动重新搜索。</span>
-        <button id="plugin-rescan" class="secondary-button" type="button">重新扫描</button>
-      </div>
-      <div id="plugin-action-status" class="plugin-action-status" aria-live="polite"></div>
-      <ul id="plugin-list" class="plugin-list"></ul>
-    </section>
-
-    <section id="plugin-view-settings" class="plugin-view" role="tabpanel" hidden>
-      <div class="settings-summary">
-        <span id="settings-summary">0 个可配置插件</span>
-      </div>
-      <div id="settings-list" class="settings-list"></div>
-    </section>
-
-    <section id="plugin-view-graph" class="plugin-view plugin-graph-view" role="tabpanel" hidden>
-      <div class="graph-toolbar">
-        <div class="graph-legend" aria-label="关系图例">
-          <span><i class="legend-node legend-mounted"></i>已挂载</span>
-          <span><i class="legend-node legend-available"></i>可用</span>
-          <span><i class="legend-node legend-degraded"></i>降级或缺失</span>
-          <span><i class="legend-line legend-mount"></i>装载</span>
-          <span><i class="legend-line legend-depends"></i>硬依赖</span>
+    </header>
+    <div id="plugin-action-status" class="plugin-action-status" aria-live="polite"></div>
+    <div class="plugin-drawer-body">
+      <section class="plugin-graph-pane" aria-label="插件依赖图">
+        <div class="graph-toolbar">
+          <div class="graph-legend" aria-label="关系图例">
+            <span><i class="legend-node legend-mounted"></i>运行中</span>
+            <span><i class="legend-node legend-available"></i>未激活</span>
+            <span><i class="legend-node legend-degraded"></i>失败或缺失</span>
+            <span><i class="legend-line legend-mount"></i>装载</span>
+            <span><i class="legend-line legend-depends"></i>硬依赖</span>
+          </div>
+          <span class="hint">点击节点查看详情，点击空白清除选择。</span>
         </div>
-        <span class="hint">点击插件节点查看关系详情。</span>
-      </div>
-      <div class="graph-workspace">
         <div id="plugin-graph" class="plugin-graph" aria-label="Host 与插件关系图"></div>
-        <aside id="plugin-graph-details" class="plugin-graph-details" aria-live="polite"></aside>
-      </div>
-      <div class="graph-edge-heading">关系列表</div>
-      <ul id="plugin-edge-list" class="plugin-edge-list" aria-label="Host 与插件关系列表"></ul>
-    </section>
-  </aside>
+        <details class="plugin-edge-details">
+          <summary>关系列表 <span id="plugin-edge-count" class="count">0</span></summary>
+          <ul id="plugin-edge-list" class="plugin-edge-list" aria-label="Host 与插件关系列表"></ul>
+        </details>
+      </section>
+      <aside id="plugin-detail" class="plugin-detail-pane" aria-label="插件详情"></aside>
+    </div>
+    <p id="plugin-selection-status" class="visually-hidden" aria-live="polite"></p>
+  </dialog>
 
   <aside id="diagnostics" class="diagnostic-panel" hidden tabindex="-1" aria-label="诊断">
     <div class="diagnostic-header">

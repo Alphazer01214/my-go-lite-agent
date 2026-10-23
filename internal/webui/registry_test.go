@@ -150,6 +150,39 @@ func TestBootstrapCarriesDiscoveryDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesResourcesWithRelativePluginRoot(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(cwd, "webui-relative-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	relativeDir, err := filepath.Rel(cwd, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeUIFiles(t, relativeDir, "ui/main.js")
+
+	discovery := plugin.Discovery{
+		Dir: relativeDir,
+		Manifest: plugin.Manifest{
+			Name:  "demo",
+			Entry: "demo",
+			UI:    &plugin.UIManifest{Entry: "ui/main.js"},
+		},
+	}
+	registry, diagnostics := NewRegistry(plugin.Discoveries{Plugins: []plugin.Discovery{discovery}})
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	if _, ok := registry.ResolveResource("demo", "ui/main.js"); !ok {
+		t.Fatal("resource was not resolved from a relative plugin root")
+	}
+}
+
 func hasCode(diagnostics []plugin.Diagnostic, code string) bool {
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Code == code {

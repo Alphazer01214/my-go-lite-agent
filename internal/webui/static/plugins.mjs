@@ -22,29 +22,38 @@ function displayState(plugin, instance) {
 	return instance?.state || plugin?.state || "inactive";
 }
 
+function stateBadge(document, state, missing = false) {
+	const badge = document.createElement("span");
+	const name = missing ? "missing" : state || "unknown";
+	badge.className = `state-badge state-${String(name).replace(/[^a-z0-9_-]/g, "-")}`;
+	badge.textContent = missing ? stateLabels.missing : (stateLabels[name] || name);
+	return badge;
+}
+
+function instanceDescription(instance) {
+	return `${instance?.instance_id || "实例"} · G${instance?.generation || 0} · ${stateLabels[instance?.state] || instance?.state || "未知"}`;
+}
+
 function instanceSelector(document, plugin, instance, handlers) {
 	const instances = Array.isArray(plugin?.instances) ? plugin.instances : [];
 	if (instances.length === 0) return null;
 	const wrap = document.createElement("div");
-	wrap.className = "plugin-instances";
-	wrap.dataset.label = "实例";
-	const label = document.createElement("span");
-	label.className = "plugin-detail-label";
-	label.textContent = "实例";
+	wrap.className = "plugin-instance-row";
 	const select = document.createElement("select");
 	select.className = "plugin-instance-select";
 	select.dataset.plugin = plugin.name || "";
+	select.setAttribute("aria-label", `${plugin.name || "插件"} 实例`);
 	for (const item of instances) {
 		const option = document.createElement("option");
 		option.value = item.instance_id || "";
-		option.textContent = `${item.instance_id || "实例"} · G${item.generation || 0} · ${stateLabels[item.state] || item.state || "未知"}`;
+		option.textContent = instanceDescription(item);
 		select.append(option);
 	}
 	select.value = instance?.instance_id || "";
 	select.addEventListener("change", () => {
 		handlers?.onSelectInstance?.(plugin.name, select.value);
 	});
-	wrap.append(label, select);
+	wrap.append(select);
 	return wrap;
 }
 
@@ -58,14 +67,16 @@ const nodeHeight = 76;
 const columnGap = 230;
 const rowGap = 96;
 
-function appendTextList(document, parent, className, label, values, emptyText, format = (value) => value) {
+function appendChipList(document, parent, className, label, values, emptyText, options = {}) {
 	const list = document.createElement("div");
 	list.className = className;
-	list.dataset.label = label;
-	const heading = document.createElement("span");
-	heading.className = "plugin-detail-label";
-	heading.textContent = label;
-	list.append(heading);
+	if (label) {
+		list.dataset.label = label;
+		const heading = document.createElement("span");
+		heading.className = "plugin-detail-label";
+		heading.textContent = label;
+		list.append(heading);
+	}
 	const entries = Array.isArray(values) ? values.filter(Boolean) : [];
 	if (entries.length === 0) {
 		const empty = document.createElement("span");
@@ -73,113 +84,73 @@ function appendTextList(document, parent, className, label, values, emptyText, f
 		empty.textContent = emptyText;
 		list.append(empty);
 		parent.append(list);
-		return;
+		return list;
 	}
+	const format = typeof options.format === "function" ? options.format : (value) => value;
 	for (const value of entries) {
-		const item = document.createElement("span");
+		const item = document.createElement(options.onSelect ? "button" : "span");
 		item.className = `${className}-item`;
+		if (options.onSelect) {
+			item.type = "button";
+			item.className += " plugin-relation-link";
+			item.title = `查看 ${format(value)}`;
+			item.addEventListener("click", () => options.onSelect(value));
+		}
 		item.textContent = format(value);
 		list.append(item);
 	}
 	parent.append(list);
+	return list;
 }
 
-function pluginAction(document, plugin, handlers) {
-	if (plugin.missing) return null;
-	const state = displayState(plugin, selectedProviderInstance(plugin, handlers));
-	const stopping = state === "active" || state === "loading" || state === "stopping";
+function appendMuted(document, parent, text) {
+	const muted = document.createElement("span");
+	muted.className = "plugin-muted";
+	muted.textContent = text;
+	parent.append(muted);
+	return muted;
+}
+
+function appendDetailSection(document, parent, title) {
+	const section = document.createElement("section");
+	section.className = "plugin-detail-section";
+	const heading = document.createElement("h3");
+	heading.className = "plugin-detail-heading";
+	heading.textContent = title;
+	section.append(heading);
+	parent.append(section);
+	return section;
+}
+
+function pluginAction(document, plugin, state, handlers) {
+	if (!plugin || plugin.missing) return null;
+	const busy = state === "loading" || state === "stopping";
+	const stopping = state === "active";
+	const blocked = !stopping && plugin.enabled === false;
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = stopping ? "plugin-action plugin-stop" : "plugin-action plugin-start";
-	button.textContent = stopping ? "停止" : "启动";
+	button.textContent = busy
+		? state === "loading" ? "加载中…" : "停止中…"
+		: stopping ? "停止" : "启动";
 	button.dataset.action = stopping ? "stop" : "start";
 	button.dataset.plugin = plugin.name || "";
-	button.title = stopping ? `停止 ${plugin.name || "插件"}` : `启动 ${plugin.name || "插件"}`;
+	button.disabled = busy || blocked;
+	if (busy) {
+		button.title = state === "loading" ? `${plugin.name || "插件"} 加载中` : `${plugin.name || "插件"} 停止中`;
+	} else if (blocked) {
+		button.title = `${plugin.name || "插件"} 已禁用，无法启动`;
+	} else {
+		button.title = stopping ? `停止 ${plugin.name || "插件"}` : `启动 ${plugin.name || "插件"}`;
+	}
 	button.setAttribute("aria-label", button.title);
-	button.addEventListener("click", () => {
-		const action = stopping ? handlers.onStop : handlers.onStart;
-		action?.(plugin, button);
-	});
+	if (!busy && !blocked) {
+		button.addEventListener("click", () => {
+			const action = stopping ? handlers.onStop : handlers.onStart;
+			action?.(plugin, button);
+		});
+	}
 	return button;
-}
-
-export function renderPluginList(document, list, plugins, handlers = {}) {
-	const entries = Array.isArray(plugins) ? plugins : [];
-	list.replaceChildren();
-
-	if (entries.length === 0) {
-		const empty = document.createElement("li");
-		empty.className = "plugin-empty";
-		empty.textContent = "暂无插件";
-		list.append(empty);
-		return;
-	}
-
-	for (const plugin of entries) {
-		const row = document.createElement("li");
-		row.className = "plugin-row";
-		row.dataset.plugin = plugin.name || "";
-
-		const primary = document.createElement("div");
-		primary.className = "plugin-primary";
-		const name = document.createElement("strong");
-		name.textContent = plugin.name || "未命名插件";
-		primary.append(name);
-		if (plugin.version) {
-			const version = document.createElement("span");
-			version.className = "plugin-version";
-			version.textContent = plugin.version;
-			primary.append(version);
-		}
-		const action = pluginAction(document, plugin, handlers);
-		if (action) primary.append(action);
-		row.append(primary);
-
-		const selectedInstance = selectedProviderInstance(plugin, handlers);
-		const status = document.createElement("div");
-		status.className = "plugin-status";
-		const state = document.createElement("span");
-		const stateName = displayState(plugin, selectedInstance);
-		state.className = `state-badge state-${stateName.replace(/[^a-z0-9_-]/g, "-") || "unknown"}`;
-		state.textContent = stateLabels[stateName] || stateName || "未知";
-		status.append(state);
-		const selector = instanceSelector(document, plugin, selectedInstance, handlers);
-		if (selector) status.append(selector);
-		const enabled = document.createElement("span");
-		enabled.className = plugin.enabled ? "plugin-enabled" : "plugin-disabled";
-		enabled.textContent = plugin.enabled ? "启用" : "禁用";
-		status.append(enabled);
-		row.append(status);
-
-		appendTextList(
-			document,
-			row,
-			"plugin-registrations",
-			"Registration",
-			selectedInstance?.registrations,
-			"无 Registration",
-			(item) => `${item?.capability || ""}.${item?.method || ""}`,
-		);
-		if (selectedInstance?.failure_message) {
-			const failure = document.createElement("div");
-			failure.className = "plugin-failure";
-			failure.textContent = `${selectedInstance.failure_code || "failed"}: ${selectedInstance.failure_message}`;
-			row.append(failure);
-		}
-		appendTextList(document, row, "plugin-capabilities", "Capability", plugin.provides, "无 Capability");
-		appendTextList(document, row, "plugin-dependencies", "依赖", plugin.depends_on, "无硬依赖");
-		appendTextList(
-			document,
-			row,
-			"plugin-mounts",
-			"UI Mount",
-			plugin.mounts,
-			"无 UI Mount",
-			(mount) => `${mount?.plugin || plugin.name || ""}:${mount?.id || ""}`,
-		);
-
-		list.append(row);
-	}
 }
 
 function buildRelationshipGraphModel(plugins, includeHost) {
@@ -328,18 +299,22 @@ export function renderDependencyGraph(document, root, plugins, options = {}) {
 	const model = relationshipGraphModel(plugins);
 	const selectedId = options.selectedId || "";
 	const onSelect = typeof options.onSelect === "function" ? options.onSelect : null;
+	const scrollLeft = root.scrollLeft || 0;
+	const scrollTop = root.scrollTop || 0;
 	root.replaceChildren();
 	if (model.nodes.length === 0) {
 		const empty = document.createElement("p");
 		empty.className = "plugin-empty";
 		empty.textContent = "暂无可视化的插件依赖";
 		root.append(empty);
+		root.scrollLeft = scrollLeft;
+		root.scrollTop = scrollTop;
 		return model;
 	}
 
 	const svg = svgElement(document, "svg", {
 		viewBox: `0 0 ${model.width} ${model.height}`,
-		role: "img",
+		role: "group",
 		"aria-label": "Host 与插件关系图",
 		preserveAspectRatio: "xMidYMid meet",
 	});
@@ -347,8 +322,11 @@ export function renderDependencyGraph(document, root, plugins, options = {}) {
 	title.textContent = "Host 与插件关系图";
 	svg.append(title);
 	const desc = svgElement(document, "desc");
-	desc.textContent = "实线箭头表示硬依赖，虚线箭头表示 Host 装载。点击插件可查看关系详情。";
+	desc.textContent = "实线箭头表示硬依赖，虚线箭头表示 Host 装载。点击插件查看详情，点击空白清除选择。";
 	svg.append(desc);
+	svg.addEventListener("click", (event) => {
+		if (event.target === svg) onSelect?.("");
+	});
 
 	const defs = svgElement(document, "defs");
 	for (const type of ["depends", "mount"]) {
@@ -413,17 +391,18 @@ export function renderDependencyGraph(document, root, plugins, options = {}) {
 			class: `graph-node-group${isSelected ? " is-selected" : ""}${selectedId && !isRelated ? " is-muted" : ""}`,
 			role: node.kind === "plugin" ? "button" : "img",
 			"aria-label": nodeDescription(node),
+			"aria-current": isSelected ? "true" : "false",
 		});
 		if (node.kind === "plugin") {
 			group.setAttribute("tabindex", "0");
 			group.addEventListener("click", (event) => {
 				event.stopPropagation();
-				onSelect?.(isSelected ? "" : node.id);
+				onSelect?.(node.id);
 			});
 			group.addEventListener("keydown", (event) => {
 				if (event.key === "Enter" || event.key === " ") {
 					event.preventDefault();
-					onSelect?.(isSelected ? "" : node.id);
+					onSelect?.(node.id);
 				}
 			});
 		}
@@ -457,56 +436,217 @@ export function renderDependencyGraph(document, root, plugins, options = {}) {
 		svg.append(group);
 	}
 	root.append(svg);
+	root.scrollLeft = scrollLeft;
+	root.scrollTop = scrollTop;
 	return model;
 }
 
-function detailRow(document, root, label, values, emptyText) {
-	const row = document.createElement("div");
-	row.className = "graph-detail-row";
-	const term = document.createElement("span");
-	term.className = "plugin-detail-label";
-	term.textContent = label;
-	row.append(term);
-	const entries = Array.isArray(values) ? values.filter(Boolean) : [];
-	const value = document.createElement("span");
-	value.className = entries.length > 0 ? "graph-detail-value" : "plugin-muted";
-	value.textContent = entries.length > 0 ? entries.join("、") : emptyText;
-	row.append(value);
-	root.append(row);
+function stateCounts(plugins) {
+	const order = ["active", "loading", "inactive", "stopping", "failed", "missing"];
+	const counts = new Map();
+	for (const plugin of Array.isArray(plugins) ? plugins : []) {
+		const state = plugin?.missing ? "missing" : (plugin?.state || "inactive");
+		counts.set(state, (counts.get(state) || 0) + 1);
+	}
+	return order.filter((state) => counts.has(state)).map((state) => [state, counts.get(state)]);
 }
 
-export function renderDependencyDetails(document, root, model, selectedId) {
+function renderPluginOverview(document, root, plugins, handlers) {
+	const panel = document.createElement("div");
+	panel.className = "plugin-overview";
+	const title = document.createElement("strong");
+	title.className = "plugin-overview-title";
+	title.textContent = "选择一个插件节点";
+	panel.append(title);
+	const hint = document.createElement("p");
+	hint.className = "plugin-overview-hint";
+	hint.textContent = "点击左侧图中的节点，查看状态、实例、依赖和设置。点击空白处清除选择。";
+	panel.append(hint);
+
+	const stats = document.createElement("div");
+	stats.className = "plugin-overview-stats";
+	const counts = stateCounts(plugins);
+	if (counts.length === 0) {
+		appendMuted(document, stats, "暂无插件");
+	} else {
+		for (const [state, count] of counts) {
+			const badge = stateBadge(document, state);
+			badge.textContent = `${count} ${stateLabels[state] || state}`;
+			stats.append(badge);
+		}
+	}
+	panel.append(stats);
+
+	const configurable = (Array.isArray(plugins) ? plugins : [])
+		.filter((plugin) => !plugin?.missing && Array.isArray(plugin?.settings?.schema) && plugin.settings.schema.length > 0);
+	const section = appendDetailSection(document, panel, "可配置插件");
+	if (configurable.length === 0) {
+		appendMuted(document, section, "暂无插件声明设置。");
+	} else {
+		const links = document.createElement("div");
+		links.className = "plugin-overview-links";
+		for (const plugin of configurable) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "plugin-relation-link";
+			button.textContent = plugin.name;
+			button.title = `查看 ${plugin.name} 的设置`;
+			button.addEventListener("click", () => handlers.onSelectPlugin?.(plugin.name));
+			links.append(button);
+		}
+		section.append(links);
+	}
+	root.append(panel);
+}
+
+export function renderPluginDetail(document, root, model, plugins, selectedId, handlers = {}) {
 	root.replaceChildren();
-	const node = model.nodes.find((item) => item.id === selectedId && item.kind === "plugin");
-	if (!node) {
-		const empty = document.createElement("p");
-		empty.className = "graph-detail-empty";
-		empty.textContent = "选择插件节点，查看它的 Capability、依赖和 Mount。";
-		root.append(empty);
-		return;
+	const items = Array.isArray(plugins) ? plugins : [];
+	const nodes = Array.isArray(model?.nodes) ? model.nodes : [];
+	const selected = selectedId
+		? nodes.find((node) => node.id === selectedId && node.kind === "plugin")
+		: null;
+	const plugin = selectedId ? items.find((item) => item?.name === selectedId) || null : null;
+
+	if (!selectedId || !selected) {
+		renderPluginOverview(document, root, items, handlers);
+		return { plugin: null, settingsRoot: null };
 	}
 
-	const heading = document.createElement("div");
-	heading.className = "graph-detail-heading";
-	const name = document.createElement("strong");
-	name.textContent = node.id;
-	heading.append(name);
-	const state = document.createElement("span");
-	state.className = `state-badge state-${String(node.state || "unknown").replace(/[^a-z0-9_-]/g, "-")}`;
-	state.textContent = node.missing ? "缺失" : (stateLabels[node.state] || node.state);
-	heading.append(state);
-	root.append(heading);
+	const missing = !plugin || plugin.missing === true || selected.missing === true;
+	const instance = missing ? null : selectedProviderInstance(plugin, handlers);
+	const state = missing ? "missing" : displayState(plugin, instance);
 
-	detailRow(document, root, "Capability", node.provides, "无 Capability");
-	detailRow(document, root, "硬依赖", node.dependsOn, "无硬依赖");
-	detailRow(document, root, "被依赖", node.usedBy, "无依赖方");
-	detailRow(
+	const header = document.createElement("header");
+	header.className = "plugin-detail-header";
+	const identity = document.createElement("div");
+	identity.className = "plugin-detail-identity";
+	const name = document.createElement("strong");
+	name.className = "plugin-detail-name";
+	name.textContent = selectedId;
+	identity.append(name);
+	if (plugin?.version) {
+		const version = document.createElement("span");
+		version.className = "plugin-version";
+		version.textContent = plugin.version;
+		identity.append(version);
+	}
+	const badges = document.createElement("div");
+	badges.className = "plugin-detail-badges";
+	badges.append(stateBadge(document, state, missing));
+	if (!missing) {
+		const enabled = document.createElement("span");
+		enabled.className = plugin.enabled === false ? "plugin-disabled" : "plugin-enabled";
+		enabled.textContent = plugin.enabled === false ? "禁用" : "启用";
+		badges.append(enabled);
+	}
+	identity.append(badges);
+	header.append(identity);
+
+	const actions = document.createElement("div");
+	actions.className = "plugin-detail-actions";
+	const action = pluginAction(document, plugin, state, handlers);
+	if (action) actions.append(action);
+	const clear = document.createElement("button");
+	clear.type = "button";
+	clear.className = "plugin-detail-clear";
+	clear.textContent = "清除选择";
+	clear.addEventListener("click", () => handlers.onClear?.());
+	actions.append(clear);
+	header.append(actions);
+	root.append(header);
+
+	if (!missing && plugin?.description) {
+		const description = document.createElement("p");
+		description.className = "plugin-detail-description";
+		description.textContent = plugin.description;
+		root.append(description);
+	}
+
+	if (!missing && instance?.failure_message) {
+		const failure = document.createElement("div");
+		failure.className = "plugin-failure";
+		failure.textContent = `${instance.failure_code || "failed"}: ${instance.failure_message}`;
+		root.append(failure);
+	}
+
+	const instanceSection = appendDetailSection(document, root, "实例");
+	if (missing || !plugin) {
+		appendMuted(document, instanceSection, "未在插件目录中发现该依赖，没有可展示的实例。");
+	} else {
+		const instances = Array.isArray(plugin.instances) ? plugin.instances : [];
+		if (instances.length === 0) {
+			appendMuted(document, instanceSection, "暂无实例。");
+		} else if (instances.length === 1) {
+			const meta = document.createElement("span");
+			meta.className = "plugin-instance-meta";
+			meta.textContent = instanceDescription(instances[0]);
+			instanceSection.append(meta);
+		} else {
+			const selector = instanceSelector(document, plugin, instance, handlers);
+			if (selector) instanceSection.append(selector);
+		}
+		if (instance) {
+			appendChipList(
+				document,
+				instanceSection,
+				"plugin-registrations",
+				"Registration",
+				instance.registrations,
+				"无 Registration",
+				{ format: (item) => `${item?.capability || ""}.${item?.method || ""}` },
+			);
+		}
+	}
+
+	const relationSection = appendDetailSection(document, root, "关系");
+	appendChipList(document, relationSection, "plugin-capabilities", "Capability", selected.provides, "无 Capability");
+	appendChipList(
 		document,
-		root,
-		"UI Mount",
-		node.mounts.map((mount) => `${mount?.plugin || node.id}:${mount?.id || ""}`),
-		"无 UI Mount",
+		relationSection,
+		"plugin-dependencies",
+		"硬依赖",
+		selected.dependsOn,
+		"无硬依赖",
+		{ onSelect: (value) => handlers.onSelectPlugin?.(value) },
 	);
+	appendChipList(
+		document,
+		relationSection,
+		"plugin-used-by",
+		"被依赖",
+		selected.usedBy,
+		"无依赖方",
+		{ onSelect: (value) => handlers.onSelectPlugin?.(value) },
+	);
+	appendChipList(
+		document,
+		relationSection,
+		"plugin-mounts",
+		"UI Mount",
+		selected.mounts,
+		"无 UI Mount",
+		{ format: (mount) => `${mount?.plugin || selectedId}:${mount?.id || ""}` },
+	);
+
+	let settingsRoot = null;
+	if (!missing && plugin) {
+		const settingsSection = appendDetailSection(document, root, "设置");
+		if (Array.isArray(plugin.instances) && plugin.instances.length > 1) {
+			appendMuted(document, settingsSection, "设置作用于当前活跃实例，不随实例选择改变。");
+		}
+		const schema = Array.isArray(plugin.settings?.schema) ? plugin.settings.schema : [];
+		if (schema.length === 0) {
+			appendMuted(document, settingsSection, "该插件未提供可配置项。");
+		} else {
+			settingsRoot = document.createElement("div");
+			settingsRoot.className = "plugin-settings";
+			settingsRoot.dataset.pluginSettings = selectedId;
+			settingsSection.append(settingsRoot);
+		}
+	}
+
+	return { plugin: missing ? null : plugin, settingsRoot };
 }
 
 // renderDependencyEdgeList reuses the model renderDependencyGraph already built

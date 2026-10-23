@@ -577,7 +577,7 @@ Loader 不调用 `setData` 和 `runCommand`。这两个方法由 Shell 调用。
 
 `app.js` 的职责：
 
-- 读 Bootstrap，渲染插件中心和设置页；
+- 读 Bootstrap，渲染插件中心、依赖图和选中插件的设置；
 - 建 Mount Loader 并按 Bootstrap 装载 Mount；
 - 把 UI Push 分发到对应组件的 `setData` 和 `runCommand`；
 - 渲染诊断面板；
@@ -598,17 +598,16 @@ UI Push 分发的规则：
 
 Shell 的诊断来源分两路：服务端 Bootstrap 的诊断和浏览器本地产生的诊断。服务端诊断在每次 Bootstrap 时整体替换。
 
-### 10.4 插件中心与设置页
+### 10.4 插件中心与设置
 
-`plugins.mjs` 和 `settings.mjs` 是纯渲染模块。它们不发请求。
+`plugins.mjs` 和 `settings.mjs` 是纯渲染模块。它们不发请求。插件中心使用原生 `dialog` Drawer，图区与详情并排，窄屏上下排列。
 
 | 导出 | 职责 |
 |---|---|
-| `renderPluginList` | 插件列表、状态徽标、实例下拉框、启停按钮 |
 | `renderDependencyGraph` | 依赖关系 SVG 图 |
-| `renderDependencyDetails` | 选中节点的详情 |
+| `renderPluginDetail` | 选中插件的状态、启停、实例、关系，以及设置挂载点；无选中时渲染概览 |
 | `renderDependencyEdgeList` | 关系的文本列表 |
-| `renderSettingsList` | 设置表单 |
+| `renderSettingsForm` | 单插件设置表单；不可用时只渲染提示 |
 
 依赖图的模型：
 
@@ -618,6 +617,9 @@ Shell 的诊断来源分两路：服务端 Bootstrap 的诊断和浏览器本地
 - `mount` 边从 Host 指向非缺失的插件。
 - 缺失节点以 `missing` 状态显示。
 - 选中节点时，它和直接相连的节点高亮，其余淡出。
+- 点击节点保留选中；点击画布空白或详情里的「清除选择」取消选中。
+
+Shell 只对当前选中插件调用 `settings.get`。设置表单挂在 `renderPluginDetail` 返回的 `settingsRoot` 上；插件不可用时该区域只渲染提示。切换实例时 Shell 复用已有表单节点，不重新读取设置。
 
 设置表单的取值规则：
 

@@ -21,10 +21,10 @@ func TestHandlerServesShellBootstrapAndPlatformAssets(t *testing.T) {
 		contentType string
 		contains    string
 	}{
-		{"/", "text/html", "id=\"settings-list\""},
-		{"/platform/app.js", "text/javascript", "renderPluginList"},
-		{"/platform/plugins.mjs", "text/javascript", "renderPluginList"},
-		{"/platform/settings.mjs", "text/javascript", "renderSettingsList"},
+		{"/", "text/html", "id=\"plugin-detail\""},
+		{"/platform/app.js", "text/javascript", "renderPluginDetail"},
+		{"/platform/plugins.mjs", "text/javascript", "renderPluginDetail"},
+		{"/platform/settings.mjs", "text/javascript", "renderSettingsForm"},
 		{"/platform/loader.mjs", "text/javascript", "createMountLoader"},
 		{"/platform/lite-agent.js", "text/javascript", "createLiteAgent"},
 		{"/bridge/bootstrap", "application/json", "\"version\":1"},

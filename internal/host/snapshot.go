@@ -9,6 +9,7 @@ import (
 type PluginSnapshot struct {
 	Name               string                   `json:"name"`
 	Version            string                   `json:"version,omitempty"`
+	Description        string                   `json:"description,omitempty"`
 	State              string                   `json:"state"`
 	SelectedInstanceID string                   `json:"selected_instance_id,omitempty"`
 	Instances          []PluginInstanceSnapshot `json:"instances,omitempty"`
@@ -85,6 +86,7 @@ func (h *Host) PluginSnapshot() []PluginSnapshot {
 		items = append(items, PluginSnapshot{
 			Name:               manifest.Name,
 			Version:            manifest.Version,
+			Description:        manifest.Description,
 			State:              state,
 			SelectedInstanceID: selectedID,
 			Instances:          append([]PluginInstanceSnapshot(nil), providerInstances...),

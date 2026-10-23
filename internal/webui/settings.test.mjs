@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
 	collectSettingsValues,
 	pluginSettingsAvailability,
-	renderSettingsList,
+	renderSettingsForm,
 	settingsValuesFromResponse,
 } from "./static/settings.mjs";
 
@@ -25,6 +25,7 @@ function fakeDocument() {
 				autocomplete: "",
 				placeholder: "",
 				disabled: false,
+				listeners: {},
 				elements: {
 					items: new Map(),
 					namedItem(name) {
@@ -43,7 +44,9 @@ function fakeDocument() {
 					};
 					for (const child of children) collect(child);
 				},
-				addEventListener() {},
+				addEventListener(name, listener) {
+					this.listeners[name] = listener;
+				},
 				querySelector(selector) {
 					const className = selector.slice(1);
 					const stack = [...this.children];
@@ -131,35 +134,63 @@ test("renders settings fields and calls lifecycle hooks", () => {
 	const document = fakeDocument();
 	const root = document.createElement("div");
 	const calls = [];
-	renderSettingsList(document, root, [
-		{
-			name: "demo",
-			version: "1.0.0",
-			settings: {
-				get: { capability: "demo", method: "settings.get" },
-				save: { capability: "demo", method: "settings.save" },
-				schema: [
-					{ key: "endpoint", label: "Endpoint", type: "string", required: true },
-					{ key: "token", label: "Token", type: "secret" },
-					{ key: "enabled", label: "Enabled", type: "boolean" },
-				],
-			},
+	const plugin = {
+		name: "demo",
+		version: "1.0.0",
+		settings: {
+			get: { capability: "demo", method: "settings.get" },
+			save: { capability: "demo", method: "settings.save" },
+			schema: [
+				{ key: "endpoint", label: "Endpoint", type: "string", required: true },
+				{ key: "token", label: "Token", type: "secret" },
+				{ key: "enabled", label: "Enabled", type: "boolean" },
+			],
 		},
-	], {
-		onLoad(plugin, form) {
-			calls.push(["load", plugin.name, form]);
+	};
+	const form = renderSettingsForm(document, root, plugin, {
+		onLoad(loadedPlugin, loadedForm) {
+			calls.push(["load", loadedPlugin.name, loadedForm]);
 		},
-		onSave(plugin, values, form) {
-			calls.push(["save", plugin.name, values, form]);
+		onSave(savedPlugin, values, savedForm) {
+			calls.push(["save", savedPlugin.name, values, savedForm]);
 		},
 	});
 
 	assert.equal(root.children.length, 1);
+	assert.equal(root.children[0], form);
 	assert.equal(calls[0][0], "load");
-	const form = calls[0][2];
+	assert.equal(form.dataset.plugin, "demo");
 	assert.equal(form.elements.namedItem("token").type, "password");
 	assert.equal(form.elements.namedItem("enabled").type, "checkbox");
 	assert.match(form.querySelector(".settings-status").textContent, /加载中/);
+});
+
+test("submits collected settings values", () => {
+	const document = fakeDocument();
+	const root = document.createElement("div");
+	let saved = null;
+	const plugin = {
+		name: "demo",
+		settings: {
+			get: { capability: "demo", method: "settings.get" },
+			save: { capability: "demo", method: "settings.save" },
+			schema: [
+				{ key: "endpoint", type: "string" },
+				{ key: "retries", type: "number" },
+				{ key: "token", type: "secret" },
+			],
+		},
+	};
+	const form = renderSettingsForm(document, root, plugin, {
+		onSave(_plugin, values) {
+			saved = values;
+		},
+	});
+	form.elements.namedItem("endpoint").value = "https://example.test";
+	form.elements.namedItem("retries").value = "3";
+	form.elements.namedItem("token").value = "";
+	form.listeners.submit({ preventDefault() {} });
+	assert.deepEqual(saved, { endpoint: "https://example.test", retries: 3 });
 });
 
 test("maps plugin lifecycle states to settings availability", () => {
@@ -172,43 +203,42 @@ test("maps plugin lifecycle states to settings availability", () => {
 	assert.match(pluginSettingsAvailability({ missing: true }).message, /缺失/);
 });
 
-test("does not load settings or allow saving while the plugin is inactive", () => {
+test("does not render a form or load settings while the plugin is inactive", () => {
 	const document = fakeDocument();
 	const root = document.createElement("div");
 	const calls = [];
-	renderSettingsList(document, root, [
-		{
-			name: "sandbox",
-			state: "inactive",
-			settings: {
-				get: { capability: "sandbox", method: "settings.get" },
-				save: { capability: "sandbox", method: "settings.save" },
-				schema: [{ key: "default_action", label: "Default action", type: "string" }],
-			},
+	const form = renderSettingsForm(document, root, {
+		name: "sandbox",
+		state: "inactive",
+		settings: {
+			get: { capability: "sandbox", method: "settings.get" },
+			save: { capability: "sandbox", method: "settings.save" },
+			schema: [{ key: "default_action", label: "Default action", type: "string" }],
 		},
-	], {
+	}, {
 		availability: pluginSettingsAvailability,
-		onLoad(plugin, form) {
-			calls.push(["load", plugin.name, form]);
+		onLoad(plugin, loadedForm) {
+			calls.push(["load", plugin.name, loadedForm]);
 		},
-		onSave(plugin, values, form) {
-			calls.push(["save", plugin.name, values, form]);
+		onSave(plugin, values, savedForm) {
+			calls.push(["save", plugin.name, values, savedForm]);
 		},
 	});
 
+	assert.equal(form, null);
 	assert.deepEqual(calls, []);
-	const section = root.children[0];
-	assert.match(section.className, /settings-plugin-unavailable/);
-	assert.equal(section.querySelector(".settings-save").disabled, true);
-	assert.match(section.querySelector(".settings-status").textContent, /插件未启动/);
+	assert.equal(root.children.length, 1);
+	assert.match(root.children[0].className, /settings-unavailable/);
+	assert.match(root.children[0].textContent, /插件未启动/);
 });
 
-test("renders a stable empty settings state", () => {
+test("renders a stable empty state for a plugin without settings", () => {
 	const document = fakeDocument();
 	const root = document.createElement("div");
-	renderSettingsList(document, root, []);
+	const form = renderSettingsForm(document, root, { name: "demo", settings: { schema: [] } });
+	assert.equal(form, null);
 	assert.equal(root.children.length, 1);
-	assert.equal(root.children[0].textContent, "暂无可配置插件");
+	assert.equal(root.children[0].textContent, "该插件未提供可配置项。");
 });
 
 

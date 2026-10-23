@@ -70,12 +70,13 @@ func NewRegistry(discoveries plugin.Discoveries) (*Registry, []plugin.Diagnostic
 		seenPlugins[pluginName] = struct{}{}
 		seenMountIDs[pluginName] = make(map[string]struct{})
 		registry.plugins[pluginName] = BootstrapPlugin{PluginSnapshot: host.PluginSnapshot{
-			Name:      pluginName,
-			Version:   discovery.Manifest.Version,
-			State:     host.ProviderStateInactive,
-			Enabled:   true,
-			Provides:  append([]string(nil), discovery.Manifest.Provides...),
-			DependsOn: append([]string(nil), discovery.Manifest.DependsOn...),
+			Name:        pluginName,
+			Version:     discovery.Manifest.Version,
+			Description: discovery.Manifest.Description,
+			State:       host.ProviderStateInactive,
+			Enabled:     true,
+			Provides:    append([]string(nil), discovery.Manifest.Provides...),
+			DependsOn:   append([]string(nil), discovery.Manifest.DependsOn...),
 		},
 			Settings: discovery.Manifest.Settings,
 		}
@@ -300,7 +301,10 @@ func (r *Registry) ResolveResource(pluginName, packagePath string) (string, bool
 	if !ok {
 		return "", false
 	}
-	candidate := filepath.Join(pluginRoot, filepath.FromSlash(cleaned))
+	candidate, err := filepath.Abs(filepath.Join(pluginRoot, filepath.FromSlash(cleaned)))
+	if err != nil {
+		return "", false
+	}
 	realPath, err := filepath.EvalSymlinks(candidate)
 	if err != nil || !withinRoot(resourceRoot, realPath) {
 		return "", false
