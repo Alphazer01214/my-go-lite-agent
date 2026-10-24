@@ -25,7 +25,7 @@
 
 | 文档 | 主题 |
 |---|---|
-| [2026-10-24-git-sidebar-plan-handoff.md](2026-10-24-git-sidebar-plan-handoff.md) | 待实现：Git 侧边栏、右侧自动 tab、plan 悬浮窗与 Session facts 注入 |
+| [2026-10-24-git-readonly-revision.md](2026-10-24-git-readonly-revision.md) | 待实现：Git 只读面板与只读工具、时机化读取、右侧自动 tab；plan 待重议 |
 | [2026-10-15-host-runtime-infrastructure-development-log.md](2026-10-15-host-runtime-infrastructure-development-log.md) | Plugin Instance、执行上下文、Generation 隔离。三条并发规则在此 |
 | [2026-10-16-conversation-cancel-recovery-debug-log.md](2026-10-16-conversation-cancel-recovery-debug-log.md) | `turn_end` 缺失导致会话卡在 `running` |
 | [2026-10-18-session-workspace-multichat.md](2026-10-18-session-workspace-multichat.md) | Session 恢复缺陷、Workspace 绑定、多会话标签 |
@@ -41,6 +41,7 @@
 
 | 文档 | 主题 | 失效部分 |
 |---|---|---|
+| [2026-10-24-git-sidebar-plan-handoff.md](2026-10-24-git-sidebar-plan-handoff.md) | 初版：Git 侧边栏、plan 悬浮窗与 Session facts 注入 | git 部分已被 [2026-10-24-git-readonly-revision.md](2026-10-24-git-readonly-revision.md) 取代；plan 部分重议前先读取代者第 5 节 |
 | [2026-10-15-minimal-stack-debug-log.md](2026-10-15-minimal-stack-debug-log.md) | 最小组合的三个 bug | BUG-003 的 0600 权限修复已丢失 |
 | [2026-10-15-webui-interaction-ux-improvement-log.md](2026-10-15-webui-interaction-ux-improvement-log.md) | Shell 交互优化与 B1 到 B9 重构 | B9 的 `evicted` 帧已删除 |
 | [2026-10-16-plugin-center-session-ux-log.md](2026-10-16-plugin-center-session-ux-log.md) | 插件中心、依赖图、Session UX | 「启动前校验 `depends_on`」不成立 |
