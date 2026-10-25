@@ -1,7 +1,5 @@
 package agent
 
-import "encoding/json"
-
-func send(userPrompt string) (json.RawMessage, error) {
+func (a *Agent) send(input string) {
 
 }
