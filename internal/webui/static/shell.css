@@ -167,8 +167,46 @@ select:focus-visible {
 
 .workspace {
   display: grid;
-  grid-template-columns: var(--left-width) minmax(320px, 1fr) var(--right-width);
+  grid-template-columns: var(--left-width) 6px minmax(320px, 1fr) 6px var(--right-width);
   min-height: 0;
+}
+
+/* Draggable splitters between the fluid center and the two side columns. */
+.col-resizer {
+  position: relative;
+  width: 6px;
+  min-width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.col-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  content: "";
+  transition: background .12s ease;
+}
+
+.col-resizer:hover,
+.col-resizer:focus-visible {
+  outline: none;
+}
+
+.col-resizer:hover::after,
+.col-resizer:focus-visible::after,
+body.resizing .col-resizer::after {
+  background: var(--accent);
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .slot {
@@ -188,6 +226,46 @@ select:focus-visible {
 
 .slot-right {
   border-left: 1px solid var(--border);
+}
+
+/* Slot tab bar: the loader groups non-overlay mounts sharing a slot. */
+.slot-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.slot-tabs button {
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.slot-tabs button:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.slot-tabs button.active {
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.slot-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .slot-bottom {
@@ -299,6 +377,10 @@ select:focus-visible {
     grid-template-columns: minmax(180px, 220px) minmax(320px, 1fr);
   }
 
+  .col-resizer {
+    display: none;
+  }
+
   .slot-right {
     grid-column: 1 / -1;
     min-height: 180px;
@@ -311,6 +393,10 @@ select:focus-visible {
   .workspace {
     display: flex;
     flex-direction: column;
+  }
+
+  .col-resizer {
+    display: none;
   }
 
   .slot-left,

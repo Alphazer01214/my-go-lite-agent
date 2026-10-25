@@ -1,4 +1,5 @@
 import { createMountLoader, mountKeyFor } from "./loader.mjs";
+import { initColumnLayout } from "./layout.mjs";
 import { LiteAgent } from "./lite-agent.js";
 import {
 	renderDependencyEdgeList,
@@ -417,7 +418,12 @@ async function bootstrap() {
 			document,
 			slots: slotElements(),
 			onDiagnostic: addLocalDiagnostic,
+			// Same-slot mounts form tabs automatically. Components that cannot
+			// declare `static overlay` (e.g. the sandbox confirm panel) are
+			// excluded by this host-side list instead.
+			overlayTags: ["sandbox-confirm"],
 		});
+		initColumnLayout({ document });
 		LiteAgent.onUI((frame) => {
 			if (!frame.mount) return;
 			const element = mountLoader?.get(mountKeyFor(frame.mount));

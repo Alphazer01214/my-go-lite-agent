@@ -85,6 +85,22 @@ WebUI 只负责交互和展示。业务执行、业务状态和持久化都位�
 
 组件抛出的异常不会被捕获。它会中断 UI 流的读取，触发 SDK 重连。
 
+### 3.1 Tab 静态字段
+
+组件类可以声明三个可选静态字段，Loader 在挂载时读取：
+
+```js
+class GitPanel extends HTMLElement {
+  static tabTitle = "Git";  // tab 文案；缺省用插件名
+  static tabOrder = 20;     // 组内排序；缺省 0
+  static overlay = true;    // 不参与 tab 分组，直接挂在 Slot 下
+}
+```
+
+静态字段在类定义后即可读，Loader 已等待 `customElements.whenDefined`，不需要组件额外配合。
+
+声明 `overlay = true` 的组件不加入任何 tab 组，也不被 Loader 隐藏，适合 `position: fixed` 的浮层类组件。无法修改源码的组件（如宿主自带的浮层）由 Shell 侧的 `overlayTags` 名单兜底，语义与 `static overlay` 等价。
+
 ## 4. Mount
 
 静态 Mount 来自 `plugin.json.ui.components`。
@@ -124,6 +140,30 @@ Loader 按 `entry` 去重加载。多个 Mount 共享同一个 `entry` 时只导
 | 组件不存在 | 按普通装载处理 |
 
 `resync()` 重试全部失败后写一条 `ui_resync_failed` 诊断，Mount 保留在页面上。
+
+### 4.1 自动 Tab 分组
+
+同一个 Slot 里出现两个以上非 overlay Mount 时，Loader 自动把它们组成一组 tab，不需要改 Manifest：
+
+- 组件保持挂载并继续接收 State/Command 推送，切换只改 `hidden`。隐藏组件的增量游标不断，切回时状态是新的。
+- 分组按组件的 `static tabOrder` 升序，缺省 0，同序按 Bootstrap 顺序。
+- tab 条只在组员数大于 1 时显示；回落到单个成员时移除。
+- 当前 tab 存 `localStorage["liteagent.tab.<slot>"]`（键为 MountKey）；所选 tab 被移除时回退到第一个成员。
+- 某个成员成为可见 tab 时，Loader 向它派发 `liteagent:tab-show` 事件。需要主动刷新的面板（如懒轮询的 Git 面板）监听这个事件。
+- 组件 import 失败只影响自己的 Mount，其他 tab 正常。
+- 重扫与插件启停后按新 Mount 列表对齐：仍存活的组件保留实例，不重建。
+
+`overlay` 组件（`static overlay` 或 Shell 侧 `overlayTags` 名单）不参与分组，始终可见，不会被 Loader 隐藏。
+
+### 4.2 列宽调整
+
+三列布局（left / center / right）的两条分隔条可拖拽，也支持聚焦后用 ←/→ 键调整（16px 步进）：
+
+- Shell 只持久化左右两列宽度（`localStorage["liteagent.layout.left"]` / `["liteagent.layout.right"]`），中间列保持流式。
+- 宽度限制：left 180–480px，right 200–640px。
+- 窗口宽度 ≤860px 或 ≤620px 时布局降级，分隔条隐藏，持久化的宽度不再生效。
+
+列宽属于 Shell 布局能力，与插件无关，插件不需要也无法感知。
 
 ## 5. pluginsdk WebUI
 
