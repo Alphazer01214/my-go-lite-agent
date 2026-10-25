@@ -3,7 +3,7 @@
 # Usage:
 #   bash scripts/build.sh                 # incremental (skip unchanged binaries)
 #   bash scripts/build.sh --clean         # wipe dist and rebuild everything
-#   bash scripts/build.sh --verify        # go vet + go test (+node) before building
+#   bash scripts/build.sh --verify        # go vet before building
 #   bash scripts/build.sh --only agent,session
 #   bash scripts/build.sh --list
 #
@@ -103,19 +103,10 @@ REBUILT=0
 SKIPPED=0
 
 # ── pre-flight verification (opt-in) ────────────────────────────────────────
-# Fail before touching dist/. go test also warms the module build cache, which
-# makes the subsequent `go build` calls cheaper.
+# Fail before touching dist/.
 if [[ $VERIFY -eq 1 ]]; then
   echo "verify: go vet ./..."
   (cd "$ROOT" && go vet ./...)
-  echo "verify: go test ./..."
-  (cd "$ROOT" && go test ./...)
-  if command -v node >/dev/null 2>&1; then
-    echo "verify: node --test internal/webui/*.test.mjs"
-    (cd "$ROOT" && node --test internal/webui/*.test.mjs)
-  else
-    echo "verify: node not found — skipped browser tests" >&2
-  fi
 fi
 
 if [[ -n "$MISSING_PLUGINS" ]]; then

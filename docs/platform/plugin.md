@@ -2,7 +2,6 @@
 
 `internal/plugin` 负责 Manifest 发现与装载顺序。它是纯读模块，不启动进程，不发帧。
 
-Manifest 的静态契约见 [../manifest.md](../manifest.md)。本文只讲实现。
 
 ## 1. 职责边界
 

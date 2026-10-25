@@ -14,9 +14,7 @@
 10. 单一真源。一类事实只允许一个文档定义，其他文档引用不复制。
 11. 统一状态标注。非平台契约文档首行写明状态。设计稿用“当前实现”“目标契约”“暂不实现”三档，过程记录用 [docs/archive/progress/README.md](docs/archive/progress/README.md) 第 1 节的五档。
 12. 归档不删。过程文档写完就冻结。废止时在状态标注里写清取代者，不删除文件。
-13. 索引唯一。完整文档表只存在于 [README.md](README.md)。子目录 README 只放本目录内部索引。
-14. 代码地图不作真源。`docs/reference/project-map/` 只作导航，事实以代码和平台文档为准。
-15. 插件文档只写实现。`plugins/<name>/communication.md` 只保留当前实现，目标契约写在 `docs/design/plugins/`。
+13. 禁止删除代码中由用户编写的注释
 
 ## 文档归属
 
@@ -44,8 +42,8 @@
 | `docs/design/` | 目标契约 | 照着它能规划 |
 | `docs/prompts/` | Prompt 契约 | 独立体系，自成一类 |
 | `docs/reference/` | 易失导航 | 只指路，不定义事实 |
-| `docs/archive/` | 过程记录 | 写完就冻结，只增不改 |
-| `docs/research/` | 参考材料 | 外部资料，不作为依据 |
+| `docs/archive/` | 过程记录 | 写完就冻结，只增不改，非用户主动要求阅读，禁止阅读 |
+| `docs/research/` | 参考材料 | 外部资料，不作为依据，非用户主动要求阅读，禁止阅读 |
 
 ## 文档检查
 

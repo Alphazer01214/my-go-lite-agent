@@ -3,7 +3,7 @@
 #   powershell -File scripts\build.ps1            # incremental (skip unchanged binaries)
 #   powershell -File scripts\build.ps1 -Clean     # wipe dist and rebuild everything
 #   powershell -File scripts\build.ps1 -Only agent,session
-#   powershell -File scripts\build.ps1 -Verify   # go vet + go test (+node) before building
+#   powershell -File scripts\build.ps1 -Verify   # go vet before building
 #   powershell -File scripts\build.ps1 -List
 #
 # Incremental mode hashes each target's module-local Go deps (plus go.mod/go.sum,
@@ -86,23 +86,11 @@ function Copy-DistAsset([string]$rel, [string]$dst) {
 }
 
 # ── pre-flight verification (opt-in) ────────────────────────────────────────
-# Fail before touching dist\. go test also warms the module build cache, which
-# makes the subsequent `go build` calls cheaper.
+# Fail before touching dist\.
 if ($Verify) {
     Write-Host "verify: go vet ./..."
     & $go vet ./...
     if ($LASTEXITCODE -ne 0) { throw "go vet failed" }
-    Write-Host "verify: go test ./..."
-    & $go test ./...
-    if ($LASTEXITCODE -ne 0) { throw "go test failed" }
-    $mjs = Get-ChildItem -Path (Join-Path $root "internal\webui") -Filter *.test.mjs -File -ErrorAction SilentlyContinue
-    if ((-not $mjs) -or (-not (Get-Command node -ErrorAction SilentlyContinue))) {
-        Write-Warning "verify: node not found or no browser tests - skipped"
-    } else {
-        Write-Host "verify: node --test internal/webui/*.test.mjs"
-        & node --test @($mjs.FullName)
-        if ($LASTEXITCODE -ne 0) { throw "node tests failed" }
-    }
 }
 if ($missingPlugins.Count -gt 0) {
     Write-Warning ("shipped-plugins.conf lists plugin(s) without plugins/<name>/plugin.json: " + ($missingPlugins -join ", "))

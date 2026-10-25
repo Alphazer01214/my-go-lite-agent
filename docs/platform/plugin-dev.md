@@ -2,7 +2,6 @@
 
 一个插件是一个目录包。目录名、`plugin.json.name` 和 `pluginsdk.NewPlugin` 的名称必须一致。
 
-目录怎么分、文件怎么拆、什么放哪里，见 [plugin-standard.md](plugin-standard.md)。本文只讲开发流程。
 
 ## 1. 包结构
 
