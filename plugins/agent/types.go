@@ -1,7 +1,10 @@
 package agent
 
-import (
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
+const (
+	ActionSend     = "send"
+	ActionFollowUp = "follow_up"
+	ActionSteer    = "steer"
+	ActionBtw      = "btw"
 )
 
 // FromWebUI 由前端发出的请求，包括 session 等相关信息
@@ -9,8 +12,7 @@ import (
 type FromWebUI struct {
 	Workspace string `json:"workspace"`
 	SessionId string `json:"session_id"`
-}
+	UserInput string `json:"user_input"`
 
-type TurnReq struct {
-	pluginsdk.ChatMessage
+	Action string `json:"action"`
 }

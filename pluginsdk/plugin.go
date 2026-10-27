@@ -669,3 +669,31 @@ func (p *Plugin) writeFrame(frame *protocol.Frame) error {
 	defer p.writeMu.Unlock()
 	return protocol.WriteFrame(p.stdout, frame)
 }
+
+// Handle for plugin to register handle func
+// to implement a handle function, use:
+// func(ctx context.Context, req *Request) (pluginInternalStruct, error)
+func Handle(fn func(ctx context.Context, req *Request) (interface{}, error)) HandleFunc {
+	return func(ctx context.Context, req *Request) (json.RawMessage, error) {
+		res, err := fn(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return json.RawMessage("null"), nil
+		}
+		byt, err := json.Marshal(res)
+		if err != nil {
+			return nil, err
+		}
+		return byt, nil
+	}
+}
+
+// Decode a Request to plugin internal struct
+func Decode(src *Request, dst interface{}) error {
+	if len(src.Payload) == 0 {
+		return errors.New("payload is required")
+	}
+	return json.Unmarshal(src.Payload, dst)
+}
