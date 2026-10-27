@@ -1,0 +1,11 @@
+{
+  "name": "prompter",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "prompter",
+  "provides": ["system-prompt", "skill", "mcp"],
+  "requires": ["session", "llm", "tools", "model-context"],
+  "depends_on": ["session", "llm-openai", "agent"],
+  "autostart": true,
+  "description": "Assemble system prompts, discover and configure skills, mcp."
+}
