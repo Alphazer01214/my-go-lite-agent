@@ -1,4 +1,4 @@
-package llmopenai
+package main
 
 type ModelConfig struct {
 	Name    string `json:"name"`

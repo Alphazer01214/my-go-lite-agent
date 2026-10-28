@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "protocol": 1,
   "entry": "session",
-  "provides": ["session"],
+  "provides": ["session", "workspace"],
   "requires": [],
   "depends_on": [],
   "autostart": true,
