@@ -84,28 +84,13 @@ func (h *Host) handleRequest(from string, frame *Frame) error {
 		// 缺席即放行。声明了 consumes 但没有活跃 Consumer 时，跳过这一跳，
 		// 直接交给该 (capability, method) 的 Provider。只有连 Provider 都不存在，
 		// 才算方法缺失。
-		ownerPlugin := h.routeOwner(frame.Capability, frame.Method)
-		if ownerPlugin == "" {
-			err := fmt.Errorf("no owner for %s.%s: %w", frame.Capability, frame.Method, ErrMethodNotFound)
-			h.replyError(from, frame.ID, frame.Capability, frame.Method, CodeMethodNotFound, err.Error())
-			return err
+		fallback, fallbackErr := h.fallbackCandidate(state, frame.ContextID, frame.Capability, frame.Method)
+		if fallbackErr != nil {
+			code := ErrorCode(fallbackErr, CodeRouteFailed)
+			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, fallbackErr.Error())
+			return fallbackErr
 		}
-		owner, resolveErr := h.resolveInstance(frame.ContextID, frame.Capability, frame.Method, ownerPlugin)
-		if resolveErr != nil {
-			code := ErrorCode(resolveErr, CodeRouteFailed)
-			h.replyError(from, frame.ID, frame.Capability, frame.Method, code, resolveErr.Error())
-			return resolveErr
-		}
-		priority := 0
-		if p := h.plugins[owner]; p != nil {
-			if manifest, ok := h.manifestForPlugin(p.pluginName); ok {
-				priority = manifest.Priority
-			}
-		}
-		candidate = pipelineCandidate{instanceID: owner, pluginName: ownerPlugin, priority: priority}
-		state.visited[owner] = true
-		state.hops = 1
-		state.nextPriority = priority - 1
+		candidate = fallback
 	}
 	if err := h.forwardPipeline(from, candidate, frame, state); err != nil {
 		code := ErrorCode(err, CodeRouteFailed)
@@ -321,6 +306,13 @@ func (h *Host) handleResponse(frame *Frame) error {
 	wt, ok := h.pending[frame.ID]
 	if !ok {
 		h.mu.Unlock()
+		// A Consumer that already proceeded can still write a late business
+		// res for the forwarded request. The continuation owns the request
+		// now, so the stale res is dropped instead of answered.
+		if strings.HasPrefix(frame.ID, ForwardIDPrefix) {
+			h.hlog(fmt.Sprintf("drop late res %s for %s.%s", frame.ID, frame.Capability, frame.Method))
+			return nil
+		}
 		return fmt.Errorf("response for unknown frame: %s", frame.ID)
 	}
 	delete(h.pending, frame.ID)

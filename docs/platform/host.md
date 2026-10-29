@@ -155,8 +155,8 @@ type wait struct {
 
 | 值 | 含义 | 结果去向 |
 |---|---|---|
-| `WaitPlugin` | 插件 A 调插件 B | 写回插件 A 的 stdin |
-| `WaitHost` | Host 主动发起或 `host.proceed` 产生 | 投 `resCh` 或 `onEvent` |
+| `WaitPlugin` | 插件 A 调插件 B，或 Proceed 续传的下一跳 | 写回插件 A 的 stdin |
+| `WaitHost` | Host 主动发起（`CallWithEvents`） | 投 `resCh` 或 `onEvent` |
 
 `WaitHost` 的应答永远不会写回任何插件。这是 `WaitHost` 与 `WaitPlugin` 最主要的分叉。
 
@@ -354,11 +354,27 @@ plugin.AutostartClosure(discoveries)
 
 效果是：声明了 `consumes` 但当前没有活跃 Consumer 时，Host 跳过这一跳。只有 Consumer 和 Provider 都不存在时，调用才返回 `method_not_found`。
 
+### 6.7 Proceed 续传
+
+`host.proceed` 在一个独立 goroutine 里（`finishProceed`）把当前 Request 交给下一跳：
+
+1. 选择下一个 Consumer。没有候选或候选已全部访问过但 Route Owner 活跃时，回退到 Route Owner。
+2. 校验目标实例 `active`，并把目标加入执行上下文。
+3. 建立续传 pending：`kind` 是 `WaitPlugin`，保留原始 `caller`、`callerPlugin` 与 `frameID`，目标换成下一跳；同时删除 Consumer 的旧 pending。
+4. 写出下一跳 Request。写失败时恢复旧 pending，把请求交回 Consumer。
+5. 给 Consumer 返回内部控制应答 `{"accepted":true}`。
+
+旧 pending 上已开始的取消会随后转发到新的下一跳。
+
+终点 Response 走续传 pending：id 恢复为原始 Request ID，直接写回原始调用方。Consumer 不再收到这条业务 Response。
+
+Consumer 的旧 pending 删除后，它迟到的业务 res 被丢弃，记一条 `drop late res` 诊断日志。
+
 ## 7. 应答与事件
 
 ### 7.1 handleResponse
 
-1. 按帧 id 查 pending。查不到时记日志并返回错误。
+1. 按帧 id 查 pending。查不到时：`fwd-` id 视为已 Proceed 的迟到业务 res，记日志后丢弃；其它 id 返回错误。
 2. 删除 pending，停止取消定时器。
 3. 复制帧，恢复调用方 id，`from` 填被调方插件名，`context_id` 填 pending 记录的上下文，`priority` 回填目标跳的优先级。
 4. `WaitHost` 投 `resCh`。`WaitPlugin` 写回调用方 stdin。
@@ -804,7 +820,7 @@ publisher 返回的 payload 原样作为应答 payload 回给插件。
 |---|---|
 | 路由表与注册 | 已覆盖。含冲突、last-wins、Consumer 不抢属主、`provides` 不作兜底 |
 | 流水线 | 已覆盖优先级降序、同优先级冲突、回环、跳数上限 |
-| Proceed | 已覆盖转发下一跳、不阻塞读循环、事件与应答的 id 还原 |
+| Proceed | 已覆盖多 Consumer 直达原调用方、控制应答、Consumer 不写业务 res、取消跟随当前跳、事件 id 还原、无 Consumer 回退、迟到 res 丢弃 |
 | id 改写与 `from` | 已覆盖 `fwd-N`、调用方 id 还原、`from` 注入 |
 | 代际 | 已覆盖旧代际帧被丢弃、旧代际取消被拒 |
 | 执行上下文 | 已覆盖继承、绑定属主校验、Generation 固定、重绑定、关闭子树、参与者校验 |

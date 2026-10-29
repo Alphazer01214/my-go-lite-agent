@@ -158,12 +158,21 @@ Go Context 控制 Call 的等待和期限。`contextID` 只选择 Host 的 Plugi
 `Request.Proceed` 继续 Frame Priority 流水线：
 
 ```go
-result, err := req.Proceed(ctx, payload)
+if err := req.Proceed(ctx, payload); err != nil {
+    return nil, err
+}
+return nil, nil
 ```
 
-每个 Request 最多调用一次 `Proceed`。重复调用返回 `flow_already_proceeded`。`Proceed` 只把结果交给下一跳，不暴露 Host 内部路由。
+`Proceed` 是终端操作。成功后当前 Request 已经交给下一跳，SDK 不再为它写业务 Response，处理器的返回值被忽略。终点 Response 由 Host 直接回给原始调用方，不经过 Consumer。
+
+每个 Request 最多调用一次 `Proceed`。重复调用返回 `flow_already_proceeded`。`Proceed` 不暴露 Host 内部路由。
+
+`Proceed` 失败表示转发没有发生，处理器仍可返回错误 Response。
 
 `Proceed` 传入的 `payload` 为空时，Host 沿用原 Request 的 payload。
+
+Consumer 自己发起的 `Call` 与 `Proceed` 相互独立，仍按原有 `req-res` 语义返回给 Consumer。
 
 ## 4. CallWithCallback
 

@@ -261,18 +261,31 @@ The effect: when a manifest declares a `consumes` entry but no consumer is activ
 
 A consumer can hand the call to the next hop after doing its work. That is `host.proceed`.
 
+`Proceed` is the terminal forwarding operation for the current request. The consumer produces no business response for it: the business level keeps exactly one `req-res` pair.
+
 On receiving `host.proceed` the host:
 
 1. Finds the pending entry by `call_id`. If it is missing, owned by someone else, or not part of a pipeline, return `method_not_found`.
 2. Checks whether the call already proceeded; a second attempt returns `flow_already_proceeded`.
 3. Selects the next hop in its own goroutine, so the host read loop is not blocked.
-4. Forwards the request with a new `fwd-N` id, setting `from` to the current consumer's plugin name.
-5. Relays events attributed to the next hop back to the current consumer.
-6. Answers the `host.proceed` call with the next hop's response.
+4. Forwards the request with a new `fwd-N` id and deletes the consumer's old pending entry.
+5. Answers the `host.proceed` call with the internal control ack `{"accepted":true}`.
 
-Downstream events are re-attributed by the SDK through `EmitWithID`, so the original caller still receives stream deltas.
+The ack only confirms the handoff. It carries no downstream result and is not part of the business `req-res` pair.
 
-If no next hop is found, the host returns `route_failed`; if the route owner for that key is also inactive, it returns `plugin_not_ready`.
+The continuation pending keeps the original caller and request id. When the terminal response arrives, the host restores the original request id and writes it straight to the original caller, bypassing every consumer.
+
+An invalid JSON payload returns `bad_payload` before anything else happens. A missing payload keeps the request's original payload.
+
+The next hop's `from` is the current consumer's plugin instance id. In the default instance it equals the plugin name.
+
+Downstream attributed events go straight to the original caller and use the original request id.
+
+If no next hop is found, the host falls back to the route owner (section 4.3). If there is no route owner it returns `method_not_found`; if the owner is inactive it returns `plugin_not_ready`.
+
+A failed Proceed means no forwarding happened. The host returns the error to the consumer that called Proceed, keeps the original pending entry, and the consumer may still return an error response.
+
+A consumer's own `Call` is unaffected by Proceed and keeps its normal `req-res` semantics.
 
 ## 5. Host methods
 
@@ -281,7 +294,7 @@ Every host method uses `capability=host`. The host dispatches only the methods b
 | Method | Input | Output |
 |---|---|---|
 | `host.register` | `handlers[]`, each with `capability`, `method` and optional `name`, `description` | `accepted[]`, `rejected[]` |
-| `host.proceed` | `call_id`, optional `payload` | the next hop's payload |
+| `host.proceed` | `call_id`, optional `payload` | `{"accepted":true}` |
 | `host.plugins` | none | `plugins[]` snapshot |
 | `host.ui.state` | `mount_id`, `state` | `{}`; `ui_not_mounted` when no browser is connected or the queue is full |
 | `host.ui.command` | `mount_id`, `command`, `payload` | `{}`; same error as above |
@@ -456,7 +469,7 @@ pending[fwd_id] = caller / original_id / target / context_id
 
 When the response arrives, the host restores the caller's id and removes the entry. A cancel keeps the entry until the original request reaches its single terminal state; after the grace period the host synthesizes it. If the plugin process exits, the host synthesizes `plugin_down`.
 
-Pending entries have two owners. `WaitPlugin` means plugin A calls plugin B and the host only relays and restores ids. `WaitHost` means the host initiated the call or a `Proceed` produced it; the result returns through an in-memory channel.
+Pending entries have two owners. `WaitPlugin` means plugin A calls plugin B (including the next hop of a Proceed continuation) and the host only relays and restores ids. `WaitHost` means the host initiated the call; the result returns through an in-memory channel.
 
 On process exit the host fails every pending entry that targets the instance, and also clears entries where the instance is the caller, so nothing waits for a response that can never arrive.
 

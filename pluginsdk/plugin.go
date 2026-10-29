@@ -21,19 +21,29 @@ type Request struct {
 	Capability  string
 	Method      string
 	Payload     json.RawMessage
-	proceed     func(context.Context, json.RawMessage) (json.RawMessage, error)
+	proceed     func(context.Context, json.RawMessage) error
 	proceedOnce atomic.Bool
+	// proceeded only affects this process's dispatch: after a successful
+	// Proceed the handler's own result is no longer a business Response.
+	proceeded atomic.Bool
 }
 
-// Proceed continues a Frame Priority pipeline at most once.
-func (r *Request) Proceed(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+// Proceed hands the current request to the next hop of the Frame Priority
+// pipeline at most once. It is terminal: on success the request belongs to the
+// next hop and the handler's result is not written back as a Response. On
+// failure forwarding did not happen, so the handler may still return an error.
+func (r *Request) Proceed(ctx context.Context, payload json.RawMessage) error {
 	if r == nil || r.proceed == nil {
-		return nil, ErrCode(CodeMethodNotFound, "request does not support proceed")
+		return ErrCode(CodeMethodNotFound, "request does not support proceed")
 	}
 	if !r.proceedOnce.CompareAndSwap(false, true) {
-		return nil, ErrCode(CodeFlowAlreadyProceeded, "request already proceeded")
+		return ErrCode(CodeFlowAlreadyProceeded, "request already proceeded")
 	}
-	return r.proceed(ctx, payload)
+	if err := r.proceed(ctx, payload); err != nil {
+		return err
+	}
+	r.proceeded.Store(true)
+	return nil
 }
 
 type Event struct {
@@ -326,11 +336,12 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 		Method:     frame.Method,
 		Priority:   frame.Priority,
 	}
+	var req *Request
 	if !ok {
 		res.ErrorCode = CodeMethodNotFound
 		res.ErrorMsg = fmt.Sprintf("no handler for %s", key)
 	} else {
-		req := &Request{
+		req = &Request{
 			ID:         frame.ID,
 			From:       frame.From,
 			ContextID:  frame.ContextID,
@@ -338,25 +349,34 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 			Method:     frame.Method,
 			Payload:    frame.Payload,
 		}
-		req.proceed = func(callCtx context.Context, payload json.RawMessage) (json.RawMessage, error) {
-			body, marshalErr := json.Marshal(map[string]any{"call_id": frame.ID, "payload": payload})
-			if marshalErr != nil {
-				return nil, ErrCode(CodeBadPayload, marshalErr.Error())
+		req.proceed = func(callCtx context.Context, payload json.RawMessage) error {
+			// An empty payload means "keep the request's payload"; encoding it
+			// as JSON null would instead forward a literal null to the next hop.
+			body := map[string]any{"call_id": frame.ID}
+			if len(payload) != 0 {
+				body["payload"] = payload
 			}
-			return p.CallWithCallbackInContext(callCtx, frame.ContextID, HostCapability, "proceed", body, func(ev *Event) {
-				_ = p.EmitWithIDInContext(frame.ContextID, frame.ID, ev.Capability, ev.Method, ev.Payload)
-			})
+			encoded, marshalErr := json.Marshal(body)
+			if marshalErr != nil {
+				return ErrCode(CodeBadPayload, marshalErr.Error())
+			}
+			// The ack only confirms the handoff; the terminal business
+			// Response goes straight to the original caller.
+			_, err := p.CallInContext(callCtx, frame.ContextID, HostCapability, "proceed", encoded)
+			return err
 		}
 		out, err := h.handleFunc(ctx, req)
-		if err != nil {
-			code := Code(err)
-			if code == "" {
-				code = CodeHandlerError
+		if !req.proceeded.Load() {
+			if err != nil {
+				code := Code(err)
+				if code == "" {
+					code = CodeHandlerError
+				}
+				res.ErrorCode = code
+				res.ErrorMsg = err.Error()
+			} else {
+				res.Payload = out
 			}
-			res.ErrorCode = code
-			res.ErrorMsg = err.Error()
-		} else {
-			res.Payload = out
 		}
 	}
 
@@ -365,6 +385,10 @@ func (p *Plugin) dispatch(frame *protocol.Frame) {
 	delete(p.inbound, frame.ID)
 	p.mu.Unlock()
 	cancel()
+	if req != nil && req.proceeded.Load() {
+		// The request already left this handler; nothing owns a business res.
+		return
+	}
 	if entry != nil && entry.reason != "" {
 		res.Payload = nil
 		res.ErrorCode = reasonCode(entry.reason)

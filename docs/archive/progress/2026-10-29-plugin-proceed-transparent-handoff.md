@@ -1,6 +1,6 @@
 # Plugin Proceed 透明转发设计（2026-10-29）
 
-> 状态：待实现（设计已确认，代码尚未落地）
+> 状态：已实现（2026-10-29；SDK `Proceed` 改为终端转发，Host continuation pending 直达原调用方）
 > 关联：[pluginsdk.md](../../platform/pluginsdk.md)、[protocol.md](../../platform/protocol.md)、[pluginsdk/plugin.go](../../../pluginsdk/plugin.go)、[internal/host/pipeline.go](../../../internal/host/pipeline.go)、[internal/host/transport.go](../../../internal/host/transport.go)
 
 ## 0. 背景与目标

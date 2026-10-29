@@ -275,22 +275,31 @@ Host 收到业务 Request 后，把 `priority` 置为 `FramePriorityMax`，然�
 
 Consumer 处理完业务逻辑后，可以把调用交给下一跳。这就是 `host.proceed`。
 
+`Proceed` 是当前 Request 的终端转发操作。Consumer 不产生这条请求的业务 Response，业务层面只有一条 `req-res` 对。
+
 Host 收到 `host.proceed` 后：
 
 1. 按 `call_id` 找到 pending 项。找不到、属主不是调用方或该 pending 不在流水线中时，返回 `method_not_found`。
 2. 检查该 Call 是否已经 Proceed 过。重复 Proceed 返回 `flow_already_proceeded`。
 3. 在独立 goroutine 中选择下一跳候选，避免阻塞 Host 的读循环。
-4. 用新的 `fwd-N` id 把 Request 转发给下一跳。
-5. 下一跳的归因 Event 直接回送给当前 Consumer。
-6. 下一跳的 Response 到达后，Host 用它应答本次 `host.proceed` Call。
+4. 用新的 `fwd-N` id 把 Request 转发给下一跳，并删除 Consumer 的旧 pending。
+5. 给本次 `host.proceed` Call 返回内部控制应答 `{"accepted":true}`。
 
-payload 不是合法 JSON 时返回 `bad_payload`，不进入后续步骤。
+这个应答只确认请求已经交给下一跳。它不属于业务 `req-res` 对，也不携带下游结果。
+
+续传 pending 保留原始调用方与原始 Request ID。终点 Response 到达后，Host 把 id 改回原始 Request ID，直接写给原始调用方，不经过任何 Consumer。
+
+payload 不是合法 JSON 时返回 `bad_payload`，不进入后续步骤。payload 缺席时沿用原 Request 的 payload。
 
 下一跳的 `from` 填当前 Consumer 的 Plugin Instance id。默认实例下它等于插件名。
 
-下游 Event 由 SDK 转成 `EmitWithID` 重新归属到原始业务 Call，因此调用方仍能收到流式增量。
+下游归因 Event 直接发给原始调用方，Event id 使用原始 Request ID。
 
-下一跳选不到候选时，Host 返回 `route_failed`。若该键的 Route Owner 也不活跃，则返回 `plugin_not_ready`。
+下一跳选不到候选时，Host 按 §4.3 回退到 Route Owner。Route Owner 也不存在时返回 `method_not_found`；存在但不活跃时返回 `plugin_not_ready`。
+
+Proceed 失败表示转发没有发生。Host 只把错误返回给提出 Proceed 的 Consumer，原 pending 保留，Consumer 仍可返回错误 Response。
+
+Consumer 自己发起的 `Call` 不受 Proceed 影响，仍按原有 `req-res` 语义返回给 Consumer。
 
 ## 5. Host 方法
 
@@ -299,7 +308,7 @@ payload 不是合法 JSON 时返回 `bad_payload`，不进入后续步骤。
 | 方法 | 输入 | 输出 |
 |---|---|---|
 | `host.register` | `handlers[]`（每项含 `capability`、`method`，可选 `name`、`description`） | `accepted[]`、`rejected[]` |
-| `host.proceed` | `call_id`、可选 `payload` | 下一跳的 payload |
+| `host.proceed` | `call_id`、可选 `payload` | `{"accepted":true}` |
 | `host.plugins` | 无 | `plugins[]` 状态快照 |
 | `host.ui.state` | `mount_id`、`state` | `{}`；无浏览器连接或队列已满时返回 `ui_not_mounted` |
 | `host.ui.command` | `mount_id`、`command`、`payload` | `{}`；无浏览器连接或队列已满时返回 `ui_not_mounted` |
@@ -484,7 +493,7 @@ pending[fwd_id] = caller/original_id/target/context_id
 
 Response 到达后，Host 恢复调用方 id 并删除 pending。Cancel 保留 pending，等待原 Request 的唯一终态。超过取消宽限期时，Host 合成终态。插件进程退出时，Host 合成 `plugin_down`。
 
-pending 分两种归属。`WaitPlugin` 是插件 A 调插件 B，Host 只中转并还原 id。`WaitHost` 是 Host 主动发起或 Proceed 产生，结果走内存 channel 回调用方。
+pending 分两种归属。`WaitPlugin` 是插件 A 调插件 B（包括 Proceed 续传的下一跳），Host 只中转并还原 id。`WaitHost` 是 Host 主动发起，结果走内存 channel 回调用方。
 
 进程退出时，Host 把该实例作为目标的 pending 全部失败掉，错误码是 `plugin_down`。该实例作为调用方的 pending 也从表中移除，但不再回写应答，因为调用方已经收不到任何内容。
 
