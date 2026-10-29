@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"model-context",
 		"build",
-		pluginsdk.NewHandler(handleJSON(p.handlebuild)).
-			WithInfo("build", "build one model context"),
+		p.handleBuild,
 	)
 }
 

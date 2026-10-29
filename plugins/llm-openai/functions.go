@@ -7,10 +7,10 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-func (p *llmPlugin) complete(
+func (p *plugin) complete(
 	ctx context.Context,
-	req *CompletionRequest,
-) (*CompletionResponse, error) {
+	req *streamReq,
+) (*streamResp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func (p *llmPlugin) complete(
 		)
 	}
 
-	return &CompletionResponse{
+	return &streamResp{
 		Model: req.Model,
 		Text:  "llm-openai framework ready",
 	}, nil

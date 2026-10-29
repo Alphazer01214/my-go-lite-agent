@@ -2,25 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-func handleJSON[Req any, Resp any](
-	fn func(context.Context, *Req) (*Resp, error),
-) pluginsdk.HandleFunc {
-	return pluginsdk.Handle(func(ctx context.Context, req *pluginsdk.Request) (any, error) {
-		var input Req
-		if err := pluginsdk.Decode(req, &input); err != nil {
-			return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
-		}
-		return fn(ctx, &input)
-	})
-}
-
-func (p *plugin) handlelist(
+func (p *plugin) handleList(
 	ctx context.Context,
-	req *CallRequest,
-) (*CallResponse, error) {
-	return p.list(ctx, req)
+	req *pluginsdk.Request,
+) (json.RawMessage, error) {
+	var input CallRequest
+	if err := pluginsdk.Decode(req, &input); err != nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
+	}
+
+	result, err := p.list(ctx, &input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }

@@ -52,7 +52,7 @@ func newPluginAtDir(dir string) *plugin {
 	}
 	p.scanIndex()
 	if selected, ok := workspaces.current(); ok {
-		p.loadWorkspace(selected.WorkspaceId)
+		p.loadWorkspace(selected.Path)
 	}
 	return p
 }
@@ -62,7 +62,7 @@ func (p *plugin) sessionPath(id string) string {
 }
 
 // scanIndex 只读每个会话文件的首行 meta，建立 workspace 分类索引；
-// 不打开文件句柄，也不解析 facts。旧会话缺少 workspace_id 时按路径补全（仅内存）。
+// 不打开文件句柄，也不解析 facts。旧会话按路径登记 workspace（仅内存）。
 func (p *plugin) scanIndex() {
 	ents, err := os.ReadDir(p.dir)
 	if err != nil {
@@ -85,25 +85,20 @@ func (p *plugin) scanIndex() {
 		if meta.SessionId == "" {
 			meta.SessionId = id
 		}
-		if meta.WorkspaceId == "" && strings.TrimSpace(meta.Workspace) != "" {
-			meta = p.bindWorkspaceMeta(meta)
+		if strings.TrimSpace(meta.Workspace) != "" {
+			meta = p.normalizeWorkspace(meta)
 		}
 		p.index[id] = meta
 	}
 }
 
-func (p *plugin) bindWorkspaceMeta(meta Meta) Meta {
-	if record, ok := p.workspaces.findByPath(meta.Workspace); ok {
-		meta.WorkspaceId = record.WorkspaceId
-		meta.Workspace = record.Path
-		return meta
-	}
+// normalizeWorkspace 按路径把会话登记进 workspace 注册表并规范化 path（仅内存）。
+func (p *plugin) normalizeWorkspace(meta Meta) Meta {
 	record, _, err := p.workspaces.ensure(meta.Workspace, "", false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "session: bind workspace for %s: %v\n", meta.SessionId, err)
 		return meta
 	}
-	meta.WorkspaceId = record.WorkspaceId
 	meta.Workspace = record.Path
 	return meta
 }
@@ -133,23 +128,21 @@ func readFirstMeta(path string) (Meta, error) {
 
 // loadWorkspace 打开该 workspace 下尚未加载的会话文件。
 // 旧 workspace 的句柄不主动关闭：可能有调用方正持有 store，留到进程退出统一关闭。
-func (p *plugin) loadWorkspace(workspaceId string) {
-	if workspaceId == "" {
+func (p *plugin) loadWorkspace(workspacePath string) {
+	if workspacePath == "" {
 		return
 	}
+	key := workspacePathKey(workspacePath)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for id, meta := range p.index {
-		if meta.WorkspaceId != workspaceId || p.reg[id] != nil {
+		if workspacePathKey(meta.Workspace) != key || p.reg[id] != nil {
 			continue
 		}
 		st, err := openStore(p.sessionPath(id), id)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "session: load %s: %v\n", id, err)
 			continue
-		}
-		if st.meta.WorkspaceId == "" && meta.WorkspaceId != "" {
-			st.bindWorkspace(meta.WorkspaceId, meta.Workspace)
 		}
 		p.reg[id] = st
 	}
@@ -165,16 +158,12 @@ func (p *plugin) get(id string) (*store, error) {
 	if st := p.reg[id]; st != nil {
 		return st, nil
 	}
-	meta, ok := p.index[id]
-	if !ok {
-		return nil, errCoded(codeSessionNotFound, "session not found: "+id)
+	if _, ok := p.index[id]; !ok {
+		return nil, errSessionNotFound(id)
 	}
 	st, err := openStore(p.sessionPath(id), id)
 	if err != nil {
 		return nil, errHandler(err)
-	}
-	if st.meta.WorkspaceId == "" && meta.WorkspaceId != "" {
-		st.bindWorkspace(meta.WorkspaceId, meta.Workspace)
 	}
 	p.reg[id] = st
 	return st, nil

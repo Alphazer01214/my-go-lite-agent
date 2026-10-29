@@ -22,7 +22,9 @@ return p.Serve()
 
 上报是尽力而为。上报失败不中断进程，`Listen` 继续运行。
 
-上报的每个 Handler 携带 `capability`、`method`，以及 `WithInfo` 设置过的 `name` 和 `description`。Host 只把 `(capability, method)` 写进路由表，`name`/`description` 用于展示和诊断。
+标准注册只上报 `capability` 和 `method`。
+Host 只把 `(capability, method)` 写进路由表。
+`name` 和 `description` 是可选展示字段，不参与路由。
 
 `Serve()` 返回 `Listen()` 的错误。stdin 关闭是正常收尾，宿主关闭插件进程时也走这条路径。
 
@@ -33,7 +35,7 @@ return p.Serve()
 | `NewPlugin(name string) *Plugin` | 绑定进程 stdio |
 | `(*Plugin).Serve() error` | 上报注册并阻塞运行 |
 | `(*Plugin).Listen() error` | 只跑接收循环，不上报 |
-| `(*Plugin).Register(capability, method string, handler Handler)` | 绑定路由键 |
+| `(*Plugin).Register(capability, method string, handler HandleFunc)` | 绑定路由键 |
 | `(*Plugin).ListRegistered() []Registration` | 读注册快照 |
 | `(*Plugin).Call(ctx, capability, method string, payload json.RawMessage)` | 发起同步 Call |
 | `(*Plugin).CallInContext(ctx, contextID, capability, method string, payload json.RawMessage)` | 在执行上下文内发起 Call |
@@ -74,14 +76,7 @@ type Registration struct {
 注册方法：
 
 ```go
-p.Register(
-    "example",
-    "run",
-    pluginsdk.NewHandler(handleRun).WithInfo(
-        "run",
-        "Run an example operation",
-    ),
-)
+p.Register("example", "run", handleRun)
 ```
 
 路由键是 `capability.method`。同插件重复注册同键时，最后一次生效。
@@ -89,16 +84,42 @@ p.Register(
 `Register` 在以下情况 panic：
 
 - `capability` 或 `method` 为空；
-- `handler` 不是用 `NewHandler` 构造的。
+- `handler` 为 `nil`。
 
-`WithInfo` 返回新副本，不修改原值。`Handler.Info()` 读回 `name` 和 `description`。
+`handleFunc` 负责解析请求、调用业务函数和编码响应。
+`Decode` 可把 `Request.Payload` 解码到业务结构体。
+
+```go
+func handleRun(
+    ctx context.Context,
+    req *pluginsdk.Request,
+) (json.RawMessage, error) {
+    var input RunRequest
+    if err := pluginsdk.Decode(req, &input); err != nil {
+        return nil, pluginsdk.ErrCode(
+            pluginsdk.CodeBadArguments,
+            err.Error(),
+        )
+    }
+
+    result, err := run(ctx, &input)
+    if err != nil {
+        return nil, err
+    }
+    return json.Marshal(result)
+}
+```
+
+`NewHandler`、`WithInfo` 和 `Handle` 保留为兼容符号。
+它们不属于标准注册路径。
+`WithInfo` 返回新副本，不修改原值。
 
 `From` 是 Host 注入的真实插件来源。它只用于身份和溯源，不参与路由。插件不能通过 payload 伪造该字段。
 
 handler 返回：
 
 - `payload == nil`：SDK 不写 `payload` 字段。线格式上该键缺席；
-- `error == nil`：返回 marshal 后的 payload；
+- `error == nil`：SDK 原样发送 `json.RawMessage`；
 - `error != nil`：返回稳定错误码和错误信息。
 
 ## 3. Call

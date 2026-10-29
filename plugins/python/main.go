@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"python",
 		"run",
-		pluginsdk.NewHandler(handleJSON(p.handlerun)).
-			WithInfo("run", "run one python request"),
+		p.handleRun,
 	)
 }
 

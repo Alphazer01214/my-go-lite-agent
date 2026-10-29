@@ -35,7 +35,6 @@ type Fact struct {
 type Meta struct {
 	SessionId          string   `json:"session_id"`
 	Title              string   `json:"title,omitempty"`
-	WorkspaceId        string   `json:"workspace_id,omitempty"`
 	Workspace          string   `json:"workspace"`
 	ParentSessionId    string   `json:"parent_session_id,omitempty"`
 	ChildrenSessionIds []string `json:"children_session_ids,omitempty"`
@@ -44,13 +43,12 @@ type Meta struct {
 	CreatedAt          int64    `json:"created_at"`
 }
 
-// Workspace 是会话的分类依据；path 为规范化绝对路径，创建后不可修改。
+// Workspace 是会话的分类依据；path 为规范化绝对路径，既是唯一标识也是唯一入参，创建后不可修改。
 type Workspace struct {
-	WorkspaceId string `json:"workspace_id"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	CreatedAt   int64  `json:"created_ts"`
-	UpdatedAt   int64  `json:"updated_ts"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	CreatedAt int64  `json:"created_ts"`
+	UpdatedAt int64  `json:"updated_ts"`
 }
 
 // metaRecord 是 JSONL 中的元数据行；嵌入 Meta 使字段与 factRecord 平级。
@@ -66,9 +64,7 @@ type factRecord struct {
 }
 
 type infoReq struct {
-	SessionId   string `json:"session_id"`
-	Workspace   string `json:"workspace"`
-	WorkspaceId string `json:"workspace_id"`
+	SessionId string `json:"session_id"`
 }
 
 type infoResp struct {
@@ -77,9 +73,11 @@ type infoResp struct {
 	NextSeq int `json:"next_seq"`
 }
 
+type messageResp struct {
+}
+
 type createReq struct {
 	Title           string `json:"title"`
-	WorkspaceId     string `json:"workspace_id,omitempty"`
 	Workspace       string `json:"workspace"`
 	ParentSessionID string `json:"parent_session_id"`
 	Origin          string `json:"origin"`
@@ -124,20 +122,19 @@ type factsResp struct {
 
 // workspaceReq 是 workspace capability 的统一输入；各 method 只读取自己用到的字段。
 type workspaceReq struct {
-	WorkspaceId string `json:"workspace_id,omitempty"`
-	Path        string `json:"path,omitempty"`
-	Name        string `json:"name,omitempty"`
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 type workspaceListResp struct {
 	Workspaces []Workspace `json:"workspaces"`
-	SelectedId string      `json:"selected_id"`
+	Selected   string      `json:"selected"`
 }
 
 type workspaceCreateResp struct {
-	Workspace  Workspace `json:"workspace"`
-	Created    bool      `json:"created"`
-	SelectedId string    `json:"selected_id"`
+	Workspace Workspace `json:"workspace"`
+	Created   bool      `json:"created"`
+	Selected  string    `json:"selected"`
 }
 
 type workspaceUpdateResp struct {
@@ -145,14 +142,14 @@ type workspaceUpdateResp struct {
 }
 
 type workspaceSelectResp struct {
-	Workspace  Workspace `json:"workspace"`
-	SelectedId string    `json:"selected_id"`
+	Workspace Workspace `json:"workspace"`
+	Selected  string    `json:"selected"`
 }
 
 type workspaceDeleteResp struct {
-	WorkspaceId string `json:"workspace_id"`
-	Deleted     bool   `json:"deleted"`
-	SelectedId  string `json:"selected_id"`
+	Path     string `json:"path"`
+	Deleted  bool   `json:"deleted"`
+	Selected string `json:"selected"`
 }
 
 type workspaceCurrentResp struct {
@@ -160,13 +157,13 @@ type workspaceCurrentResp struct {
 }
 
 type listReq struct {
-	WorkspaceId      string `json:"workspace_id,omitempty"`
+	Workspace        string `json:"workspace,omitempty"`
 	IncludeSubagents bool   `json:"include_subagents,omitempty"`
 }
 
 type listResp struct {
-	WorkspaceId string           `json:"workspace_id"`
-	Sessions    []sessionSummary `json:"sessions"`
+	Workspace string           `json:"workspace"`
+	Sessions  []sessionSummary `json:"sessions"`
 }
 
 type sessionSummary struct {

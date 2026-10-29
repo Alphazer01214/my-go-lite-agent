@@ -2,22 +2,40 @@ package main
 
 import (
 	"context"
-	"strings"
-
-	"github.com/tomori/my-go-lite-agent/pluginsdk"
+	"encoding/json"
 )
 
-func (a *Agent) turn(ctx context.Context, req *FromWebUI) (*TurnResponse, error) {
-	if err := ctx.Err(); err != nil {
+func (p *plugin) turn(ctx context.Context, req *fromWebUI) (*sessionInfoResp, error) {
+	ireq, err := json.Marshal(sessionInfoReq{
+		SessionId: req.SessionId,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(req.UserInput) == "" {
-		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "user_input is required")
+	// 1. check if the session exists
+	infoByte, err := p.sdk.Call(ctx, "session", "info", ireq)
+	if err != nil {
+		// 说明没有 session，开始创建
+		creq, err := json.Marshal(sessionCreateReq{
+			Title:     "New Session",
+			Workspace: req.Workspace,
+			Origin:    "agent",
+			Depth:     0,
+		})
+		if err != nil {
+			return nil, err
+		}
+		infoByte, err = p.sdk.Call(ctx, "session", "create", creq)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var info sessionInfoResp
+	if err := json.Unmarshal(infoByte, &info); err != nil {
+		return nil, err
 	}
 
-	return &TurnResponse{
-		SessionId: req.SessionId,
-		Accepted:  true,
-		Message:   "agent framework ready",
-	}, nil
+	// 2. turn start
+	p.sdk.CallWithCallback(ctx, "llm", "stream", nil, nil)
+	return &info, nil
 }

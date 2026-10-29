@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"subagent",
 		"run",
-		pluginsdk.NewHandler(handleJSON(p.handlerun)).
-			WithInfo("run", "run one subagent task"),
+		p.handleRun,
 	)
 }
 

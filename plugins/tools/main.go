@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"tools",
 		"list",
-		pluginsdk.NewHandler(handleJSON(p.handlelist)).
-			WithInfo("list", "list registered tools"),
+		p.handleList,
 	)
 }
 

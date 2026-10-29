@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"shell",
 		"execute",
-		pluginsdk.NewHandler(handleJSON(p.handleexecute)).
-			WithInfo("execute", "execute one shell request"),
+		p.handleExecute,
 	)
 }
 

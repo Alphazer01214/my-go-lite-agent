@@ -244,18 +244,6 @@ func (s *store) snapshot() (Meta, int, int, int64) {
 	return s.meta, s.factCnt, s.nextSeq, s.lastTS
 }
 
-// bindWorkspace 为旧会话补上 workspace 归属，只更新内存，不改写日志。
-func (s *store) bindWorkspace(workspaceId, path string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.meta.WorkspaceId == "" {
-		s.meta.WorkspaceId = workspaceId
-	}
-	if s.meta.Workspace == "" {
-		s.meta.Workspace = path
-	}
-}
-
 func (s *store) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

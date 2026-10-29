@@ -50,7 +50,7 @@ import (
 // handlePing: func(context.Context, *pluginsdk.Request) (json.RawMessage, error)
 func main() {
     p := pluginsdk.NewPlugin("example")
-    p.Register("example", "ping", pluginsdk.NewHandler(handlePing))
+    p.Register("example", "ping", handlePing)
     if err := p.Serve(); err != nil {
         panic(err)
     }
@@ -58,6 +58,16 @@ func main() {
 ```
 
 Plugins import `pluginsdk` only. Business code never hand-writes the frame loop. Test fixtures may use `protocol` directly.
+
+`Register` accepts a `pluginsdk.HandleFunc`.
+The handler receives `ctx` and `*pluginsdk.Request`.
+It returns `json.RawMessage` and `error`.
+
+The handler owns request decoding with `pluginsdk.Decode`.
+It also owns JSON encoding of the business response.
+
+`NewHandler` and `Handle` remain compatibility symbols.
+They are not part of the standard registration path.
 
 ## 3. Configuration boundary
 

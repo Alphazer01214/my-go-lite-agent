@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"system-prompt",
 		"build",
-		pluginsdk.NewHandler(handleJSON(p.handlebuild)).
-			WithInfo("build", "build one system prompt"),
+		p.handleBuild,
 	)
 }
 

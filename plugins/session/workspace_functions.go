@@ -7,21 +7,10 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-// resolveWorkspace 决定新会话的归属：显式 id 优先，其次显式路径，最后取当前选中项。
-func (p *plugin) resolveWorkspace(workspaceId, workspacePath string) (Workspace, error) {
-	workspaceId = strings.TrimSpace(workspaceId)
+// resolveWorkspace 决定新会话的归属：显式路径优先，否则取当前选中项。
+func (p *plugin) resolveWorkspace(workspacePath string) (Workspace, error) {
 	workspacePath = strings.TrimSpace(workspacePath)
 
-	if workspaceId != "" {
-		record, ok := p.workspaces.info(workspaceId)
-		if !ok {
-			return Workspace{}, errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceId)
-		}
-		if workspacePath != "" && !sameWorkspacePath(workspacePath, record.Path) {
-			return Workspace{}, errCoded(codeWorkspaceMismatch, "workspace path does not match workspace_id")
-		}
-		return record, nil
-	}
 	if workspacePath != "" {
 		record, _, err := p.workspaces.ensure(workspacePath, "", false)
 		if err != nil {
@@ -31,7 +20,7 @@ func (p *plugin) resolveWorkspace(workspaceId, workspacePath string) (Workspace,
 	}
 	selected, ok := p.workspaces.current()
 	if !ok {
-		return Workspace{}, errCoded(codeWorkspaceRequired, "workspace_id or workspace is required")
+		return Workspace{}, errCoded(codeWorkspaceRequired, "workspace is required: pass an absolute path in workspace, or select one via workspace.select")
 	}
 	return *selected, nil
 }
@@ -41,7 +30,7 @@ func (p *plugin) listWorkspaces(ctx context.Context) (*workspaceListResp, error)
 		return nil, err
 	}
 	records, selected := p.workspaces.list()
-	return &workspaceListResp{Workspaces: records, SelectedId: selected}, nil
+	return &workspaceListResp{Workspaces: records, Selected: selected}, nil
 }
 
 func (p *plugin) createWorkspace(ctx context.Context, req *workspaceReq) (*workspaceCreateResp, error) {
@@ -52,9 +41,9 @@ func (p *plugin) createWorkspace(ctx context.Context, req *workspaceReq) (*works
 	if err != nil {
 		return nil, errCoded(codeWorkspaceInvalid, err.Error())
 	}
-	p.loadWorkspace(record.WorkspaceId)
+	p.loadWorkspace(record.Path)
 	return &workspaceCreateResp{
-		Workspace: record, Created: created, SelectedId: p.workspaces.selectedID(),
+		Workspace: record, Created: created, Selected: p.workspaces.selectedPath(),
 	}, nil
 }
 
@@ -62,20 +51,17 @@ func (p *plugin) updateWorkspace(ctx context.Context, req *workspaceReq) (*works
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspaceId := strings.TrimSpace(req.WorkspaceId)
-	if workspaceId == "" {
-		return nil, errCoded(codeWorkspaceRequired, "workspace_id is required")
+	path := strings.TrimSpace(req.Path)
+	if path == "" {
+		return nil, errCoded(codeWorkspaceRequired, "path is required")
 	}
-	if _, ok := p.workspaces.info(workspaceId); !ok {
-		return nil, errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceId)
+	if _, ok := p.workspaces.info(path); !ok {
+		return nil, errWorkspaceNotFound(path)
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "name is required")
 	}
-	if strings.TrimSpace(req.Path) != "" {
-		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "workspace path is immutable")
-	}
-	record, err := p.workspaces.rename(workspaceId, req.Name)
+	record, err := p.workspaces.rename(path, req.Name)
 	if err != nil {
 		return nil, errHandler(err)
 	}
@@ -86,33 +72,33 @@ func (p *plugin) selectWorkspace(ctx context.Context, req *workspaceReq) (*works
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspaceId := strings.TrimSpace(req.WorkspaceId)
-	if workspaceId == "" {
-		return nil, errCoded(codeWorkspaceRequired, "workspace_id is required")
+	path := strings.TrimSpace(req.Path)
+	if path == "" {
+		return nil, errCoded(codeWorkspaceRequired, "path is required")
 	}
-	record, err := p.workspaces.selectID(workspaceId)
+	record, err := p.workspaces.selectPath(path)
 	if err != nil {
-		return nil, errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceId)
+		return nil, errWorkspaceNotFound(path)
 	}
-	p.loadWorkspace(workspaceId)
-	return &workspaceSelectResp{Workspace: record, SelectedId: workspaceId}, nil
+	p.loadWorkspace(record.Path)
+	return &workspaceSelectResp{Workspace: record, Selected: record.Path}, nil
 }
 
 func (p *plugin) deleteWorkspace(ctx context.Context, req *workspaceReq) (*workspaceDeleteResp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspaceId := strings.TrimSpace(req.WorkspaceId)
-	if workspaceId == "" {
-		return nil, errCoded(codeWorkspaceRequired, "workspace_id is required")
+	path := strings.TrimSpace(req.Path)
+	if path == "" {
+		return nil, errCoded(codeWorkspaceRequired, "path is required")
 	}
-	if _, ok := p.workspaces.info(workspaceId); !ok {
-		return nil, errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceId)
+	if _, ok := p.workspaces.info(path); !ok {
+		return nil, errWorkspaceNotFound(path)
 	}
-	if p.hasSessionsInWorkspace(workspaceId) {
-		return nil, errCoded(codeWorkspaceNotEmpty, "workspace still has sessions: "+workspaceId)
+	if p.hasSessionsInWorkspace(path) {
+		return nil, errCoded(codeWorkspaceNotEmpty, "workspace still has sessions: "+path)
 	}
-	removed, selected, err := p.workspaces.remove(workspaceId)
+	removed, selected, err := p.workspaces.remove(path)
 	if err != nil {
 		return nil, errHandler(err)
 	}
@@ -120,7 +106,7 @@ func (p *plugin) deleteWorkspace(ctx context.Context, req *workspaceReq) (*works
 		p.loadWorkspace(selected)
 	}
 	return &workspaceDeleteResp{
-		WorkspaceId: workspaceId, Deleted: removed, SelectedId: selected,
+		Path: path, Deleted: removed, Selected: selected,
 	}, nil
 }
 
@@ -135,22 +121,14 @@ func (p *plugin) currentWorkspace(ctx context.Context) (*workspaceCurrentResp, e
 	return &workspaceCurrentResp{Workspace: record}, nil
 }
 
-func (p *plugin) hasSessionsInWorkspace(workspaceId string) bool {
+func (p *plugin) hasSessionsInWorkspace(path string) bool {
+	key := workspacePathKey(path)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, meta := range p.index {
-		if meta.WorkspaceId == workspaceId {
+		if workspacePathKey(meta.Workspace) == key {
 			return true
 		}
 	}
 	return false
-}
-
-func sameWorkspacePath(left, right string) bool {
-	leftPath, leftErr := canonicalWorkspacePath(left)
-	rightPath, rightErr := canonicalWorkspacePath(right)
-	if leftErr != nil || rightErr != nil {
-		return false
-	}
-	return workspacePathKey(leftPath) == workspacePathKey(rightPath)
 }

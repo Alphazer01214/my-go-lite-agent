@@ -34,23 +34,21 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 	if !created.Created || created.Workspace.Path != canonicalOne {
 		t.Fatalf("created = %+v", created)
 	}
-	if created.SelectedId != created.Workspace.WorkspaceId {
-		t.Fatalf("selected = %q, want new workspace", created.SelectedId)
+	if created.Selected != created.Workspace.Path {
+		t.Fatalf("selected = %q, want new workspace", created.Selected)
 	}
 	if created.Workspace.Name != filepath.Base(canonicalOne) {
 		t.Fatalf("name = %q", created.Workspace.Name)
 	}
-	wsOneId := created.Workspace.WorkspaceId
-
 	duplicate, err := p.createWorkspace(ctx, &workspaceReq{Path: wsOnePath, Name: "ignored"})
 	if err != nil {
 		t.Fatalf("duplicate workspace: %v", err)
 	}
-	if duplicate.Created || duplicate.Workspace.WorkspaceId != wsOneId {
+	if duplicate.Created || duplicate.Workspace.Path != canonicalOne {
 		t.Fatalf("duplicate = %+v", duplicate)
 	}
 
-	renamed, err := p.updateWorkspace(ctx, &workspaceReq{WorkspaceId: wsOneId, Name: "renamed"})
+	renamed, err := p.updateWorkspace(ctx, &workspaceReq{Path: canonicalOne, Name: "renamed"})
 	if err != nil {
 		t.Fatalf("rename workspace: %v", err)
 	}
@@ -62,7 +60,7 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 		t.Fatalf("relative path error = %v", err)
 	}
 
-	first, err := p.create(ctx, &createReq{Title: "one", WorkspaceId: wsOneId})
+	first, err := p.create(ctx, &createReq{Title: "one", Workspace: canonicalOne})
 	if err != nil {
 		t.Fatalf("create session one: %v", err)
 	}
@@ -73,20 +71,19 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 	if second.Workspace != canonicalTwo {
 		t.Fatalf("session two workspace = %q, want %q", second.Workspace, canonicalTwo)
 	}
-	wsTwoId := second.WorkspaceId
 
 	defaultList, err := p.listSessions(ctx, &listReq{})
 	if err != nil {
 		t.Fatalf("list default: %v", err)
 	}
-	if defaultList.WorkspaceId != wsOneId || len(defaultList.Sessions) != 1 || defaultList.Sessions[0].SessionId != first.SessionId {
+	if defaultList.Workspace != canonicalOne || len(defaultList.Sessions) != 1 || defaultList.Sessions[0].SessionId != first.SessionId {
 		t.Fatalf("default list = %+v", defaultList)
 	}
 	if defaultList.Sessions[0].FactCnt != 0 || defaultList.Sessions[0].NextSeq != 1 {
 		t.Fatalf("session summary = %+v", defaultList.Sessions[0])
 	}
 
-	secondList, err := p.listSessions(ctx, &listReq{WorkspaceId: wsTwoId})
+	secondList, err := p.listSessions(ctx, &listReq{Workspace: canonicalTwo})
 	if err != nil {
 		t.Fatalf("list ws two: %v", err)
 	}
@@ -94,18 +91,18 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 		t.Fatalf("ws two list = %+v", secondList)
 	}
 
-	if _, err := p.selectWorkspace(ctx, &workspaceReq{WorkspaceId: wsTwoId}); err != nil {
+	if _, err := p.selectWorkspace(ctx, &workspaceReq{Path: canonicalTwo}); err != nil {
 		t.Fatalf("select workspace: %v", err)
 	}
 	current, err := p.currentWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("current workspace: %v", err)
 	}
-	if current.Workspace == nil || current.Workspace.WorkspaceId != wsTwoId {
+	if current.Workspace == nil || current.Workspace.Path != canonicalTwo {
 		t.Fatalf("current = %+v", current)
 	}
 
-	if _, err := p.deleteWorkspace(ctx, &workspaceReq{WorkspaceId: wsOneId}); pluginsdk.Code(err) != codeWorkspaceNotEmpty {
+	if _, err := p.deleteWorkspace(ctx, &workspaceReq{Path: canonicalOne}); pluginsdk.Code(err) != codeWorkspaceNotEmpty {
 		t.Fatalf("delete non-empty error = %v", err)
 	}
 
@@ -114,29 +111,26 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create empty workspace: %v", err)
 	}
-	deleted, err := p.deleteWorkspace(ctx, &workspaceReq{WorkspaceId: third.Workspace.WorkspaceId})
+	deleted, err := p.deleteWorkspace(ctx, &workspaceReq{Path: third.Workspace.Path})
 	if err != nil {
 		t.Fatalf("delete empty workspace: %v", err)
 	}
-	if !deleted.Deleted || deleted.SelectedId == third.Workspace.WorkspaceId {
+	if !deleted.Deleted || deleted.Selected == third.Workspace.Path {
 		t.Fatalf("deleted = %+v", deleted)
 	}
 
-	if _, err := p.selectWorkspace(ctx, &workspaceReq{WorkspaceId: wsTwoId}); err != nil {
+	if _, err := p.selectWorkspace(ctx, &workspaceReq{Path: canonicalTwo}); err != nil {
 		t.Fatalf("reselect ws two: %v", err)
 	}
 	defaulted, err := p.create(ctx, &createReq{Title: "default workspace"})
 	if err != nil {
 		t.Fatalf("create default workspace session: %v", err)
 	}
-	if defaulted.WorkspaceId != wsTwoId {
-		t.Fatalf("default workspace = %q, want %q", defaulted.WorkspaceId, wsTwoId)
+	if defaulted.Workspace != canonicalTwo {
+		t.Fatalf("default workspace = %q, want %q", defaulted.Workspace, canonicalTwo)
 	}
 
-	if _, err := p.create(ctx, &createReq{WorkspaceId: wsTwoId, Workspace: wsOnePath}); pluginsdk.Code(err) != codeWorkspaceMismatch {
-		t.Fatalf("mismatch error = %v", err)
-	}
-	if _, err := p.selectWorkspace(ctx, &workspaceReq{WorkspaceId: "ws-missing"}); pluginsdk.Code(err) != codeWorkspaceNotFound {
+	if _, err := p.selectWorkspace(ctx, &workspaceReq{Path: "/no/such/workspace"}); pluginsdk.Code(err) != codeWorkspaceNotFound {
 		t.Fatalf("missing workspace error = %v", err)
 	}
 
@@ -145,12 +139,12 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 	reopened := newPluginAtDir(sessionDir)
 	defer reopened.close()
 	workspaces, selected := reopened.workspaces.list()
-	if selected != wsTwoId {
-		t.Fatalf("selected after reopen = %q, want %q", selected, wsTwoId)
+	if selected != canonicalTwo {
+		t.Fatalf("selected after reopen = %q, want %q", selected, canonicalTwo)
 	}
 	foundRenamed := false
 	for _, record := range workspaces {
-		if record.WorkspaceId == wsOneId && record.Name == "renamed" {
+		if record.Path == canonicalOne && record.Name == "renamed" {
 			foundRenamed = true
 		}
 	}
@@ -161,8 +155,47 @@ func TestWorkspaceRegistryAndSessionScoping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after reopen: %v", err)
 	}
-	if list.WorkspaceId != wsTwoId || len(list.Sessions) != 2 {
+	if list.Workspace != canonicalTwo || len(list.Sessions) != 2 {
 		t.Fatalf("list after reopen = %+v", list)
+	}
+}
+
+func TestWorkspaceRegistryMigratesFromV1(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{
+  "version": 1,
+  "selected_id": "ws-2-old",
+  "workspaces": [
+    {"workspace_id": "ws-1-old", "name": "one", "path": "/tmp/w-one", "created_ts": 1, "updated_ts": 1},
+    {"workspace_id": "ws-2-old", "name": "two", "path": "/tmp/w-two", "created_ts": 2, "updated_ts": 2}
+  ]
+}
+`
+	path := filepath.Join(dir, "workspaces.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	store, err := newWorkspaceStore(path)
+	if err != nil {
+		t.Fatalf("load legacy registry: %v", err)
+	}
+	workspaces, selected := store.list()
+	if selected != "/tmp/w-two" {
+		t.Fatalf("selected = %q, want /tmp/w-two (mapped from legacy selected_id)", selected)
+	}
+	if len(workspaces) != 2 {
+		t.Fatalf("migrated workspaces = %+v", workspaces)
+	}
+	byPath := map[string]Workspace{}
+	for _, record := range workspaces {
+		byPath[record.Path] = record
+	}
+	if byPath["/tmp/w-one"].Name != "one" || byPath["/tmp/w-two"].Name != "two" {
+		t.Fatalf("migrated workspaces = %+v", workspaces)
+	}
+	if store.state.Version != workspaceRegistryVersion {
+		t.Fatalf("version = %d, want %d", store.state.Version, workspaceRegistryVersion)
 	}
 }
 
@@ -190,7 +223,7 @@ func TestWorkspaceCapabilityRegistered(t *testing.T) {
 	}
 }
 
-func TestLegacySessionBindsWorkspaceByPath(t *testing.T) {
+func TestLegacySessionRegistersWorkspaceByPath(t *testing.T) {
 	sessionDir := t.TempDir()
 	workspaceDir := t.TempDir()
 	canonical, err := canonicalWorkspacePath(workspaceDir)
@@ -222,8 +255,11 @@ func TestLegacySessionBindsWorkspaceByPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("info: %v", err)
 	}
-	if info.WorkspaceId == "" || info.Workspace != canonical {
+	if info.Workspace != canonical {
 		t.Fatalf("legacy binding = %+v", info.Meta)
+	}
+	if _, ok := p.workspaces.info(canonical); !ok {
+		t.Fatal("legacy workspace was not registered")
 	}
 
 	list, err := p.listSessions(ctx, &listReq{})

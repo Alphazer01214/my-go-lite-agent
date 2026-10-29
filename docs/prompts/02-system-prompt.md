@@ -80,7 +80,7 @@
 | 类别 | 变量 | 允许出现的轨道 |
 |---|---|---|
 | 静态变量 | `{{product}}`、`{{model_family}}` | 仅静态轨 |
-| 动态变量 | `{{workspace}}`、`{{workspace_id}}`、`{{mode}}`、`{{scheme}}`、`{{platform}}`、`{{date}}` | 仅动态轨 |
+| 动态变量 | `{{workspace}}`、`{{mode}}`、`{{scheme}}`、`{{platform}}`、`{{date}}` | 仅动态轨 |
 
 静态轨出现动态变量时渲染失败，错误码 `prompt_variable_not_allowed`。
 

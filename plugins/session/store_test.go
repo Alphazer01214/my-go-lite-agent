@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 func TestCreateAppendRecover(t *testing.T) {
@@ -30,8 +32,8 @@ func TestCreateAppendRecover(t *testing.T) {
 	if meta.CreatedAt <= 0 {
 		t.Fatalf("created_at = %d, want > 0", meta.CreatedAt)
 	}
-	if meta.WorkspaceId == "" || meta.Workspace != canonical {
-		t.Fatalf("workspace binding = id %q path %q", meta.WorkspaceId, meta.Workspace)
+	if meta.Workspace != canonical {
+		t.Fatalf("workspace binding = %q, want %q", meta.Workspace, canonical)
 	}
 
 	appended, err := p.appendFacts(ctx, &appendReq{
@@ -59,7 +61,7 @@ func TestCreateAppendRecover(t *testing.T) {
 	if info.FactCnt != 3 || info.NextSeq != 4 {
 		t.Fatalf("info = count %d next %d, want 3/4", info.FactCnt, info.NextSeq)
 	}
-	if info.Title != "demo" || info.Workspace != canonical || info.WorkspaceId != meta.WorkspaceId {
+	if info.Title != "demo" || info.Workspace != canonical {
 		t.Fatalf("info meta = %+v", info.Meta)
 	}
 
@@ -131,12 +133,11 @@ func TestRecoverSkipsCorruptLineAndAppliesMetaRevision(t *testing.T) {
 		t.Fatalf("open log: %v", err)
 	}
 	revision, _ := json.Marshal(metaRecord{Kind: RecordKindMeta, Meta: Meta{
-		SessionId:   meta.SessionId,
-		Title:       "after",
-		WorkspaceId: meta.WorkspaceId,
-		Workspace:   meta.Workspace,
-		Origin:      meta.Origin,
-		CreatedAt:   meta.CreatedAt,
+		SessionId: meta.SessionId,
+		Title:     "after",
+		Workspace: meta.Workspace,
+		Origin:    meta.Origin,
+		CreatedAt: meta.CreatedAt,
 	}})
 	if _, err := f.WriteString(string(revision) + "\nbroken-json\n"); err != nil {
 		t.Fatalf("write corrupt line: %v", err)
@@ -175,6 +176,22 @@ func TestRecoverSkipsCorruptLineAndAppliesMetaRevision(t *testing.T) {
 		t.Fatalf("facts = %d, want 3", len(page.Facts))
 	}
 	reopened.close()
+}
+
+func TestMissingSessionErrorGuidesCreate(t *testing.T) {
+	p := newPluginAtDir(t.TempDir())
+	defer p.close()
+
+	_, err := p.info(context.Background(), &infoReq{SessionId: "s-missing"})
+	if err == nil {
+		t.Fatal("expected error for missing session")
+	}
+	if got := pluginsdk.Code(err); got != codeSessionNotFound {
+		t.Fatalf("code = %q, want %q", got, codeSessionNotFound)
+	}
+	if !strings.Contains(err.Error(), "session.create") {
+		t.Fatalf("error should guide caller to session.create, got %q", err.Error())
+	}
 }
 
 func assertFirstLineKind(t *testing.T, path, want string) {

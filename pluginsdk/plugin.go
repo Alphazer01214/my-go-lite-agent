@@ -92,7 +92,10 @@ type Handler struct {
 	handleFunc  HandleFunc
 }
 
-// NewHandler wraps fn so it can be passed to Register.
+// NewHandler wraps fn with optional handler metadata.
+//
+// Deprecated: Register accepts HandleFunc directly; keep this only for
+// compatibility with callers that need Name or Description.
 func NewHandler(fn HandleFunc) Handler {
 	return Handler{handleFunc: fn}
 }
@@ -157,16 +160,16 @@ func NewPlugin(name string) *Plugin {
 
 // Register binds capability.method to handler.
 // Same-plugin re-register is last-wins (protocol §4.2).
-func (p *Plugin) Register(capability string, method string, handler Handler) {
+func (p *Plugin) Register(capability string, method string, handler HandleFunc) {
 	if capability == "" || method == "" {
 		panic("Register: capability and method must be non-empty")
 	}
-	if handler.handleFunc == nil {
-		panic("Register: handler must be built with NewHandler")
+	if handler == nil {
+		panic("Register: handler must be non-nil")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.handlers[capability+"."+method] = handler
+	p.handlers[capability+"."+method] = Handler{handleFunc: handler}
 }
 
 // Registration is one registered (capability, method) → Handler entry.
@@ -670,9 +673,11 @@ func (p *Plugin) writeFrame(frame *protocol.Frame) error {
 	return protocol.WriteFrame(p.stdout, frame)
 }
 
-// Handle for plugin to register handle func
-// to implement a handle function, use:
-// func(ctx context.Context, req *Request) (pluginInternalStruct, error)
+// Handle adapts a handler returning an arbitrary JSON-marshalable result to
+// HandleFunc.
+//
+// Deprecated: new handlers should return json.RawMessage directly and be
+// passed to Register without this wrapper.
 func Handle(fn func(ctx context.Context, req *Request) (interface{}, error)) HandleFunc {
 	return func(ctx context.Context, req *Request) (json.RawMessage, error) {
 		res, err := fn(ctx, req)
@@ -697,3 +702,10 @@ func Decode(src *Request, dst interface{}) error {
 	}
 	return json.Unmarshal(src.Payload, dst)
 }
+
+// func ToPayload(src interface{}) json.RawMessage {
+// 	b, err := json.Marshal(src)
+// 	if err != nil {
+// 	}
+// 	return b
+// }

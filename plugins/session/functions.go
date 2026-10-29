@@ -18,7 +18,7 @@ func (p *plugin) create(ctx context.Context, req *createReq) (*Meta, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspace, err := p.resolveWorkspace(req.WorkspaceId, req.Workspace)
+	workspace, err := p.resolveWorkspace(req.Workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,6 @@ func (p *plugin) create(ctx context.Context, req *createReq) (*Meta, error) {
 		meta := Meta{
 			SessionId:       id,
 			Title:           req.Title,
-			WorkspaceId:     workspace.WorkspaceId,
 			Workspace:       workspace.Path,
 			ParentSessionId: req.ParentSessionID,
 			Origin:          origin,
@@ -144,23 +143,28 @@ func (p *plugin) listSessions(ctx context.Context, req *listReq) (*listResp, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspaceId := strings.TrimSpace(req.WorkspaceId)
-	if workspaceId == "" {
+	workspacePath := strings.TrimSpace(req.Workspace)
+	if workspacePath == "" {
 		selected, ok := p.workspaces.current()
 		if !ok {
 			return &listResp{Sessions: []sessionSummary{}}, nil
 		}
-		workspaceId = selected.WorkspaceId
-	} else if _, ok := p.workspaces.info(workspaceId); !ok {
-		return nil, errCoded(codeWorkspaceNotFound, "workspace not found: "+workspaceId)
+		workspacePath = selected.Path
+	} else {
+		record, ok := p.workspaces.info(workspacePath)
+		if !ok {
+			return nil, errWorkspaceNotFound(workspacePath)
+		}
+		workspacePath = record.Path
 	}
 
-	p.loadWorkspace(workspaceId)
+	p.loadWorkspace(workspacePath)
 
 	p.mu.Lock()
 	out := make([]sessionSummary, 0)
+	key := workspacePathKey(workspacePath)
 	for id, meta := range p.index {
-		if meta.WorkspaceId != workspaceId {
+		if workspacePathKey(meta.Workspace) != key {
 			continue
 		}
 		if !req.IncludeSubagents && meta.Origin == "subagent" {
@@ -191,7 +195,7 @@ func (p *plugin) listSessions(ctx context.Context, req *listReq) (*listResp, err
 		}
 		return a.SessionId > b.SessionId
 	})
-	return &listResp{WorkspaceId: workspaceId, Sessions: out}, nil
+	return &listResp{Workspace: workspacePath, Sessions: out}, nil
 }
 
 func errHandler(err error) error {

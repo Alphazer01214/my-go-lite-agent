@@ -599,7 +599,7 @@ type RegistrationSnapshot struct {
 }
 ```
 
-`Name` 和 `Description` 来自插件的 `WithInfo`，只用于展示。
+`Name` 和 `Description` 是可选展示字段，不参与路由。
 
 ## 12. 管理面
 

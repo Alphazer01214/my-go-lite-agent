@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"sandbox",
 		"check",
-		pluginsdk.NewHandler(handleJSON(p.handlecheck)).
-			WithInfo("check", "check one sandbox request"),
+		p.handleCheck,
 	)
 }
 

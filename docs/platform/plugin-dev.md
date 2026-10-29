@@ -48,12 +48,16 @@ plugins/<name>/
 package main
 
 import (
+    "context"
+    "encoding/json"
+
     "github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
+// handlePing: func(context.Context, *pluginsdk.Request) (json.RawMessage, error)
 func main() {
     p := pluginsdk.NewPlugin("example")
-    p.Register("example", "ping", pluginsdk.NewHandler(handlePing))
+    p.Register("example", "ping", handlePing)
     if err := p.Serve(); err != nil {
         panic(err)
     }
@@ -62,9 +66,16 @@ func main() {
 
 插件只 import `pluginsdk`。业务代码不手写 Frame 循环。测试夹具可以直接使用 `protocol`。
 
-`Register` 的第三个参数是 `pluginsdk.Handler`，必须用 `pluginsdk.NewHandler` 构造。直接传函数会 panic。
+`Register` 的第三个参数是 `pluginsdk.HandleFunc`。
+handler 接收 `ctx` 和 `*pluginsdk.Request`。
+handler 返回 `json.RawMessage` 和 `error`。
 
-`capability` 或 `method` 为空时 `Register` 会 panic。
+handler 内部使用 `pluginsdk.Decode` 解析请求。
+业务响应的 JSON 编码也由 handler 完成。
+
+`capability`、`method` 为空或 handler 为 `nil` 时，`Register` 会 panic。
+
+`NewHandler` 和 `Handle` 保留为兼容符号，不属于标准注册路径。
 
 SDK 的完整调用面见 [pluginsdk.md](pluginsdk.md)。插件不要直接发 `host.*` 调用，那些方法是 SDK 的内部通道。
 

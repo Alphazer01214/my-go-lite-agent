@@ -21,8 +21,7 @@ func (p *plugin) registerHandlers() {
 	p.sdk.Register(
 		"file",
 		"read",
-		pluginsdk.NewHandler(handleJSON(p.handleread)).
-			WithInfo("read", "read one workspace file"),
+		p.handleRead,
 	)
 }
 

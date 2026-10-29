@@ -26,6 +26,7 @@
 | 文档 | 主题 |
 |---|---|
 | [2026-10-27-pluginsdk-store-design-handoff.md](2026-10-27-pluginsdk-store-design-handoff.md) | 待实现：pluginsdk 进程内共享存储（Store）、ctx 注入方案与两步走策略 |
+| [2026-10-29-plugin-proceed-transparent-handoff.md](2026-10-29-plugin-proceed-transparent-handoff.md) | 待实现：Plugin Proceed 透明转发、Consumer 不写业务 Response、终点 Response 直达原调用方 |
 | [2026-10-24-git-readonly-revision.md](2026-10-24-git-readonly-revision.md) | 待实现：Git 只读面板与只读工具、时机化读取、右侧自动 tab；plan 待重议 |
 | [2026-10-15-host-runtime-infrastructure-development-log.md](2026-10-15-host-runtime-infrastructure-development-log.md) | Plugin Instance、执行上下文、Generation 隔离。三条并发规则在此 |
 | [2026-10-16-conversation-cancel-recovery-debug-log.md](2026-10-16-conversation-cancel-recovery-debug-log.md) | `turn_end` 缺失导致会话卡在 `running` |
