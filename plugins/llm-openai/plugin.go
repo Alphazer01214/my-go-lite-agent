@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 type plugin struct {
+	mu     sync.Mutex
 	sdk    *pluginsdk.Plugin
 	cfg    config
 	client *http.Client

@@ -36,6 +36,7 @@ function normalizeListItem(field, rawItem) {
 		const raw = rawItem?.[itemField.key];
 		if (raw === null || raw === undefined || raw === "") {
 			if (itemField.type === "number") item[itemField.key] = 0;
+			else if (itemField.type === "boolean") item[itemField.key] = false;
 			else item[itemField.key] = "";
 			continue;
 		}
@@ -45,6 +46,8 @@ function normalizeListItem(field, rawItem) {
 			if (Number.isFinite(number)) item[itemField.key] = number;
 		} else if (itemField.type === "boolean") {
 			item[itemField.key] = Boolean(raw);
+		} else if (itemField.type === "secret") {
+			item[itemField.key] = typeof raw === "string" ? raw : "";
 		} else {
 			item[itemField.key] = String(raw);
 		}
@@ -111,7 +114,9 @@ function readRawListValues(container) {
 	return [...rows].map((row) => {
 		const item = {};
 		const inputs = row.querySelectorAll?.(".settings-list-input") || [];
-		for (const input of inputs) item[input.dataset?.itemKey] = input.value;
+		for (const input of inputs) {
+			item[input.dataset?.itemKey] = input.type === "checkbox" ? input.checked : input.value;
+		}
 		return item;
 	});
 }
@@ -146,7 +151,13 @@ function syncDependentSelects(form, schema, preferredValues) {
 function createListRow(document, field, item) {
 	const row = document.createElement("div");
 	row.className = "settings-list-row";
-	for (const itemField of Array.isArray(field.item_fields) ? field.item_fields : []) {
+	const itemFields = Array.isArray(field.item_fields) ? field.item_fields : [];
+	const scalarCount = itemFields.filter((itemField) => itemField.type !== "boolean").length;
+	const actionRow = Math.floor(scalarCount / 2) + 1;
+	const booleanStartRow = actionRow + 1;
+	let scalarIndex = 0;
+	let booleanIndex = 0;
+	for (const itemField of itemFields) {
 		const value = item?.[itemField.key];
 		let input;
 		if (itemField.type === "select") {
@@ -169,6 +180,21 @@ function createListRow(document, field, item) {
 				return node;
 			}));
 			input.value = value === null || value === undefined ? "" : String(value);
+		} else if (itemField.type === "boolean") {
+			input = document.createElement("input");
+			input.type = "checkbox";
+			input.checked = Boolean(value);
+			input.placeholder = itemField.label || itemField.key;
+		} else if (itemField.type === "secret") {
+			input = document.createElement("input");
+			input.type = "password";
+			input.autocomplete = "new-password";
+			const configured = Boolean(
+				value?.configured ||
+				(typeof value === "string" && value !== ""),
+			);
+			input.value = "";
+			input.placeholder = configured ? "已配置，留空保持不变" : "未配置";
 		} else {
 			input = document.createElement("input");
 			input.type = itemField.type === "number" ? "number" : "text";
@@ -181,8 +207,37 @@ function createListRow(document, field, item) {
 		if (itemField.required) input.setAttribute?.("aria-required", "true");
 		if (itemField.min !== undefined) input.min = String(itemField.min);
 		if (itemField.step !== undefined) input.step = String(itemField.step);
-		row.append(input);
+
+		const cell = document.createElement("label");
+		cell.className = itemField.type === "boolean"
+			? "settings-list-cell settings-list-boolean"
+			: "settings-list-cell";
+		const title = document.createElement("span");
+		title.className = "settings-list-label";
+		title.textContent = itemField.label || itemField.key;
+		if (itemField.required) {
+			const required = document.createElement("span");
+			required.className = "settings-list-required";
+			required.textContent = "必填";
+			title.append(required);
+		}
+		if (itemField.type === "boolean") {
+			cell.append(input, title);
+			cell.style.gridRow = String(booleanStartRow + Math.floor(booleanIndex / 3));
+			cell.style.gridColumn = String(1 + (booleanIndex % 3) * 2) + " / span 2";
+			booleanIndex += 1;
+		} else {
+			cell.append(title, input);
+			cell.style.gridRow = String(1 + Math.floor(scalarIndex / 2));
+			cell.style.gridColumn = scalarIndex % 2 === 0 ? "1 / span 3" : "4 / span 3";
+			scalarIndex += 1;
+		}
+		row.append(cell);
 	}
+	const actions = document.createElement("div");
+	actions.className = "settings-list-actions";
+	actions.style.gridRow = String(actionRow);
+	actions.style.gridColumn = "4 / -1";
 	const remove = document.createElement("button");
 	remove.type = "button";
 	remove.className = "settings-list-remove";
@@ -192,7 +247,8 @@ function createListRow(document, field, item) {
 		row.remove();
 		parent?.dispatchEvent?.(new Event("input", { bubbles: true }));
 	});
-	row.append(remove);
+	actions.append(remove);
+	row.append(actions);
 	return row;
 }
 

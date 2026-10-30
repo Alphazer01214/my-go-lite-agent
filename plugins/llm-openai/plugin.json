@@ -16,7 +16,7 @@
         "label": "模型目录",
         "type": "list",
         "required": true,
-        "description": "每行一个模型，各自绑定端点与密钥，可同时配置多个供应商。上下文窗口用于上下文用量和压缩预算；留空按 0 处理。API Key 显示为脱敏值：保持不变则不修改，留空表示清除。",
+        "description": "每行一个模型，各自绑定端点、密钥和能力。API Key 不回显；留空保持不变。",
         "item_fields": [
           { "key": "id", "label": "模型 ID", "type": "string", "required": true },
           { "key": "label", "label": "显示名", "type": "string" },
@@ -28,7 +28,13 @@
             "required": true,
             "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
           },
-          { "key": "api_key", "label": "API Key", "type": "secret" }
+          { "key": "api_key", "label": "API Key", "type": "secret" },
+          { "key": "streaming", "label": "流式输出", "type": "boolean" },
+          { "key": "tools", "label": "工具调用", "type": "boolean" },
+          { "key": "vision", "label": "图像输入", "type": "boolean" },
+          { "key": "audio", "label": "音频输入", "type": "boolean" },
+          { "key": "reasoning", "label": "推理", "type": "boolean" },
+          { "key": "json_schema", "label": "JSON Schema", "type": "boolean" }
         ]
       },
       {

@@ -1,6 +1,3 @@
 {
-  "default_scheme": "tool_calling",
-  "max_steps": 128,
-  "tool_parallelism": "serial",
-  "max_parallel_tools": 4
+  "max_steps": 128
 }

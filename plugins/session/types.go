@@ -41,6 +41,7 @@ type Meta struct {
 	ParentSessionId    string   `json:"parent_session_id,omitempty"`
 	ChildrenSessionIds []string `json:"children_session_ids,omitempty"`
 	Origin             string   `json:"origin"` // agent or subagent
+	Model              string   `json:"model,omitempty"`
 	Pinned             bool     `json:"pinned,omitempty"`
 	CreatedAt          int64    `json:"created_at"`
 }
@@ -85,6 +86,7 @@ type createReq struct {
 	Workspace       string `json:"workspace"`
 	ParentSessionID string `json:"parent_session_id"`
 	Origin          string `json:"origin"`
+	Model           string `json:"model,omitempty"`
 	Depth           int    `json:"depth"`
 }
 

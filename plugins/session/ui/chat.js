@@ -11,6 +11,7 @@ import {
 	stopTurn,
 	currentTurn,
 	isBusy,
+	setSelectedModel,
 	clearError,
 	reportError,
 	workspaceLabel,
@@ -75,6 +76,11 @@ export class SessionChat extends HTMLElement {
 			this.updateButtons();
 		});
 		this.textarea.addEventListener("keydown", (event) => this.handleKeydown(event));
+		this.modelSelect = el("select", {
+			class: "model-select",
+			attrs: { "aria-label": "模型" },
+			onchange: () => setSelectedModel(this.modelSelect.value),
+		});
 
 		this.sendButton = el("button", {
 			class: "send",
@@ -110,6 +116,10 @@ export class SessionChat extends HTMLElement {
 			el("div", { class: "stage" }, this.scroll, this.jump),
 			el("div", { class: "composer" },
 				el("div", { class: "card" },
+					el("div", { class: "model-row" },
+						el("span", { class: "model-label", text: "模型" }),
+						this.modelSelect,
+					),
 					this.textarea,
 					el("div", { class: "actions" },
 						this.hint,
@@ -126,11 +136,14 @@ export class SessionChat extends HTMLElement {
 	connectedCallback() {
 		this.off.push(on("state", () => this.render()));
 		this.off.push(on("chunk", (detail) => this.onChunk(detail)));
+		this.settingsSaved = () => resync();
+		window.addEventListener("liteagent:settings-saved", this.settingsSaved);
 		init();
 		this.render();
 	}
 
 	disconnectedCallback() {
+		if (this.settingsSaved) window.removeEventListener("liteagent:settings-saved", this.settingsSaved);
 		for (const off of this.off) off();
 		this.off = [];
 	}
@@ -168,9 +181,30 @@ export class SessionChat extends HTMLElement {
 		}
 
 		this.renderMessages();
+		this.renderModels();
 		this.updateButtons();
 		if (keyChanged || this.pinned) this.scrollToBottom();
 		else this.updateJump();
+	}
+
+	renderModels() {
+		const models = Array.isArray(state.models) ? state.models : [];
+		const selected = String(state.meta?.model || state.selectedModel || state.defaultModel || "");
+		const options = models.map((model) => ({
+			value: String(model?.id || ""),
+			label: String(model?.label || model?.id || ""),
+		})).filter((option) => option.value);
+		if (selected && !options.some((option) => option.value === selected)) {
+			options.unshift({ value: selected, label: selected });
+		}
+		this.modelSelect.replaceChildren(...options.map((option) => {
+			const node = document.createElement("option");
+			node.value = option.value;
+			node.textContent = option.label;
+			return node;
+		}));
+		this.modelSelect.value = selected || options[0]?.value || "";
+		this.updateButtons();
 	}
 
 	renderMessages() {
@@ -302,7 +336,7 @@ export class SessionChat extends HTMLElement {
 		this.autosize();
 		this.pinned = true;
 		this.updateButtons();
-		sendTurn(text);
+		sendTurn(text, this.modelSelect.value);
 	}
 
 	updateButtons() {
@@ -313,6 +347,8 @@ export class SessionChat extends HTMLElement {
 		this.sendButton.disabled = !this.textarea.value.trim() || busy;
 		this.stopButton.disabled = busy && !turn?.sessionId;
 		this.stopButton.title = turn?.sessionId ? "停止生成" : "会话建立后可停止";
+		const lockedModel = Boolean(state.sessionId && state.meta?.model);
+		this.modelSelect.disabled = busy || lockedModel || state.loading.models || this.modelSelect.options.length === 0;
 	}
 
 	onChunk(detail) {

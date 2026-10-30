@@ -11,12 +11,11 @@
     "get": { "capability": "agent", "method": "settings.get" },
     "save": { "capability": "agent", "method": "settings.save" },
     "schema": [
-      { "key": "default_scheme", "label": "Default scheme", "type": "string", "required": true },
       { "key": "max_steps", "label": "Max steps", "type": "number", "required": true }
     ]
   },
   "description": "Turn orchestrator: assembles session/memory/llm/tools; multi-session concurrent",
   "commands": [
-    { "name": "config", "description": "Show or set default_scheme / max_steps", "usage": "/agent config [get|set k=v]" }
+    { "name": "config", "description": "Show or set max_steps", "usage": "/agent config [get|set k=v]" }
   ]
 }

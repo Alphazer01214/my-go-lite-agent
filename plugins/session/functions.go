@@ -44,6 +44,7 @@ func (p *plugin) create(ctx context.Context, req *createReq) (*Meta, error) {
 			Workspace:       workspace.Path,
 			ParentSessionId: req.ParentSessionID,
 			Origin:          origin,
+			Model:           strings.TrimSpace(req.Model),
 			CreatedAt:       time.Now().UnixMilli(),
 		}
 		st, err := createStore(p.sessionPath(id), id, meta)

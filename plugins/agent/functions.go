@@ -20,7 +20,7 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	sessionID, err := p.ensureSession(turnCtx, in, input)
+	sessionID, model, err := p.ensureSession(turnCtx, in, input)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 	_ = p.sdk.EmitWithID(r.ID, "loop", "started", started)
 
 	startedAt := time.Now()
-	startMeta, err := json.Marshal(turnStartMeta{TurnId: turnID, Workspace: in.Workspace})
+	startMeta, err := json.Marshal(turnStartMeta{TurnId: turnID, Workspace: in.Workspace, Model: model})
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 		return nil, err
 	}
 
-	reply, err := p.callLLM(turnCtx, r.ID, messages)
+	reply, err := p.callLLM(turnCtx, r.ID, model, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -87,28 +87,33 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 
 	return &turnResp{
 		SessionId: sessionID,
+		Model:     reply.Model,
 		Messages:  reply.Messages,
 		Seqs:      append(userSeqs, assistantSeqs...),
 	}, nil
 }
 
-func (p *plugin) ensureSession(ctx context.Context, in *fromWebUI, input string) (string, error) {
+func (p *plugin) ensureSession(ctx context.Context, in *fromWebUI, input string) (string, string, error) {
 	id := strings.TrimSpace(in.SessionId)
 	if id != "" {
 		payload, err := json.Marshal(sessionInfoReq{SessionId: id})
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		raw, err := p.sdk.Call(ctx, "session", "info", payload)
 		if err == nil {
 			var info sessionInfoResp
 			if err := json.Unmarshal(raw, &info); err != nil {
-				return "", err
+				return "", "", err
 			}
-			return info.SessionId, nil
+			model := strings.TrimSpace(info.Model)
+			if model == "" {
+				model = strings.TrimSpace(in.Model)
+			}
+			return info.SessionId, model, nil
 		}
 		if pluginsdk.Code(err) != codeSessionNotFound {
-			return "", err
+			return "", "", err
 		}
 	}
 
@@ -116,19 +121,20 @@ func (p *plugin) ensureSession(ctx context.Context, in *fromWebUI, input string)
 		Title:     titleFromInput(input),
 		Workspace: in.Workspace,
 		Origin:    "agent",
+		Model:     strings.TrimSpace(in.Model),
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	raw, err := p.sdk.Call(ctx, "session", "create", payload)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var meta sessionMeta
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return meta.SessionId, nil
+	return meta.SessionId, meta.Model, nil
 }
 
 func (p *plugin) appendFacts(ctx context.Context, sessionID string, facts []sessionFact) ([]int, error) {
@@ -163,8 +169,8 @@ func (p *plugin) sessionMessages(ctx context.Context, sessionID string) ([]plugi
 	return out.Messages, nil
 }
 
-func (p *plugin) callLLM(ctx context.Context, callerID string, messages []pluginsdk.ChatMessage) (*llmStreamResp, error) {
-	payload, err := json.Marshal(llmStreamReq{Messages: messages})
+func (p *plugin) callLLM(ctx context.Context, callerID, model string, messages []pluginsdk.ChatMessage) (*llmStreamResp, error) {
+	payload, err := json.Marshal(llmStreamReq{Model: model, Messages: messages})
 	if err != nil {
 		return nil, err
 	}

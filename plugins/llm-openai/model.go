@@ -11,11 +11,12 @@ import (
 const codeLLMConfigInvalid = "llm_config_invalid"
 
 type ModelConfig struct {
-	ID            string `json:"id"`
-	Label         string `json:"label,omitempty"`
-	ContextWindow int    `json:"context_window,omitempty"`
-	BaseURL       string `json:"base_url"`
-	APIKey        string `json:"api_key,omitempty"`
+	ID            string            `json:"id"`
+	Label         string            `json:"label,omitempty"`
+	ContextWindow int               `json:"context_window,omitempty"`
+	BaseURL       string            `json:"base_url"`
+	APIKey        string            `json:"api_key,omitempty"`
+	Capabilities  ModelCapabilities `json:"capabilities"`
 }
 
 type ModelCapabilities struct {
@@ -32,6 +33,36 @@ type config struct {
 	DefaultModel string        `json:"default_model"`
 }
 
+func (c config) validate() error {
+	if len(c.Models) == 0 {
+		return pluginsdk.ErrCode(codeLLMConfigInvalid, "models must be non-empty")
+	}
+	seen := make(map[string]bool, len(c.Models))
+	for _, model := range c.Models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			return pluginsdk.ErrCode(codeLLMConfigInvalid, "model id is required")
+		}
+		if seen[id] {
+			return pluginsdk.ErrCode(codeLLMConfigInvalid, "duplicate model id: "+id)
+		}
+		seen[id] = true
+		if strings.TrimSpace(model.BaseURL) == "" {
+			return pluginsdk.ErrCode(codeLLMConfigInvalid, "model "+id+" has no base_url")
+		}
+		if model.ContextWindow < 0 {
+			return pluginsdk.ErrCode(codeLLMConfigInvalid, "model "+id+" has negative context_window")
+		}
+	}
+	if strings.TrimSpace(c.DefaultModel) == "" {
+		return pluginsdk.ErrCode(codeLLMConfigInvalid, "default_model is required")
+	}
+	if !seen[c.DefaultModel] {
+		return pluginsdk.ErrCode(codeLLMConfigInvalid, "unknown default_model: "+c.DefaultModel)
+	}
+	return nil
+}
+
 func loadConfig(path string) (config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -39,6 +70,9 @@ func loadConfig(path string) (config, error) {
 	}
 	var cfg config
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		return config{}, err
+	}
+	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
 	return cfg, nil

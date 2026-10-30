@@ -22,7 +22,7 @@ func TestCreateAppendRecover(t *testing.T) {
 	defer p.close()
 	ctx := context.Background()
 
-	meta, err := p.create(ctx, &createReq{Title: "demo", Workspace: workspaceDir})
+	meta, err := p.create(ctx, &createReq{Title: "demo", Workspace: workspaceDir, Model: "model-a"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -34,6 +34,9 @@ func TestCreateAppendRecover(t *testing.T) {
 	}
 	if meta.Workspace != canonical {
 		t.Fatalf("workspace binding = %q, want %q", meta.Workspace, canonical)
+	}
+	if meta.Model != "model-a" {
+		t.Fatalf("model = %q, want model-a", meta.Model)
 	}
 
 	appended, err := p.appendFacts(ctx, &appendReq{
@@ -64,6 +67,9 @@ func TestCreateAppendRecover(t *testing.T) {
 	if info.Title != "demo" || info.Workspace != canonical {
 		t.Fatalf("info meta = %+v", info.Meta)
 	}
+	if info.Model != "model-a" {
+		t.Fatalf("info model = %q, want model-a", info.Model)
+	}
 
 	page, err := p.facts(ctx, &factsReq{SessionId: meta.SessionId, AfterSeq: 2, Types: []string{"message"}})
 	if err != nil {
@@ -93,6 +99,9 @@ func TestCreateAppendRecover(t *testing.T) {
 	}
 	if info.Title != "demo" {
 		t.Fatalf("title after reopen = %q", info.Title)
+	}
+	if info.Model != "model-a" {
+		t.Fatalf("model after reopen = %q, want model-a", info.Model)
 	}
 	appended, err = reopened.appendFacts(ctx, &appendReq{
 		SessionId: meta.SessionId,
@@ -238,7 +247,7 @@ func TestUpdateMetaAndDeleteSession(t *testing.T) {
 	p := newPluginAtDir(dir)
 	defer p.close()
 
-	first, err := p.create(ctx, &createReq{Title: "before", Workspace: workspace})
+	first, err := p.create(ctx, &createReq{Title: "before", Workspace: workspace, Model: "model-b"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -254,6 +263,9 @@ func TestUpdateMetaAndDeleteSession(t *testing.T) {
 	}
 	if updated.Title != title || !updated.Pinned {
 		t.Fatalf("updated meta = %+v", updated.Meta)
+	}
+	if updated.Model != "model-b" {
+		t.Fatalf("model after update = %q, want model-b", updated.Model)
 	}
 
 	list, err := p.listSessions(ctx, &listReq{Workspace: first.Workspace})

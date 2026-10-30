@@ -19,16 +19,13 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 	if len(in.Messages) == 0 {
 		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "messages is required")
 	}
-	model, err := p.cfg.model(in.Model)
+	cfg := p.snapshotConfig()
+	model, err := cfg.model(in.Model)
 	if err != nil {
 		return nil, err
 	}
 
-	body, err := json.Marshal(chatRequest{
-		Model:    model.ID,
-		Stream:   true,
-		Messages: wireMessages(in.Messages),
-	})
+	body, err := json.Marshal(buildChatRequest(model.ID, in.Messages))
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +73,14 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 			Text: text.String(),
 		}},
 	}, nil
+}
+
+func buildChatRequest(model string, messages []pluginsdk.ChatMessage) chatRequest {
+	return chatRequest{
+		Model:    model,
+		Stream:   true,
+		Messages: wireMessages(messages),
+	}
 }
 
 func readSSE(r io.Reader, onDelta func(string) error) error {

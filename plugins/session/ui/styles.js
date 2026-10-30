@@ -419,6 +419,32 @@ export const CHAT_CSS = `${BASE}
 	line-height: 22px;
 }
 .card textarea::placeholder { color: var(--sx-faint); }
+.model-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+.model-label {
+	flex: none;
+	color: var(--sx-faint);
+	font-size: 11px;
+}
+.model-select {
+	min-width: 0;
+	max-width: 240px;
+	height: 28px;
+	padding: 0 8px;
+	border: 1px solid var(--sx-border);
+	border-radius: 7px;
+	background: var(--sx-surface);
+	color: var(--sx-text);
+	font-size: 12px;
+}
+.model-select:disabled {
+	cursor: not-allowed;
+	opacity: .65;
+}
 .actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .hint {
 	flex: 1;

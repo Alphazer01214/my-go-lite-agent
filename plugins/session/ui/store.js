@@ -19,8 +19,11 @@ export const state = {
 	facts: [],
 	factsTotal: 0,
 	factsFilter: "all",
+	models: [],
+	defaultModel: "",
+	selectedModel: "",
 	turns: new Map(),
-	loading: { sessions: false, messages: false, facts: false },
+	loading: { sessions: false, messages: false, facts: false, models: false },
 	error: "",
 	notice: "",
 };
@@ -82,7 +85,7 @@ export function init() {
 
 async function bootstrap() {
 	try {
-		await loadWorkspaces();
+		await Promise.all([loadWorkspaces(), loadModels()]);
 		state.ready = true;
 		emit("state");
 		await refreshSessions();
@@ -97,7 +100,7 @@ export function resync() {
 	if (resyncPromise) return resyncPromise;
 	resyncPromise = (async () => {
 		try {
-			await loadWorkspaces();
+			await Promise.all([loadWorkspaces(), loadModels()]);
 			await refreshSessions();
 			if (state.sessionId) await refreshCurrent();
 		} catch (error) {
@@ -107,6 +110,22 @@ export function resync() {
 		}
 	})();
 	return resyncPromise;
+}
+
+async function loadModels() {
+	state.loading.models = true;
+	emit("state");
+	try {
+		const payload = await call("llm", "models.list", {});
+		state.models = Array.isArray(payload?.models) ? payload.models : [];
+		state.defaultModel = String(payload?.default_model || state.models[0]?.id || "");
+		state.selectedModel = state.meta?.model || state.selectedModel || state.defaultModel;
+	} catch (error) {
+		reportError("模型列表", error);
+	} finally {
+		state.loading.models = false;
+		emit("state");
+	}
 }
 
 async function loadWorkspaces() {
@@ -144,6 +163,7 @@ export function newChat() {
 	state.messages = [];
 	state.facts = [];
 	state.factsTotal = 0;
+	state.selectedModel = state.defaultModel;
 	state.error = "";
 	emit("state");
 }
@@ -155,6 +175,7 @@ export async function selectSession(id) {
 	const seq = selectionSeq;
 	state.sessionId = sessionId;
 	state.meta = findSession(sessionId);
+	state.selectedModel = state.meta?.model || state.defaultModel;
 	state.messages = [];
 	state.facts = [];
 	state.factsTotal = 0;
@@ -172,6 +193,7 @@ async function loadMeta(id, seq) {
 		const info = await call("session", "info", { session_id: id });
 		if (seq !== selectionSeq) return;
 		state.meta = info;
+		state.selectedModel = info.model || state.selectedModel || state.defaultModel;
 		emit("state");
 	} catch (error) {
 		if (seq === selectionSeq) reportError("会话信息", error);
@@ -294,6 +316,13 @@ export function setFactsFilter(filter) {
 	emit("state");
 }
 
+export function setSelectedModel(model) {
+	const id = String(model || "");
+	if (!id || id === state.selectedModel) return;
+	state.selectedModel = id;
+	emit("state");
+}
+
 let newTurnSeq = 0;
 
 export function currentTurn() {
@@ -330,7 +359,7 @@ function adopt(turn, sessionId) {
 	if (wasNew && !state.sessionId) state.sessionId = sessionId;
 }
 
-export async function sendTurn(text) {
+export async function sendTurn(text, model = "") {
 	const input = String(text || "").trim();
 	if (!input || !canSend()) return false;
 	const workspace = state.meta?.workspace || state.workspace;
@@ -344,6 +373,7 @@ export async function sendTurn(text) {
 	if (previous) state.turns.delete(previous.key);
 
 	const sessionId = state.sessionId;
+	const selectedModel = String(state.meta?.model || model || state.selectedModel || state.defaultModel || "");
 	const key = sessionId ? `s:${sessionId}` : `new:${++newTurnSeq}`;
 	const turn = {
 		key,
@@ -361,7 +391,7 @@ export async function sendTurn(text) {
 		const result = await bridge().call(
 			"loop",
 			"turn",
-			{ workspace, session_id: sessionId, user_input: input },
+			{ workspace, session_id: sessionId, user_input: input, model: selectedModel },
 			(event) => {
 				const payload = event?.payload || {};
 				if (event?.method === "started" && payload.session_id) {

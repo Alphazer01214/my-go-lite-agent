@@ -211,7 +211,7 @@ v1 不支持 `pages`、`props` 和插件私有路由页面。组件初始业务�
   `option_value` 和 `option_label` 指定取值、显示所用字段，默认 `id` / `label`。
   列表行增删或修改时，下拉选项随之更新。
 
-`list` 的 `item_fields` 支持 `string`、`number`、`boolean` 与 `select`；数字字段可带 `min`、`step`，
+`list` 的 `item_fields` 支持 `string`、`secret`、`number`、`boolean` 与 `select`；数字字段可带 `min`、`step`，
 `select` 用 `options` 声明静态选项。Host 不解释字段名，只按行收集成对象数组。完全空白的行不会提交。
 `required` 只渲染提示，不阻止提交；业务校验由插件的 `settings.save` 负责。
 

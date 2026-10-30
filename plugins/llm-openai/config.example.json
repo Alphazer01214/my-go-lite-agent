@@ -5,14 +5,30 @@
       "label": "DeepSeek Chat",
       "context_window": 65536,
       "base_url": "https://api.deepseek.com/v1",
-      "api_key": ""
+      "api_key": "",
+      "capabilities": {
+        "streaming": true,
+        "tools": true,
+        "vision": false,
+        "audio": false,
+        "reasoning": false,
+        "json_schema": true
+      }
     },
     {
       "id": "gpt-4o",
       "label": "GPT-4o",
       "context_window": 128000,
       "base_url": "https://api.openai.com/v1",
-      "api_key": ""
+      "api_key": "",
+      "capabilities": {
+        "streaming": true,
+        "tools": true,
+        "vision": true,
+        "audio": false,
+        "reasoning": false,
+        "json_schema": true
+      }
     }
   ],
   "default_model": "deepseek-chat"

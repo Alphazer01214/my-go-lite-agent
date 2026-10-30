@@ -664,16 +664,41 @@ body.resizing {
 }
 
 .settings-list-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
 }
 
-.settings-list-row input,
-.settings-list-row select {
-  flex: 1 1 120px;
-  width: auto;
+.settings-list-cell {
+  display: flex;
+  grid-column: span 3;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-list-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-list-required {
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.settings-list-cell input,
+.settings-list-cell select {
+  width: 100%;
   min-width: 0;
   min-height: 32px;
   padding: 5px 7px;
@@ -681,6 +706,31 @@ body.resizing {
   border-radius: 8px;
   color: var(--text);
   background: var(--surface);
+}
+
+.settings-list-cell input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+}
+
+.settings-list-boolean {
+  grid-column: span 2;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.settings-list-boolean .settings-list-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-list-actions {
+  display: flex;
+  grid-column: span 3;
+  align-items: end;
+  justify-content: flex-end;
 }
 
 .settings-list-add,
@@ -700,7 +750,7 @@ body.resizing {
 }
 
 .settings-list-remove {
-  flex: 0 0 auto;
+  min-width: 52px;
 }
 
 .setting-label {

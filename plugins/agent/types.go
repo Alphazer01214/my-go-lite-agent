@@ -27,6 +27,7 @@ type fromWebUI struct {
 	Workspace string `json:"workspace"`
 	SessionId string `json:"session_id"`
 	UserInput string `json:"user_input"`
+	Model     string `json:"model,omitempty"`
 
 	Action string `json:"action"`
 }
@@ -38,6 +39,7 @@ type sessionMeta struct {
 	ParentSessionId    string   `json:"parent_session_id,omitempty"`
 	ChildrenSessionIds []string `json:"children_session_ids,omitempty"`
 	Origin             string   `json:"origin"` // agent or subagent
+	Model              string   `json:"model,omitempty"`
 	Pinned             bool     `json:"pinned,omitempty"`
 	CreatedAt          int64    `json:"created_at"`
 }
@@ -57,6 +59,7 @@ type sessionCreateReq struct {
 	Workspace       string `json:"workspace"`
 	ParentSessionID string `json:"parent_session_id"`
 	Origin          string `json:"origin"`
+	Model           string `json:"model,omitempty"`
 	Depth           int    `json:"depth"`
 }
 
@@ -95,6 +98,7 @@ type llmStreamResp struct {
 
 type turnResp struct {
 	SessionId string                  `json:"session_id"`
+	Model     string                  `json:"model,omitempty"`
 	Messages  []pluginsdk.ChatMessage `json:"messages"`
 	Seqs      []int                   `json:"seqs"`
 }
@@ -116,6 +120,7 @@ type cancelResp struct {
 type turnStartMeta struct {
 	TurnId    string `json:"turn_id"`
 	Workspace string `json:"workspace,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 type turnEndMeta struct {
