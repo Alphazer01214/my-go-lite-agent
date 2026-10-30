@@ -15,28 +15,32 @@ import (
 
 // Request is one inbound Host req delivered to a handler.
 type Request struct {
-	ID          string
-	From        string
-	ContextID   string
-	Capability  string
-	Method      string
-	Payload     json.RawMessage
-	proceed     func(context.Context, json.RawMessage) error
-	proceedOnce atomic.Bool
-	// proceeded only affects this process's dispatch: after a successful
-	// Proceed the handler's own result is no longer a business Response.
+	ID         string
+	From       string
+	ContextID  string
+	Capability string
+	Method     string
+	Payload    json.RawMessage
+	proceed    func(context.Context, json.RawMessage) error
+	// proceeded marks a successful handoff. It rejects a second Proceed of the
+	// same request and stops this process's dispatch from writing a business
+	// Response once the request left the handler.
 	proceeded atomic.Bool
 }
 
 // Proceed hands the current request to the next hop of the Frame Priority
-// pipeline at most once. It is terminal: on success the request belongs to the
-// next hop and the handler's result is not written back as a Response. On
-// failure forwarding did not happen, so the handler may still return an error.
+// pipeline. It is terminal: on success the request belongs to the next hop
+// and the handler's result is not written back as a Response. On failure
+// forwarding did not happen, so the handler may still return an error.
+//
+// A failed Proceed may be retried. The Host owns the one-handoff-per-call
+// guarantee: it rejects a second handoff of the same call, so a retry can
+// never consume the request twice.
 func (r *Request) Proceed(ctx context.Context, payload json.RawMessage) error {
 	if r == nil || r.proceed == nil {
 		return ErrCode(CodeMethodNotFound, "request does not support proceed")
 	}
-	if !r.proceedOnce.CompareAndSwap(false, true) {
+	if r.proceeded.Load() {
 		return ErrCode(CodeFlowAlreadyProceeded, "request already proceeded")
 	}
 	if err := r.proceed(ctx, payload); err != nil {

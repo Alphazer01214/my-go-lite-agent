@@ -131,7 +131,7 @@ func TestProceedFailureFallsBackToResponse(t *testing.T) {
 	}
 }
 
-func TestProceedRunsAtMostOnce(t *testing.T) {
+func TestProceedAfterSuccessIsRejected(t *testing.T) {
 	var calls int
 	req := &Request{proceed: func(context.Context, json.RawMessage) error {
 		calls++
@@ -149,5 +149,28 @@ func TestProceedRunsAtMostOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("proceed backend called %d times, want 1", calls)
+	}
+}
+
+func TestProceedCanRetryAfterFailure(t *testing.T) {
+	var calls int
+	req := &Request{proceed: func(context.Context, json.RawMessage) error {
+		calls++
+		if calls == 1 {
+			return ErrCode(CodeBadArguments, "handoff failed")
+		}
+		return nil
+	}}
+	if err := req.Proceed(context.Background(), nil); Code(err) != CodeBadArguments {
+		t.Fatalf("first Proceed error code = %q, want %q", Code(err), CodeBadArguments)
+	}
+	if req.proceeded.Load() {
+		t.Fatal("proceeded is true after a failed Proceed")
+	}
+	if err := req.Proceed(context.Background(), nil); err != nil {
+		t.Fatalf("retry Proceed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("proceed backend called %d times, want 2", calls)
 	}
 }

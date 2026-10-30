@@ -166,7 +166,7 @@ return nil, nil
 
 `Proceed` 是终端操作。成功后当前 Request 已经交给下一跳，SDK 不再为它写业务 Response，处理器的返回值被忽略。终点 Response 由 Host 直接回给原始调用方，不经过 Consumer。
 
-每个 Request 最多调用一次 `Proceed`。重复调用返回 `flow_already_proceeded`。`Proceed` 不暴露 Host 内部路由。
+成功的 `Proceed` 之后再次调用返回 `flow_already_proceeded`。失败的 `Proceed` 可以重试：Host 负责「一次 Call 只交接一次」，重试不会被受理为第二次交接。`Proceed` 不暴露 Host 内部路由。
 
 `Proceed` 失败表示转发没有发生，处理器仍可返回错误 Response。
 

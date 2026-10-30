@@ -60,7 +60,7 @@ Execution contexts add a second layer of scheduling. They bind a capability to a
 A plugin can declare that it consumes a method. Consumers run in priority order before the provider:
 
 1. The host picks the highest-priority active consumer at or below the current position.
-2. That consumer may rewrite the payload and call `Proceed()` exactly once.
+2. That consumer may rewrite the payload and call `Proceed()`. A successful handoff cannot be repeated; a failed one may be retried.
 3. The host repeats until no consumer is left, then delivers the call to the provider.
 
 Two consumers with the same priority for the same method are an error (`consume_priority_conflict`), not an ordering guess. A pipeline may take at most 64 hops and may not revisit an instance, which turns accidental loops into `pipeline_loop`.
