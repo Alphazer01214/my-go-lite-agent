@@ -16,6 +16,18 @@
 # its ui/ assets and its README.md. This script only compiles and copies — it
 # never generates manifests, so dist can never drift from the source tree
 # (ADR-0021).
+#
+# Future plugin checklist:
+#   1. plugins/<name>/plugin.json (entry/provides/requires/ui);
+#   2. ui/<entry> and the custom elements it defines;
+#   3. config.example.json when the plugin has runtime config;
+#   4. add the name to scripts/shipped-plugins.conf;
+#   5. docs under plugins/<name>/ and tests.
+# Handoff: docs/archive/progress/2026-10-30-agent-session-llm-handoff.md
+# Runtime data is preserved generically: every plugin's root-level *.json
+# (except plugin.json/config.example.json/segments.json) and its sessions/
+# and data/ directories survive a clean build. Missing config.json is seeded
+# from the repo-local config.json or config.example.json.
 param(
     [switch]$Clean,
     [switch]$List,
@@ -97,58 +109,38 @@ if ($missingPlugins.Count -gt 0) {
 }
 
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
-$llmDistCfg = Join-Path $dist "plugins\llm-openai\config.json"
-$agentDistCfg = Join-Path $dist "plugins\agent\config.json"
-$mcDistCfg = Join-Path $dist "plugins\model-context\config.json"
-$shellDistCfg = Join-Path $dist "plugins\shell-tools\config.json"
-$sandboxDistCfg = Join-Path $dist "plugins\sandbox\config.json"
-$sandboxDistRules = Join-Path $dist "plugins\sandbox\rules.json"
+# Generic rule: every plugin's root-level *.json is runtime data, except the
+# files the build itself ships (plugin.json / config.example.json /
+# segments.json). Directories named sessions/ or data/ are runtime data too.
+# The legacy standalone workspace registry is handled separately below.
 $sessDistDir = Join-Path $dist "plugins\session\sessions"
 $sessionWorkspaceFile = Join-Path $sessDistDir "workspaces.json"
 $legacyWorkspaceFile = Join-Path $dist "plugins\workspace\workspaces.json"
 $stash = Join-Path ([IO.Path]::GetTempPath()) ("liteagent-stash-" + [guid]::NewGuid().ToString("N"))
-$llmStash = $null
-$sessStash = $null
+$pluginDataStash = Join-Path $stash "plugins"
 $legacyWorkspaceStash = $null
-$agentStash = $null
-$mcStash = $null
-$shellStash = $null
-$sandboxStash = $null
-$sandboxRulesStash = $null
-if (Test-Path $llmDistCfg) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $llmStash = Join-Path $stash "llm-config.json"
-    Copy-Item $llmDistCfg $llmStash -Force
-}
-if (Test-Path $agentDistCfg) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $agentStash = Join-Path $stash "agent-config.json"
-    Copy-Item $agentDistCfg $agentStash -Force
-}
-if (Test-Path $mcDistCfg) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $mcStash = Join-Path $stash "model-context-config.json"
-    Copy-Item $mcDistCfg $mcStash -Force
-}
-if (Test-Path $shellDistCfg) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $shellStash = Join-Path $stash "shell-config.json"
-    Copy-Item $shellDistCfg $shellStash -Force
-}
-if (Test-Path $sandboxDistCfg) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $sandboxStash = Join-Path $stash "sandbox-config.json"
-    Copy-Item $sandboxDistCfg $sandboxStash -Force
-}
-if (Test-Path $sandboxDistRules) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $sandboxRulesStash = Join-Path $stash "sandbox-rules.json"
-    Copy-Item $sandboxDistRules $sandboxRulesStash -Force
-}
-if (Test-Path $sessDistDir) {
-    New-Item -ItemType Directory -Path $stash -Force | Out-Null
-    $sessStash = Join-Path $stash "sessions"
-    Copy-Item $sessDistDir $sessStash -Recurse -Force
+$distPlugins = Join-Path $dist "plugins"
+if (Test-Path $distPlugins) {
+    foreach ($dir in Get-ChildItem $distPlugins -Directory -ErrorAction SilentlyContinue) {
+        # The legacy workspace plugin is migrated into session separately.
+        if ($dir.Name -eq "workspace") { continue }
+        $runtimeFiles = @(Get-ChildItem $dir.FullName -File -Filter *.json -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notin @("plugin.json", "config.example.json", "segments.json")
+        })
+        $dataDirs = @(@("sessions", "data") | ForEach-Object { Join-Path $dir.FullName $_ } | Where-Object {
+            Test-Path $_ -PathType Container
+        })
+        if ($runtimeFiles.Count -eq 0 -and $dataDirs.Count -eq 0) { continue }
+        $target = Join-Path $pluginDataStash $dir.Name
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        foreach ($file in $runtimeFiles) {
+            Copy-Item $file.FullName (Join-Path $target $file.Name) -Force
+        }
+        foreach ($dataDir in $dataDirs) {
+            Copy-Item $dataDir (Join-Path $target (Split-Path $dataDir -Leaf)) -Recurse -Force
+        }
+        Write-Host "preserve runtime data: plugins/$($dir.Name)"
+    }
 }
 if (Test-Path $legacyWorkspaceFile) {
     New-Item -ItemType Directory -Path $stash -Force | Out-Null
@@ -324,11 +316,27 @@ function Install-PluginDir([string]$name) {
     }
     $dir = Join-Path $dist "plugins\$name"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    $hasEntry = (Get-Content $manifest -Raw) -match '"entry"\s*:'
+    $manifestJson = $null
+    try {
+        # Windows PowerShell 5.1 defaults to ANSI; manifests are UTF-8.
+        $manifestText = [IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)
+        $manifestJson = $manifestText | ConvertFrom-Json
+    } catch {
+        Write-Warning "plugin:${name}: invalid plugin.json: $($_.Exception.Message)"
+    }
+    $hasEntry = [bool]($manifestJson -and $manifestJson.entry)
     if ($hasEntry) {
         Build-Pkg "plugin:$name" "./plugins/$name" (Join-Path $dir "$name.exe")
     }
     Copy-Item $manifest (Join-Path $dir "plugin.json") -Force
+    if ($manifestJson -and $manifestJson.ui) {
+        $uiEntry = [string]$manifestJson.ui.entry
+        if (-not $uiEntry) {
+            Write-Warning "plugin:${name}: ui is declared without ui.entry"
+        } elseif (-not (Test-Path (Join-Path $src $uiEntry) -PathType Leaf)) {
+            Write-Warning "plugin:${name}: ui.entry is missing: $uiEntry"
+        }
+    }
     foreach ($extra in @("ui", "README.md", "segments.json", "config.example.json")) {
         $p = Join-Path $src $extra
         if (-not (Test-Path $p)) { continue }
@@ -356,6 +364,7 @@ if ($List) {
     if ($missingPlugins.Count -gt 0) {
         Write-Warning ("no plugin.json: " + ($missingPlugins -join ", "))
     }
+    if (Test-Path $stash) { Remove-Item $stash -Recurse -Force -ErrorAction SilentlyContinue }
     return
 }
 
@@ -395,9 +404,6 @@ try {
     # Prune plugin dirs that are no longer shipped (keep configs/sessions).
     $keep = @{}
     foreach ($name in $shippedPlugins) { $keep[$name] = $true }
-    $keep["llm-openai"] = $true
-    $keep["agent"] = $true
-    $keep["session"] = $true
     Get-ChildItem (Join-Path $dist "plugins") -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         if (-not $keep[$_.Name]) {
             Write-Host "prune dist/plugins/$($_.Name)"
@@ -407,47 +413,57 @@ try {
         }
     }
 
-    # Restore user data (llm config + agent schemes + sessions),
-    # then seed whatever is still missing from the examples.
-    if ($null -ne $llmStash -and -not (Test-Path $llmDistCfg)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
-        Copy-Item $llmStash $llmDistCfg -Force
-        Write-Host "llm-openai config: preserved dist config.json (API key survives rebuilds)"
-    } elseif ($null -ne $llmStash) {
-        # Dist not wiped; config already in place.
-    }
-    if ($null -ne $agentStash -and -not (Test-Path $agentDistCfg)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $agentDistCfg) -Force | Out-Null
-        Copy-Item $agentStash $agentDistCfg -Force
-        Write-Host "agent config: preserved dist config.json (schemes survive rebuilds)"
-    }
-    if ($null -ne $mcStash -and -not (Test-Path $mcDistCfg)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $mcDistCfg) -Force | Out-Null
-        Copy-Item $mcStash $mcDistCfg -Force
-        Write-Host "model-context config: preserved dist config.json"
-    }
-    if ($null -ne $shellStash -and -not (Test-Path $shellDistCfg)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $shellDistCfg) -Force | Out-Null
-        Copy-Item $shellStash $shellDistCfg -Force
-        Write-Host "shell-tools config: preserved dist config.json"
-    }
-    if ($null -ne $sandboxStash -and -not (Test-Path $sandboxDistCfg)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistCfg) -Force | Out-Null
-        Copy-Item $sandboxStash $sandboxDistCfg -Force
-        Write-Host "sandbox config: preserved dist config.json"
-    }
-    if ($null -ne $sandboxRulesStash -and -not (Test-Path $sandboxDistRules)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistRules) -Force | Out-Null
-        Copy-Item $sandboxRulesStash $sandboxDistRules -Force
-        Write-Host "sandbox rules: preserved dist rules.json"
-    }
-    if ($null -ne $sessStash) {
-        $sessTarget = Join-Path $dist "plugins\session\sessions"
-        New-Item -ItemType Directory -Path $sessTarget -Force | Out-Null
-        $stashedSessions = @(Get-ChildItem -LiteralPath $sessStash -Force -ErrorAction SilentlyContinue)
-        if ($stashedSessions.Count -gt 0) {
-            Copy-Item (Join-Path $sessStash "*") $sessTarget -Recurse -Force
+    # Restore runtime data for plugins that are still shipped. A plugin removed
+    # from shipped-plugins.conf is pruned above and its data is not restored.
+    $shippedSet = @{}
+    foreach ($name in $shippedPlugins) { $shippedSet[$name] = $true }
+    if (Test-Path $pluginDataStash) {
+        foreach ($srcDir in Get-ChildItem $pluginDataStash -Directory -ErrorAction SilentlyContinue) {
+            if (-not $shippedSet[$srcDir.Name]) { continue }
+            $dstDir = Join-Path $dist "plugins\$($srcDir.Name)"
+            New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
+            foreach ($file in Get-ChildItem $srcDir.FullName -File -ErrorAction SilentlyContinue) {
+                $dstFile = Join-Path $dstDir $file.Name
+                if (-not (Test-Path $dstFile)) {
+                    Copy-Item $file.FullName $dstFile -Force
+                }
+            }
+            foreach ($dataDir in Get-ChildItem $srcDir.FullName -Directory -ErrorAction SilentlyContinue) {
+                $dstSub = Join-Path $dstDir $dataDir.Name
+                New-Item -ItemType Directory -Path $dstSub -Force | Out-Null
+                $children = @(Get-ChildItem $dataDir.FullName -Force -ErrorAction SilentlyContinue)
+                if ($children.Count -gt 0) {
+                    Copy-Item (Join-Path $dataDir.FullName "*") $dstSub -Recurse -Force
+                }
+            }
         }
+    }
+
+    # Seed a missing config.json for every shipped plugin that ships a
+    # config.example.json. Repo-local config.json wins; the example is fallback.
+    # The build never injects or rewrites an API key.
+    foreach ($name in $shippedPlugins) {
+        $pluginDir = Join-Path $root "plugins\$name"
+        $example = Join-Path $pluginDir "config.example.json"
+        $dstCfg = Join-Path $dist "plugins\$name\config.json"
+        if (-not (Test-Path $example) -or (Test-Path $dstCfg)) { continue }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $dstCfg) -Force | Out-Null
+        $repoCfg = Join-Path $pluginDir "config.json"
+        if (Test-Path $repoCfg) {
+            Copy-Item $repoCfg $dstCfg -Force
+            Write-Host "$name config: seeded from repo plugins/$name/config.json (kept as-is)"
+        } else {
+            Copy-Item $example $dstCfg -Force
+            Write-Host "$name config: seeded from plugins/$name/config.example.json"
+        }
+    }
+    $llmCfg = Join-Path $dist "plugins\llm-openai\config.json"
+    if ((Test-Path $llmCfg) -and -not ((Get-Content $llmCfg -Raw) -match '"models"')) {
+        Write-Warning "llm-openai config.json uses the legacy flat format; rewrite it as models[] + default_model"
+    }
+
+    $sessTarget = Join-Path $dist "plugins\session\sessions"
+    if (Test-Path $sessTarget) {
         Write-Host "sessions: preserved $( (Get-ChildItem -Path $sessTarget -Filter *.jsonl -ErrorAction SilentlyContinue).Count ) file(s)"
     }
     if ($null -ne $legacyWorkspaceStash -and -not (Test-Path $sessionWorkspaceFile)) {
@@ -458,59 +474,6 @@ try {
     if ($null -ne $stash -and (Test-Path $stash)) {
         Remove-Item $stash -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # llm-openai config priority: existing dist config, then a repo-local
-    # config.json (gitignored), else seed the empty example template.
-    # The build never injects or rewrites an API key.
-    $repoCfg = Join-Path $root "plugins\llm-openai\config.json"
-    if (Test-Path $llmDistCfg) {
-        # already present
-    } elseif (Test-Path $repoCfg) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
-        Copy-Item $repoCfg $llmDistCfg -Force
-        Write-Host "llm-openai config: seeded from repo plugins\llm-openai\config.json (kept as-is)"
-    } elseif (Test-Path (Join-Path $root "plugins\llm-openai\config.example.json")) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $llmDistCfg) -Force | Out-Null
-        Copy-Item (Join-Path $root "plugins\llm-openai\config.example.json") $llmDistCfg -Force
-        Write-Warning "no llm-openai config yet — set your key via /llm-openai config set apiKey=... or edit dist\plugins\llm-openai\config.json; later rebuilds will keep it"
-    } else {
-        Write-Warning "no config template for llm-openai (dist keeps no config.json)"
-    }
-    # Seed agent config.json once (scheme defaults); later rebuilds keep user edits.
-    if (-not (Test-Path $agentDistCfg)) {
-        $agentExample = Join-Path $root "plugins\agent\config.example.json"
-        if (Test-Path $agentExample) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent $agentDistCfg) -Force | Out-Null
-            Copy-Item $agentExample $agentDistCfg -Force
-            Write-Host "agent config: seeded default schemes (chat/tool_calling/coding)"
-        }
-    }
-    # Seed model-context config.json once; later rebuilds keep user edits.
-    if (-not (Test-Path $mcDistCfg)) {
-        $mcExample = Join-Path $root "plugins\model-context\config.example.json"
-        if (Test-Path $mcExample) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent $mcDistCfg) -Force | Out-Null
-            Copy-Item $mcExample $mcDistCfg -Force
-            Write-Host "model-context config: seeded prompt sections and budget defaults"
-        }
-    }
-    # Seed shell-tools config.json once; later rebuilds keep user edits.
-    if (-not (Test-Path $shellDistCfg)) {
-        $shellExample = Join-Path $root "plugins\shell-tools\config.example.json"
-        if (Test-Path $shellExample) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent $shellDistCfg) -Force | Out-Null
-            Copy-Item $shellExample $shellDistCfg -Force
-            Write-Host "shell-tools config: seeded interpreter policy"
-        }
-    }
-    # Seed sandbox config.json once; later rebuilds keep user edits.
-    if (-not (Test-Path $sandboxDistCfg)) {
-        $sandboxExample = Join-Path $root "plugins\sandbox\config.example.json"
-        if (Test-Path $sandboxExample) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent $sandboxDistCfg) -Force | Out-Null
-            Copy-Item $sandboxExample $sandboxDistCfg -Force
-            Write-Host "sandbox config: seeded risk bands and rule file name"
-        }
-    }
 
     # ── docs ────────────────────────────────────────────────────────────────
     Copy-DistAsset "README.md" $dist
@@ -520,6 +483,7 @@ try {
     $sw.Stop()
     Write-Host ""
     Write-Host ("Release layout ready: {0}  (rebuilt {1}, skipped {2}, {3:n1}s, version {4})" -f $dist, $script:rebuildCount, $script:skipCount, $sw.Elapsed.TotalSeconds, $version)
+    Write-Host "handoff: docs/archive/progress/2026-10-30-agent-session-llm-handoff.md"
     Get-ChildItem -Recurse $dist | Where-Object { -not $_.PSIsContainer -and $_.FullName -notlike ($cacheDir + "*") } | ForEach-Object {
         $_.FullName.Substring($dist.Length + 1)
     }

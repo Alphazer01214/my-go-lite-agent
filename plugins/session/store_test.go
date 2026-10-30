@@ -194,6 +194,102 @@ func TestMissingSessionErrorGuidesCreate(t *testing.T) {
 	}
 }
 
+func TestMessagesProjectsOnlyMessageFacts(t *testing.T) {
+	p := newPluginAtDir(t.TempDir())
+	defer p.close()
+	ctx := context.Background()
+
+	meta, err := p.create(ctx, &createReq{Title: "demo", Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := p.appendFacts(ctx, &appendReq{
+		SessionId: meta.SessionId,
+		Facts: []factIn{
+			{Type: TypeTurnStart, Role: "host", TextContent: "ignored"},
+			{Type: TypeMessage, Role: "user", TextContent: "hi"},
+			{Type: TypeStepStart, TextContent: "ignored"},
+			{Type: TypeMessage, Role: "assistant", TextContent: "hello"},
+			{Type: TypeMessage, TextContent: "no role"},
+		},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	out, err := p.messages(ctx, &infoReq{SessionId: meta.SessionId})
+	if err != nil {
+		t.Fatalf("messages: %v", err)
+	}
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 entries", out.Messages)
+	}
+	if out.Messages[0].Seq != 2 || out.Messages[0].Role != "user" || out.Messages[0].Text != "hi" {
+		t.Fatalf("first message = %+v", out.Messages[0])
+	}
+	if out.Messages[1].Seq != 4 || out.Messages[1].Role != "assistant" || out.Messages[1].Text != "hello" {
+		t.Fatalf("second message = %+v", out.Messages[1])
+	}
+}
+
+func TestUpdateMetaAndDeleteSession(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	p := newPluginAtDir(dir)
+	defer p.close()
+
+	first, err := p.create(ctx, &createReq{Title: "before", Workspace: workspace})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := p.create(ctx, &createReq{Title: "second", Workspace: workspace}); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+
+	title := "renamed"
+	pinned := true
+	updated, err := p.update(ctx, &updateReq{SessionId: first.SessionId, Title: &title, Pinned: &pinned})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Title != title || !updated.Pinned {
+		t.Fatalf("updated meta = %+v", updated.Meta)
+	}
+
+	list, err := p.listSessions(ctx, &listReq{Workspace: first.Workspace})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Sessions) != 2 || list.Sessions[0].SessionId != first.SessionId || !list.Sessions[0].Pinned {
+		t.Fatalf("pinned session should sort first: %+v", list.Sessions)
+	}
+
+	p.close()
+	reopened := newPluginAtDir(dir)
+	defer reopened.close()
+	info, err := reopened.info(ctx, &infoReq{SessionId: first.SessionId})
+	if err != nil {
+		t.Fatalf("info after reopen: %v", err)
+	}
+	if info.Title != title || !info.Pinned {
+		t.Fatalf("meta revision lost: %+v", info.Meta)
+	}
+
+	deleted, err := reopened.deleteSession(ctx, &deleteReq{SessionId: first.SessionId})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted.Deleted || deleted.SessionId != first.SessionId {
+		t.Fatalf("delete response = %+v", deleted)
+	}
+	if _, err := reopened.info(ctx, &infoReq{SessionId: first.SessionId}); pluginsdk.Code(err) != codeSessionNotFound {
+		t.Fatalf("info after delete code = %q, want %q", pluginsdk.Code(err), codeSessionNotFound)
+	}
+	if _, err := os.Stat(filepath.Join(dir, first.SessionId+".jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("session file still exists: %v", err)
+	}
+}
+
 func assertFirstLineKind(t *testing.T, path, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+
+	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
 const (
@@ -10,6 +12,7 @@ const (
 	TypeTurnEnd      = "turn_end"
 	TypeStepStart    = "step_start"
 	TypeStepEnd      = "step_end"
+	TypeMessage      = "message"
 )
 
 // 磁盘记录的 kind。首行固定为 meta，其余为 fact 或 meta 修订行。
@@ -18,15 +21,14 @@ const (
 	RecordKindFact = "fact"
 )
 
-// Fact session 内部不解析 pluginsdk 提供的结构体，使用 json.RawMessage
 type Fact struct {
-	Seq         int             `json:"seq"`
-	Type        string          `json:"type"`
-	Role        string          `json:"role,omitempty"`
-	TextContent string          `json:"text_content,omitempty"`
-	Files       json.RawMessage `json:"files,omitempty"`
-	ToolCalls   json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID  string          `json:"tool_call_id,omitempty"`
+	Seq         int                  `json:"seq"`
+	Type        string               `json:"type"`
+	Role        string               `json:"role,omitempty"`
+	TextContent string               `json:"text_content,omitempty"`
+	Files       []pluginsdk.File     `json:"files,omitempty"`
+	ToolCalls   []pluginsdk.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID  string               `json:"tool_call_id,omitempty"`
 	// Meta 自定义的描述字段
 	Meta      json.RawMessage `json:"meta,omitempty"`
 	Timestamp int64           `json:"timestamp"`
@@ -69,11 +71,13 @@ type infoReq struct {
 
 type infoResp struct {
 	Meta
+	//Facts   []Fact `json:"facts"`
 	FactCnt int `json:"fact_count"`
 	NextSeq int `json:"next_seq"`
 }
 
 type messageResp struct {
+	Messages []pluginsdk.ChatMessage `json:"messages"`
 }
 
 type createReq struct {
@@ -90,13 +94,13 @@ type appendReq struct {
 }
 
 type factIn struct {
-	Type        string          `json:"type"`
-	Role        string          `json:"role,omitempty"`
-	TextContent string          `json:"text_content,omitempty"`
-	Files       json.RawMessage `json:"files,omitempty"`
-	ToolCalls   json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID  string          `json:"tool_call_id,omitempty"`
-	Meta        json.RawMessage `json:"meta,omitempty"`
+	Type        string               `json:"type"`
+	Role        string               `json:"role,omitempty"`
+	TextContent string               `json:"text_content,omitempty"`
+	Files       []pluginsdk.File     `json:"files,omitempty"`
+	ToolCalls   []pluginsdk.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID  string               `json:"tool_call_id,omitempty"`
+	Meta        json.RawMessage      `json:"meta,omitempty"`
 	// Timestamp 可选；为 0 时使用追加时的当前时间。
 	Timestamp int64 `json:"timestamp,omitempty"`
 }
@@ -105,6 +109,25 @@ type appendResp struct {
 	SessionId string `json:"session_id"`
 	Seqs      []int  `json:"seqs"`
 	NextSeq   int    `json:"next_seq"`
+}
+
+type updateReq struct {
+	SessionId string  `json:"session_id"`
+	Title     *string `json:"title,omitempty"`
+	Pinned    *bool   `json:"pinned,omitempty"`
+}
+
+type updateResp struct {
+	Meta
+}
+
+type deleteReq struct {
+	SessionId string `json:"session_id"`
+}
+
+type deleteResp struct {
+	SessionId string `json:"session_id"`
+	Deleted   bool   `json:"deleted"`
 }
 
 type factsReq struct {

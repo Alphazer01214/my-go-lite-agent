@@ -145,6 +145,8 @@ func (p *plugin) loadWorkspace(workspacePath string) {
 			continue
 		}
 		p.reg[id] = st
+		current, _, _, _ := st.snapshot()
+		p.index[id] = current
 	}
 }
 
@@ -166,6 +168,8 @@ func (p *plugin) get(id string) (*store, error) {
 		return nil, errHandler(err)
 	}
 	p.reg[id] = st
+	current, _, _, _ := st.snapshot()
+	p.index[id] = current
 	return st, nil
 }
 

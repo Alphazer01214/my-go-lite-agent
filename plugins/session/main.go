@@ -23,6 +23,16 @@ func (p *plugin) registerHandlers() {
 	)
 	p.sdk.Register(
 		"session",
+		"update",
+		p.handleUpdate,
+	)
+	p.sdk.Register(
+		"session",
+		"delete",
+		p.handleDelete,
+	)
+	p.sdk.Register(
+		"session",
 		"facts",
 		p.handleFacts,
 	)
@@ -62,6 +72,7 @@ func (p *plugin) registerHandlers() {
 		"current",
 		p.handleWorkspaceCurrent,
 	)
+	p.sdk.Register("session", "messages", p.handleMessages)
 }
 
 func main() {

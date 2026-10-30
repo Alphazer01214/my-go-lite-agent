@@ -46,6 +46,32 @@ func (p *plugin) handleAppend(ctx context.Context, req *pluginsdk.Request) (json
 	return json.Marshal(result)
 }
 
+// update session.update
+func (p *plugin) handleUpdate(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	var input updateReq
+	if err := pluginsdk.Decode(req, &input); err != nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
+	}
+	result, err := p.update(ctx, &input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
+// delete session.delete
+func (p *plugin) handleDelete(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	var input deleteReq
+	if err := pluginsdk.Decode(req, &input); err != nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
+	}
+	result, err := p.deleteSession(ctx, &input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
 // facts session.facts
 func (p *plugin) handleFacts(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
 	var input factsReq
@@ -72,6 +98,19 @@ func (p *plugin) handleList(ctx context.Context, req *pluginsdk.Request) (json.R
 		return nil, err
 	}
 	return json.Marshal(result)
+}
+
+// session.messages
+func (p *plugin) handleMessages(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	var input infoReq
+	if err := pluginsdk.Decode(req, &input); err != nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
+	}
+	res, err := p.messages(ctx, &input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(res)
 }
 
 // workspace.list

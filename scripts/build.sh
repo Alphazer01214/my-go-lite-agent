@@ -17,6 +17,18 @@
 # its ui/ assets and its README.md. This script only compiles and copies — it
 # never generates manifests, so dist can never drift from the source tree
 # (ADR-0021).
+#
+# Future plugin checklist:
+#   1. plugins/<name>/plugin.json (entry/provides/requires/ui);
+#   2. ui/<entry> and the custom elements it defines;
+#   3. config.example.json when the plugin has runtime config;
+#   4. add the name to scripts/shipped-plugins.conf;
+#   5. docs under plugins/<name>/ and tests.
+# Handoff: docs/archive/progress/2026-10-30-agent-session-llm-handoff.md
+# Runtime data is preserved generically: every plugin's root-level *.json
+# (except plugin.json/config.example.json/segments.json) and its sessions/
+# and data/ directories survive a clean build. Missing config.json is seeded
+# from the repo-local config.json or config.example.json.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -114,24 +126,49 @@ if [[ -n "$MISSING_PLUGINS" ]]; then
 fi
 
 # ── user-data preserve (needed when wiping; cheap no-op otherwise) ───────────
+# Generic rule: every plugin's root-level *.json is runtime data, except the
+# files the build itself ships (plugin.json / config.example.json /
+# segments.json). Directories named sessions/ or data/ are runtime data too.
+# The legacy standalone workspace registry is handled separately below.
 STASH="$(mktemp -d)"
-LLM_DIST_CFG="$DIST/plugins/llm-openai/config.json"
-AGENT_DIST_CFG="$DIST/plugins/agent/config.json"
-MC_DIST_CFG="$DIST/plugins/model-context/config.json"
-SHELL_DIST_CFG="$DIST/plugins/shell-tools/config.json"
-SANDBOX_DIST_CFG="$DIST/plugins/sandbox/config.json"
-SANDBOX_DIST_RULES="$DIST/plugins/sandbox/rules.json"
+PLUGIN_STASH="$STASH/plugins"
 SESS_DIST_DIR="$DIST/plugins/session/sessions"
 SESSION_WORKSPACE_FILE="$SESS_DIST_DIR/workspaces.json"
 LEGACY_WORKSPACE_FILE="$DIST/plugins/workspace/workspaces.json"
-[[ -f "$LLM_DIST_CFG" ]] && cp "$LLM_DIST_CFG" "$STASH/llm-config.json"
-[[ -f "$AGENT_DIST_CFG" ]] && cp "$AGENT_DIST_CFG" "$STASH/agent-config.json"
-[[ -f "$MC_DIST_CFG" ]] && cp "$MC_DIST_CFG" "$STASH/model-context-config.json"
-[[ -f "$SHELL_DIST_CFG" ]] && cp "$SHELL_DIST_CFG" "$STASH/shell-config.json"
-[[ -f "$SANDBOX_DIST_CFG" ]] && cp "$SANDBOX_DIST_CFG" "$STASH/sandbox-config.json"
-[[ -f "$SANDBOX_DIST_RULES" ]] && cp "$SANDBOX_DIST_RULES" "$STASH/sandbox-rules.json"
-[[ -d "$SESS_DIST_DIR" ]] && cp -R "$SESS_DIST_DIR" "$STASH/sessions"
-[[ -f "$LEGACY_WORKSPACE_FILE" ]] && cp "$LEGACY_WORKSPACE_FILE" "$STASH/legacy-workspaces.json"
+if [[ -d "$DIST/plugins" ]]; then
+  for dir in "$DIST/plugins"/*; do
+    [[ -d "$dir" ]] || continue
+    name="$(basename "$dir")"
+    # The legacy workspace plugin is migrated into session separately.
+    [[ "$name" == "workspace" ]] && continue
+    target="$PLUGIN_STASH/$name"
+    copied=0
+    for file in "$dir"/*.json; do
+      [[ -f "$file" ]] || continue
+      base="$(basename "$file")"
+      case "$base" in
+        plugin.json|config.example.json|segments.json) continue ;;
+      esac
+      mkdir -p "$target"
+      cp "$file" "$target/$base"
+      copied=1
+    done
+    for data in sessions data; do
+      if [[ -d "$dir/$data" ]]; then
+        mkdir -p "$target"
+        cp -R "$dir/$data" "$target/$data"
+        copied=1
+      fi
+    done
+    if [[ $copied -eq 1 ]]; then
+      echo "preserve runtime data: plugins/$name"
+    fi
+  done
+fi
+if [[ -f "$LEGACY_WORKSPACE_FILE" ]]; then
+  mkdir -p "$STASH"
+  cp "$LEGACY_WORKSPACE_FILE" "$STASH/legacy-workspaces.json"
+fi
 
 if [[ $CLEAN -eq 1 && -d "$DIST" ]]; then
   echo "removing previous dist/ (configs + sessions stashed)"
@@ -275,6 +312,17 @@ install_plugin_dir() {
   cp "$src/plugin.json" "$dir/plugin.json"
   sed -i.bak 's/"entry": *"'"$name"'\.exe"/"entry": "'"$name"'"/' "$dir/plugin.json"
   rm -f "$dir/plugin.json.bak"
+  # Best-effort UI entry validation: catch a manifest that points at a file
+  # the plugin package does not ship. Uses python3 or node when available.
+  ui_entry=""
+  if command -v python3 >/dev/null 2>&1; then
+    ui_entry="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(((d.get("ui") or {}).get("entry") or ""))' "$src/plugin.json" 2>/dev/null || true)"
+  elif command -v node >/dev/null 2>&1; then
+    ui_entry="$(node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write((d.ui&&d.ui.entry)||"")' "$src/plugin.json" 2>/dev/null || true)"
+  fi
+  if [[ -n "$ui_entry" && ! -f "$src/$ui_entry" ]]; then
+    echo "warning: plugin:$name ui.entry is missing: $ui_entry" >&2
+  fi
   for extra in ui README.md segments.json config.example.json; do
     if [[ -d "$src/$extra" ]]; then
       copy_tree "$src/$extra" "$dir/$extra"
@@ -335,41 +383,56 @@ if [[ -d "$DIST/plugins" ]]; then
   done
 fi
 
-# ── config restore / seed ───────────────────────────────────────────────────
-if [[ -f "$STASH/llm-config.json" && ! -f "$LLM_DIST_CFG" ]]; then
-  mkdir -p "$(dirname "$LLM_DIST_CFG")"
-  cp "$STASH/llm-config.json" "$LLM_DIST_CFG"
-  echo "llm-openai config: preserved dist config.json (API key survives rebuilds)"
+# ── runtime data restore / config seed ──────────────────────────────────────
+# Restore runtime data for plugins that are still shipped. A plugin removed
+# from shipped-plugins.conf was pruned above and is not resurrected.
+if [[ -d "$PLUGIN_STASH" ]]; then
+  for src in "$PLUGIN_STASH"/*; do
+    [[ -d "$src" ]] || continue
+    name="$(basename "$src")"
+    keep=0
+    for shipped in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
+      [[ "$name" == "$shipped" ]] && keep=1 && break
+    done
+    [[ $keep -eq 1 ]] || continue
+    dst="$DIST/plugins/$name"
+    mkdir -p "$dst"
+    for file in "$src"/*.json; do
+      [[ -f "$file" ]] || continue
+      base="$(basename "$file")"
+      [[ -f "$dst/$base" ]] || cp "$file" "$dst/$base"
+    done
+    for data in sessions data; do
+      if [[ -d "$src/$data" ]]; then
+        mkdir -p "$dst/$data"
+        cp -R "$src/$data/." "$dst/$data/" 2>/dev/null || true
+      fi
+    done
+  done
 fi
-if [[ -f "$STASH/agent-config.json" && ! -f "$AGENT_DIST_CFG" ]]; then
-  mkdir -p "$(dirname "$AGENT_DIST_CFG")"
-  cp "$STASH/agent-config.json" "$AGENT_DIST_CFG"
-  echo "agent config: preserved dist config.json (schemes survive rebuilds)"
+
+# Seed a missing config.json for every shipped plugin with an example. The
+# repo-local config.json wins; the build never injects or rewrites an API key.
+for name in ${SHIPPED_PLUGINS[@]+"${SHIPPED_PLUGINS[@]}"}; do
+  src="$ROOT/plugins/$name/config.example.json"
+  dst="$DIST/plugins/$name/config.json"
+  [[ -f "$src" ]] || continue
+  [[ -f "$dst" ]] && continue
+  mkdir -p "$(dirname "$dst")"
+  repo="$ROOT/plugins/$name/config.json"
+  if [[ -f "$repo" ]]; then
+    cp "$repo" "$dst"
+    echo "$name config: seeded from repo plugins/$name/config.json (kept as-is)"
+  else
+    cp "$src" "$dst"
+    echo "$name config: seeded from plugins/$name/config.example.json"
+  fi
+done
+if [[ -f "$DIST/plugins/llm-openai/config.json" ]] && ! grep -q '"models"' "$DIST/plugins/llm-openai/config.json"; then
+  echo "warning: llm-openai config.json uses the legacy flat format; rewrite it as models[] + default_model" >&2
 fi
-if [[ -f "$STASH/model-context-config.json" && ! -f "$MC_DIST_CFG" ]]; then
-  mkdir -p "$(dirname "$MC_DIST_CFG")"
-  cp "$STASH/model-context-config.json" "$MC_DIST_CFG"
-  echo "model-context config: preserved dist config.json"
-fi
-if [[ -f "$STASH/shell-config.json" && ! -f "$SHELL_DIST_CFG" ]]; then
-  mkdir -p "$(dirname "$SHELL_DIST_CFG")"
-  cp "$STASH/shell-config.json" "$SHELL_DIST_CFG"
-  echo "shell-tools config: preserved dist config.json"
-fi
-if [[ -f "$STASH/sandbox-config.json" && ! -f "$SANDBOX_DIST_CFG" ]]; then
-  mkdir -p "$(dirname "$SANDBOX_DIST_CFG")"
-  cp "$STASH/sandbox-config.json" "$SANDBOX_DIST_CFG"
-  echo "sandbox config: preserved dist config.json"
-fi
-if [[ -f "$STASH/sandbox-rules.json" && ! -f "$SANDBOX_DIST_RULES" ]]; then
-  mkdir -p "$(dirname "$SANDBOX_DIST_RULES")"
-  cp "$STASH/sandbox-rules.json" "$SANDBOX_DIST_RULES"
-  echo "sandbox rules: preserved dist rules.json"
-fi
-if [[ -d "$STASH/sessions" ]]; then
-  mkdir -p "$DIST/plugins/session"
-  cp -R "$STASH/sessions/." "$SESS_DIST_DIR/"
-  echo "sessions: preserved $(find "$DIST/plugins/session/sessions" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') file(s)"
+if [[ -d "$SESS_DIST_DIR" ]]; then
+  echo "sessions: preserved $(find "$SESS_DIST_DIR" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') file(s)"
 fi
 if [[ -f "$STASH/legacy-workspaces.json" && ! -f "$SESSION_WORKSPACE_FILE" ]]; then
   mkdir -p "$SESS_DIST_DIR"
@@ -377,31 +440,6 @@ if [[ -f "$STASH/legacy-workspaces.json" && ! -f "$SESSION_WORKSPACE_FILE" ]]; t
   echo "workspace registry: restored legacy data into session"
 fi
 rm -rf "$STASH"
-
-# Config priority: existing dist config, then a repo-local config.json
-# (gitignored), else the plugin's config.example.json. The build never injects
-# or rewrites an API key.
-seed_dist_config() {
-  local name="$1" dst="$2"
-  [[ -f "$dst" ]] && return 0
-  local src="$ROOT/plugins/$name"
-  if [[ -f "$src/config.json" ]]; then
-    mkdir -p "$(dirname "$dst")"
-    cp "$src/config.json" "$dst"
-    echo "$name config: seeded from repo plugins/$name/config.json (kept as-is)"
-  elif [[ -f "$src/config.example.json" ]]; then
-    mkdir -p "$(dirname "$dst")"
-    cp "$src/config.example.json" "$dst"
-    echo "$name config: seeded from plugins/$name/config.example.json"
-  else
-    echo "warning: no config template for $name (dist keeps no config.json)" >&2
-  fi
-}
-seed_dist_config "llm-openai" "$LLM_DIST_CFG"
-seed_dist_config "agent" "$AGENT_DIST_CFG"
-seed_dist_config "model-context" "$MC_DIST_CFG"
-seed_dist_config "shell-tools" "$SHELL_DIST_CFG"
-seed_dist_config "sandbox" "$SANDBOX_DIST_CFG"
 
 # ── docs ─────────────────────────────────────────────────────────────────────
 copy_dist_asset "README.md" "$DIST/"
@@ -413,4 +451,5 @@ popd >/dev/null
 END_TS=$(date +%s)
 echo ""
 echo "Release layout ready: $DIST  (rebuilt $REBUILT, skipped $SKIPPED, $((END_TS - START_TS))s, version $VERSION)"
+echo "handoff: docs/archive/progress/2026-10-30-agent-session-llm-handoff.md"
 find "$DIST" -type f ! -path "$CACHE_DIR/*" | sed "s|^$DIST/||" | sort

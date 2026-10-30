@@ -104,6 +104,65 @@ func (p *plugin) appendFacts(ctx context.Context, req *appendReq) (*appendResp, 
 	return &appendResp{SessionId: st.id, Seqs: seqs, NextSeq: nextSeq}, nil
 }
 
+func (p *plugin) update(ctx context.Context, req *updateReq) (*updateResp, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req.Title == nil && req.Pinned == nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "title or pinned is required")
+	}
+	var title *string
+	if req.Title != nil {
+		trimmed := strings.TrimSpace(*req.Title)
+		if trimmed == "" {
+			return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "title must be non-empty")
+		}
+		title = &trimmed
+	}
+	st, err := p.get(req.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := st.updateMeta(title, req.Pinned)
+	if err != nil {
+		return nil, errHandler(err)
+	}
+	p.mu.Lock()
+	p.index[st.id] = meta
+	p.mu.Unlock()
+	return &updateResp{Meta: meta}, nil
+}
+
+func (p *plugin) deleteSession(ctx context.Context, req *deleteReq) (*deleteResp, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(req.SessionId)
+	if id == "" {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "session_id is required")
+	}
+
+	p.mu.Lock()
+	_, ok := p.index[id]
+	st := p.reg[id]
+	delete(p.reg, id)
+	delete(p.index, id)
+	p.mu.Unlock()
+	if !ok {
+		if st != nil {
+			st.close()
+		}
+		return nil, errSessionNotFound(id)
+	}
+	if st != nil {
+		st.close()
+	}
+	if err := os.Remove(p.sessionPath(id)); err != nil && !os.IsNotExist(err) {
+		return nil, errHandler(err)
+	}
+	return &deleteResp{SessionId: id, Deleted: true}, nil
+}
+
 func (p *plugin) facts(ctx context.Context, req *factsReq) (*factsResp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -198,6 +257,33 @@ func (p *plugin) listSessions(ctx context.Context, req *listReq) (*listResp, err
 	return &listResp{Workspace: workspacePath, Sessions: out}, nil
 }
 
+func (p *plugin) messages(ctx context.Context, req *infoReq) (*messageResp, error) {
+	st, err := p.get(req.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	facts, _, err := st.readFacts()
+	if err != nil {
+		return nil, errHandler(err)
+	}
+	messages := make([]pluginsdk.ChatMessage, 0, len(facts))
+	for _, f := range facts {
+		if f.Type != TypeMessage || f.Role == "" {
+			continue
+		}
+		messages = append(messages, pluginsdk.ChatMessage{
+			Seq:        f.Seq,
+			Role:       f.Role,
+			Text:       f.TextContent,
+			Files:      f.Files,
+			ToolCalls:  f.ToolCalls,
+			ToolCallID: f.ToolCallID,
+			Timestamp:  f.Timestamp,
+		})
+	}
+
+	return &messageResp{Messages: messages}, nil
+}
 func errHandler(err error) error {
 	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, err.Error())
 }

@@ -205,6 +205,38 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 	return seqs, s.nextSeq, nil
 }
 
+// updateMeta 追加一条 meta 修订行并更新内存快照。恢复时 recover 会应用最后一条修订。
+func (s *store) updateMeta(title *string, pinned *bool) (Meta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return Meta{}, fmt.Errorf("session is closed")
+	}
+
+	meta := s.meta
+	if title != nil {
+		meta.Title = *title
+	}
+	if pinned != nil {
+		meta.Pinned = *pinned
+	}
+	line, err := json.Marshal(metaRecord{Kind: RecordKindMeta, Meta: meta})
+	if err != nil {
+		return Meta{}, err
+	}
+
+	end, err := s.f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return Meta{}, err
+	}
+	if _, err := s.f.WriteString(string(line) + "\n"); err != nil {
+		_ = s.f.Truncate(end)
+		return Meta{}, err
+	}
+	s.meta = meta
+	return meta, nil
+}
+
 // readFacts 读取全部 fact（不含 meta 行），并在同一把锁内返回当前 nextSeq。
 func (s *store) readFacts() ([]Fact, int, error) {
 	s.mu.Lock()
