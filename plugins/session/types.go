@@ -88,6 +88,8 @@ type createReq struct {
 	Origin          string `json:"origin"`
 	Model           string `json:"model,omitempty"`
 	Depth           int    `json:"depth"`
+	// Facts 是可选的初始事实，由调用方提供；session 只按序记录，不解释含义。
+	Facts []factIn `json:"facts,omitempty"`
 }
 
 type appendReq struct {

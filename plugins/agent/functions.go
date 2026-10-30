@@ -75,7 +75,7 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 		return nil, err
 	}
 
-	reply, err := p.callLLM(turnCtx, r.ID, model, messages)
+	reply, err := p.callLLM(turnCtx, r.ID, sessionID, turnID, in.Workspace, model, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +169,21 @@ func (p *plugin) sessionMessages(ctx context.Context, sessionID string) ([]plugi
 	return out.Messages, nil
 }
 
-func (p *plugin) callLLM(ctx context.Context, callerID, model string, messages []pluginsdk.ChatMessage) (*llmStreamResp, error) {
-	payload, err := json.Marshal(llmStreamReq{Model: model, Messages: messages})
+func (p *plugin) callLLM(
+	ctx context.Context,
+	callerID, sessionID, turnID, workspace, model string,
+	messages []pluginsdk.ChatMessage,
+) (*llmStreamResp, error) {
+	payload, err := json.Marshal(llmStreamReq{
+		Model:    model,
+		Messages: messages,
+		Meta: llmStreamMeta{
+			SessionId: sessionID,
+			TurnId:    turnID,
+			Workspace: workspace,
+			Model:     model,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,11 @@ func (p *plugin) create(ctx context.Context, req *createReq) (*Meta, error) {
 	if origin == "" {
 		origin = "agent"
 	}
+	if len(req.Facts) > 0 {
+		if err := validateFacts(req.Facts); err != nil {
+			return nil, err
+		}
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -53,6 +58,13 @@ func (p *plugin) create(ctx context.Context, req *createReq) (*Meta, error) {
 				continue
 			}
 			return nil, errHandler(err)
+		}
+		if len(req.Facts) > 0 {
+			if _, _, err := st.appendBatch(req.Facts); err != nil {
+				st.close()
+				_ = os.Remove(p.sessionPath(id))
+				return nil, errHandler(err)
+			}
 		}
 		p.reg[id] = st
 		p.index[id] = meta
@@ -82,17 +94,24 @@ func (p *plugin) info(ctx context.Context, req *infoReq) (*infoResp, error) {
 	return &infoResp{Meta: meta, FactCnt: factCnt, NextSeq: nextSeq}, nil
 }
 
+func validateFacts(facts []factIn) error {
+	if len(facts) == 0 {
+		return pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "facts must be non-empty")
+	}
+	for i := range facts {
+		if strings.TrimSpace(facts[i].Type) == "" {
+			return pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "fact.type is required")
+		}
+	}
+	return nil
+}
+
 func (p *plugin) appendFacts(ctx context.Context, req *appendReq) (*appendResp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(req.Facts) == 0 {
-		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "facts must be non-empty")
-	}
-	for i := range req.Facts {
-		if strings.TrimSpace(req.Facts[i].Type) == "" {
-			return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, "fact.type is required")
-		}
+	if err := validateFacts(req.Facts); err != nil {
+		return nil, err
 	}
 	st, err := p.get(req.SessionId)
 	if err != nil {

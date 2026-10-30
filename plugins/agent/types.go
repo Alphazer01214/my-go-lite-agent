@@ -89,6 +89,14 @@ type sessionMessagesResp struct {
 type llmStreamReq struct {
 	Model    string                  `json:"model,omitempty"`
 	Messages []pluginsdk.ChatMessage `json:"messages"`
+	Meta     llmStreamMeta           `json:"meta,omitempty"`
+}
+
+type llmStreamMeta struct {
+	SessionId string `json:"session_id,omitempty"`
+	TurnId    string `json:"turn_id,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 type llmStreamResp struct {

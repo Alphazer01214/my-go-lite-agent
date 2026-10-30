@@ -72,6 +72,7 @@
 | [2026-10-15-plugin-runtime-management-handoff.md](2026-10-15-plugin-runtime-management-handoff.md) | 插件启停、持久化、依赖级联 | 设计没有实现。保留了被否决的方案和五个开放决策 |
 | [2026-10-20-full-test-report.md](2026-10-20-full-test-report.md) | 全量测试的执行证据 | 问题清单尚未全部关闭 |
 | [2026-10-21-pressure-execution-records.md](2026-10-21-pressure-execution-records.md) | U9、U10、S11、S12 的压力测试执行记录 | 规程以根目录 PRESSURE.md 为准 |
+| [2026-10-30-prompter-user-journey-handoff.md](2026-10-30-prompter-user-journey-handoff.md) | Prompter 用户路径回归：伪 tool_call、刷新不恢复、取消上下文、模型失败死会话、错误归因与构建裁剪 | 仅参考：问题清单与建议方案；修复前先确认产品边界 |
 
 ## 3. 归档规则
 

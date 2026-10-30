@@ -1,0 +1,20 @@
+{
+  "name": "prompter",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "prompter",
+  "requires": ["session", "llm"],
+  "depends_on": ["session", "llm-openai"],
+  "consumes": [
+    {
+      "capability": "session",
+      "method": "create"
+    },
+    {
+      "capability": "llm",
+      "method": "stream"
+    }
+  ],
+  "autostart": true,
+  "description": "Context projector: bootstrap system/runtime facts and assemble model-visible messages"
+}

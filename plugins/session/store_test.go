@@ -302,6 +302,56 @@ func TestUpdateMetaAndDeleteSession(t *testing.T) {
 	}
 }
 
+func TestCreateWritesInitialFacts(t *testing.T) {
+	dir := t.TempDir()
+	workspaceDir := t.TempDir()
+	p := newPluginAtDir(dir)
+	defer p.close()
+	ctx := context.Background()
+
+	meta, err := p.create(ctx, &createReq{
+		Title:     "bootstrap",
+		Workspace: workspaceDir,
+		Model:     "model-a",
+		Facts: []factIn{
+			{Type: "system_prompt", Role: "system", TextContent: "system text"},
+			{Type: "runtime_context", Role: "user", TextContent: "runtime text"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create with facts: %v", err)
+	}
+
+	page, err := p.facts(ctx, &factsReq{SessionId: meta.SessionId})
+	if err != nil {
+		t.Fatalf("facts: %v", err)
+	}
+	if len(page.Facts) != 2 {
+		t.Fatalf("fact count = %d, want 2", len(page.Facts))
+	}
+	if page.Facts[0].Seq != 1 || page.Facts[0].Type != "system_prompt" || page.Facts[0].TextContent != "system text" {
+		t.Fatalf("first fact = %+v", page.Facts[0])
+	}
+	if page.Facts[1].Seq != 2 || page.Facts[1].Type != "runtime_context" || page.Facts[1].TextContent != "runtime text" {
+		t.Fatalf("second fact = %+v", page.Facts[1])
+	}
+
+	info, err := p.info(ctx, &infoReq{SessionId: meta.SessionId})
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.FactCnt != 2 || info.NextSeq != 3 {
+		t.Fatalf("info count/next = %d/%d, want 2/3", info.FactCnt, info.NextSeq)
+	}
+
+	if _, err := p.create(ctx, &createReq{
+		Workspace: workspaceDir,
+		Facts:     []factIn{{Type: ""}},
+	}); pluginsdk.Code(err) != pluginsdk.CodeBadArguments {
+		t.Fatalf("invalid initial facts code = %q, want %q", pluginsdk.Code(err), pluginsdk.CodeBadArguments)
+	}
+}
+
 func assertFirstLineKind(t *testing.T, path, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

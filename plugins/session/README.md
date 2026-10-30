@@ -4,6 +4,13 @@
 
 Session 保存工作区、会话元数据和事实记录。
 
+## 创建与初始 facts
+
+`session.create` 可带 `facts`。
+Session 在建日志后、注册会话前按序写入这批事实。
+写入失败时删除刚创建的文件并返回错误。
+Session 只要求 `type` 非空，不解释事实含义。
+
 ## 会话模型
 
 `session.create` 可写入 `model`。

@@ -7,18 +7,16 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-func (p *plugin) handleBuild(
-	ctx context.Context,
-	req *pluginsdk.Request,
-) (json.RawMessage, error) {
-	var input CallRequest
-	if err := pluginsdk.Decode(req, &input); err != nil {
-		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
-	}
-
-	result, err := p.build(ctx, &input)
-	if err != nil {
+func (p *plugin) handleSessionCreate(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	if err := p.consumeSessionCreate(ctx, req); err != nil {
 		return nil, err
 	}
-	return json.Marshal(result)
+	return nil, nil
+}
+
+func (p *plugin) handleStream(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	if err := p.consumeLLMStream(ctx, req); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }

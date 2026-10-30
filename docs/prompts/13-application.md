@@ -2,6 +2,7 @@
 
 > 状态：目标契约
 > 说明：本文回答"这些 prompt 文本从文件到模型，中间经过谁"。资产内容见 [12-assets.md](12-assets.md)，阶段划分见 [09-plan.md](09-plan.md)。
+> 2026-10-30 更新：当前实现由 `prompter` 承担本文中 model-context 的组装职责，本文的 model-context 段落按目标契约阅读。
 
 ## 1. 职责切分
 
