@@ -26,3 +26,17 @@ Session Chat 的模型下拉框只用于新会话。
 message fact 可保存 `reasoning`。
 `session.messages` 把它随助手消息返回。
 Session Chat 在正文中折叠渲染思考过程。
+
+## 工具消息
+
+message fact 可保存 `tool_calls` 和 `tool_call_id`。
+Agent 用 `role=tool` 的 message Fact 保存工具结果。
+工具结果的 `is_error`、`truncated` 和 `meta` 保留在 Fact 中。
+
+## Facts 复制与导出
+
+Session Trace 支持逐条多选 facts。
+全选只作用于当前筛选结果。
+复制和导出只包含已选 facts。
+两者使用相同的 JSON 内容。
+JSON 包含 `session_id`、`exported_at`、`fact_count` 和 `facts`。

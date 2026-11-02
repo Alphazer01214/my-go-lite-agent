@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,27 +71,58 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 		return nil, err
 	}
 
-	messages, err := p.sessionMessages(turnCtx, sessionID)
-	if err != nil {
-		return nil, err
+	seqs := append([]int(nil), userSeqs...)
+	modelMessages := make([]pluginsdk.ChatMessage, 0)
+	maxSteps := p.currentConfig().MaxSteps
+	for step := 1; step <= maxSteps; step++ {
+		reply, err := p.callLLM(turnCtx, r.ID, sessionID, turnID, in.Workspace, model)
+		if err != nil {
+			return nil, err
+		}
+		if err := normalizeToolCalls(reply.Messages, turnID, step); err != nil {
+			return nil, err
+		}
+
+		assistantSeqs, err := p.appendMessages(turnCtx, sessionID, reply.Messages)
+		if err != nil {
+			return nil, err
+		}
+		seqs = append(seqs, assistantSeqs...)
+		modelMessages = append(modelMessages, reply.Messages...)
+
+		toolCalls := collectToolCalls(reply.Messages)
+		if len(toolCalls) == 0 {
+			return &turnResp{
+				SessionId: sessionID,
+				Model:     reply.Model,
+				Messages:  modelMessages,
+				Seqs:      seqs,
+			}, nil
+		}
+		if step == maxSteps {
+			return nil, pluginsdk.ErrCode(
+				codeMaxStepsExceeded,
+				fmt.Sprintf("agent reached max_steps=%d before the tool loop completed", maxSteps),
+			)
+		}
+
+		for _, call := range toolCalls {
+			result, err := p.executeToolCall(turnCtx, sessionID, in.Workspace, call)
+			if err != nil {
+				return nil, err
+			}
+			resultSeqs, err := p.appendFacts(turnCtx, sessionID, []sessionFact{result})
+			if err != nil {
+				return nil, err
+			}
+			seqs = append(seqs, resultSeqs...)
+		}
 	}
 
-	reply, err := p.callLLM(turnCtx, r.ID, sessionID, turnID, in.Workspace, model, messages)
-	if err != nil {
-		return nil, err
-	}
-
-	assistantSeqs, err := p.appendMessages(turnCtx, sessionID, reply.Messages)
-	if err != nil {
-		return nil, err
-	}
-
-	return &turnResp{
-		SessionId: sessionID,
-		Model:     reply.Model,
-		Messages:  reply.Messages,
-		Seqs:      append(userSeqs, assistantSeqs...),
-	}, nil
+	return nil, pluginsdk.ErrCode(
+		codeMaxStepsExceeded,
+		fmt.Sprintf("agent reached max_steps=%d before the tool loop completed", maxSteps),
+	)
 }
 
 func (p *plugin) ensureSession(ctx context.Context, in *fromWebUI, input string) (string, string, error) {
@@ -153,30 +185,12 @@ func (p *plugin) appendFacts(ctx context.Context, sessionID string, facts []sess
 	return out.Seqs, nil
 }
 
-func (p *plugin) sessionMessages(ctx context.Context, sessionID string) ([]pluginsdk.ChatMessage, error) {
-	payload, err := json.Marshal(sessionInfoReq{SessionId: sessionID})
-	if err != nil {
-		return nil, err
-	}
-	raw, err := p.sdk.Call(ctx, "session", "messages", payload)
-	if err != nil {
-		return nil, err
-	}
-	var out sessionMessagesResp
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return out.Messages, nil
-}
-
 func (p *plugin) callLLM(
 	ctx context.Context,
 	callerID, sessionID, turnID, workspace, model string,
-	messages []pluginsdk.ChatMessage,
 ) (*llmStreamResp, error) {
 	payload, err := json.Marshal(llmStreamReq{
-		Model:    model,
-		Messages: messages,
+		Model: model,
 		Meta: llmStreamMeta{
 			SessionId: sessionID,
 			TurnId:    turnID,
@@ -201,6 +215,125 @@ func (p *plugin) callLLM(
 		return nil, err
 	}
 	return &out, nil
+}
+
+func normalizeToolCalls(messages []pluginsdk.ChatMessage, turnID string, step int) error {
+	for messageIndex := range messages {
+		for callIndex := range messages[messageIndex].ToolCalls {
+			call := &messages[messageIndex].ToolCalls[callIndex]
+			call.ID = strings.TrimSpace(call.ID)
+			if call.ID == "" {
+				call.ID = fmt.Sprintf("%s-tool-%d-%d", turnID, step, callIndex+1)
+			}
+			call.Type = strings.TrimSpace(call.Type)
+			if call.Type == "" {
+				call.Type = "function"
+			}
+			call.FunctionCall.Name = strings.TrimSpace(call.FunctionCall.Name)
+			if call.FunctionCall.Name == "" {
+				return pluginsdk.ErrCode(codeToolCallInvalid, "tool call function name is required")
+			}
+			arguments := bytes.TrimSpace(call.FunctionCall.Arguments)
+			if len(arguments) == 0 || bytes.Equal(arguments, []byte("null")) {
+				arguments = json.RawMessage(`{}`)
+			}
+			if bytes.Equal(arguments[:1], []byte(`"`)) {
+				var encoded string
+				if err := json.Unmarshal(arguments, &encoded); err != nil {
+					return pluginsdk.ErrCode(codeToolCallInvalid, "tool call arguments must be a JSON object")
+				}
+				arguments = json.RawMessage(encoded)
+			}
+			var object map[string]json.RawMessage
+			if err := json.Unmarshal(arguments, &object); err != nil || object == nil {
+				return pluginsdk.ErrCode(codeToolCallInvalid, "tool call arguments must be a JSON object")
+			}
+			call.FunctionCall.Arguments = arguments
+		}
+	}
+	return nil
+}
+
+func collectToolCalls(messages []pluginsdk.ChatMessage) []pluginsdk.ToolCall {
+	var calls []pluginsdk.ToolCall
+	for _, message := range messages {
+		calls = append(calls, message.ToolCalls...)
+	}
+	return calls
+}
+
+func (p *plugin) executeToolCall(
+	ctx context.Context,
+	sessionID, workspace string,
+	call pluginsdk.ToolCall,
+) (sessionFact, error) {
+	payload, err := json.Marshal(toolCallReq{
+		Name:      call.FunctionCall.Name,
+		Arguments: call.FunctionCall.Arguments,
+		SessionID: sessionID,
+		Workspace: workspace,
+		CallID:    call.ID,
+	})
+	if err != nil {
+		return sessionFact{}, err
+	}
+	raw, err := p.sdk.Call(ctx, "tool", "call", payload)
+	if err != nil {
+		if isCancelled(err) || pluginsdk.Code(err) == pluginsdk.CodeCallDeadlineExceeded {
+			return sessionFact{}, err
+		}
+		return toolErrorFact(call.ID, err), nil
+	}
+
+	var result toolCallResp
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return toolErrorFact(call.ID, err), nil
+	}
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		content = "(no output)"
+	}
+	return sessionFact{
+		Type:        factTypeMessage,
+		Role:        pluginsdk.RoleTool,
+		TextContent: content,
+		ToolCallID:  call.ID,
+		Meta:        toolResultMeta(result),
+	}, nil
+}
+
+func toolResultMeta(result toolCallResp) json.RawMessage {
+	meta := map[string]json.RawMessage{}
+	if len(bytes.TrimSpace(result.Meta)) > 0 {
+		var extra map[string]json.RawMessage
+		if err := json.Unmarshal(result.Meta, &extra); err == nil {
+			for key, value := range extra {
+				meta[key] = value
+			}
+		}
+	}
+	meta["is_error"], _ = json.Marshal(result.IsError)
+	meta["truncated"], _ = json.Marshal(result.Truncated)
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return result.Meta
+	}
+	return encoded
+}
+
+func toolErrorFact(callID string, err error) sessionFact {
+	code := pluginsdk.Code(err)
+	if code == "" {
+		code = pluginsdk.CodeHandlerError
+	}
+	meta, _ := json.Marshal(map[string]any{"error_code": code, "is_error": true, "truncated": false})
+	return sessionFact{
+		Type:        factTypeMessage,
+		Role:        pluginsdk.RoleTool,
+		TextContent: fmt.Sprintf("tool_error[%s]: %s", code, err.Error()),
+		ToolCallID:  callID,
+		Meta:        meta,
+	}
 }
 
 func (p *plugin) appendMessages(ctx context.Context, sessionID string, messages []pluginsdk.ChatMessage) ([]int, error) {

@@ -14,11 +14,13 @@ const (
 )
 
 const (
-	codeSessionNotFound = "session_not_found"
-	codeTurnBusy        = "turn_busy"
-	factTypeMessage     = "message"
-	factTypeTurnStart   = "turn_start"
-	factTypeTurnEnd     = "turn_end"
+	codeSessionNotFound  = "session_not_found"
+	codeTurnBusy         = "turn_busy"
+	codeMaxStepsExceeded = "max_steps_exceeded"
+	codeToolCallInvalid  = "tool_call_invalid"
+	factTypeMessage      = "message"
+	factTypeTurnStart    = "turn_start"
+	factTypeTurnEnd      = "turn_end"
 )
 
 // fromWebUI 由前端发出的请求，包括 session 等相关信息
@@ -83,14 +85,9 @@ type sessionAppendResp struct {
 	Seqs []int `json:"seqs"`
 }
 
-type sessionMessagesResp struct {
-	Messages []pluginsdk.ChatMessage `json:"messages"`
-}
-
 type llmStreamReq struct {
-	Model    string                  `json:"model,omitempty"`
-	Messages []pluginsdk.ChatMessage `json:"messages"`
-	Meta     llmStreamMeta           `json:"meta,omitempty"`
+	Model string        `json:"model,omitempty"`
+	Meta  llmStreamMeta `json:"meta,omitempty"`
 }
 
 type llmStreamMeta struct {
@@ -140,4 +137,19 @@ type turnEndMeta struct {
 }
 
 type chatReq struct {
+}
+
+type toolCallReq struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	Workspace string          `json:"workspace,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+}
+
+type toolCallResp struct {
+	Content   string          `json:"content"`
+	IsError   bool            `json:"is_error"`
+	Truncated bool            `json:"truncated"`
+	Meta      json.RawMessage `json:"meta,omitempty"`
 }

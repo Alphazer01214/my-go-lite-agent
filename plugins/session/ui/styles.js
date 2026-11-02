@@ -545,12 +545,41 @@ export const TRACE_CSS = `${BASE}
 	color: var(--sx-text);
 	box-shadow: 0 1px 2px rgba(16, 24, 40, .08);
 }
+.selection-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+	min-height: 34px;
+	margin: 0 12px 8px;
+	color: var(--sx-muted);
+	font-size: 11px;
+}
+.select-all { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.select-all-box, .select-box { width: 14px; height: 14px; margin: 0; accent-color: var(--sx-accent); cursor: pointer; }
+.selection-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selection-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.text-button, .export-button {
+	height: 26px;
+	padding: 0 8px;
+	border: 1px solid var(--sx-border);
+	border-radius: 7px;
+	background: var(--sx-surface);
+	color: var(--sx-muted);
+	font-size: 11px;
+}
+.text-button:hover, .export-button:hover { background: var(--sx-hover); color: var(--sx-text); }
+.export-button { border-color: var(--sx-accent); color: var(--sx-accent-strong); }
+.text-button:disabled, .export-button:disabled { opacity: .45; cursor: default; }
 .list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 16px; }
 .fact { border-bottom: 1px solid #eef1f4; padding: 7px 4px; }
+.fact.selected { background: var(--sx-accent-soft); border-radius: 8px; border-bottom-color: transparent; }
+.fact-main { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .fact-head {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+	flex: 1;
 	min-width: 0;
 	cursor: pointer;
 	border-radius: 6px;
@@ -581,7 +610,7 @@ export const TRACE_CSS = `${BASE}
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
-	margin: 3px 0 0 40px;
+	margin: 3px 0 0 24px;
 	color: var(--sx-muted);
 	font-size: 11px;
 	line-height: 1.55;
@@ -590,7 +619,7 @@ export const TRACE_CSS = `${BASE}
 }
 .fact.message .preview { color: var(--sx-text); }
 .raw {
-	margin: 8px 0 2px 40px;
+	margin: 8px 0 2px 24px;
 	padding: 8px;
 	max-height: 320px;
 	overflow: auto;

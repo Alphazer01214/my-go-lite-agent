@@ -102,7 +102,7 @@ func TestBuildChatRequestUsesSelectedModelAtTopLevel(t *testing.T) {
 	request := buildChatRequest("selected-model", []pluginsdk.ChatMessage{{
 		Role: pluginsdk.RoleUser,
 		Text: "hello",
-	}})
+	}}, nil)
 	if request.Model != "selected-model" {
 		t.Fatalf("model = %q, want selected-model", request.Model)
 	}

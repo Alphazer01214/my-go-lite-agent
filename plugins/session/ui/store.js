@@ -423,10 +423,11 @@ export async function sendTurn(text, model = "") {
 			? result.messages.filter((message) => message?.role === "assistant")
 			: [];
 		const finalText = assistantMessages
-			.map((message) => String(message.text || ""))
+			.map((message) => String(message.text || "").trim())
+			.filter(Boolean)
 			.join("\n\n");
 		const finalReasoning = assistantMessages
-			.map((message) => String(message.reasoning || ""))
+			.map((message) => String(message.reasoning || "").trim())
 			.filter(Boolean)
 			.join("\n\n");
 		if (finalText) turn.assistantText = finalText;

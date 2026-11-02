@@ -57,13 +57,11 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 
 	info, err := p.sessionInfo(ctx, sessionID)
 	if err != nil {
-		logf("llm.stream passthrough: session.info: %v", err)
-		return req.Proceed(ctx, nil)
+		return prompterError("read session info", err)
 	}
 	facts, err := p.sessionFacts(ctx, sessionID)
 	if err != nil {
-		logf("llm.stream passthrough: session.facts: %v", err)
-		return req.Proceed(ctx, nil)
+		return prompterError("read session facts", err)
 	}
 
 	model := strings.TrimSpace(info.Model)
@@ -72,27 +70,32 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 	}
 	baseline, err := p.baselineFacts(info.Workspace, model)
 	if err != nil {
-		logf("llm.stream passthrough: render prompt: %v", err)
-		return req.Proceed(ctx, nil)
+		return prompterError("render prompt", err)
 	}
 	facts, err = p.writeBaseline(ctx, sessionID, facts, baseline)
 	if err != nil {
-		logf("llm.stream passthrough: write baseline: %v", err)
-		return req.Proceed(ctx, nil)
+		return prompterError("write baseline facts", err)
+	}
+	tools, err := p.modelTools(ctx)
+	if err != nil {
+		return prompterError("load tool definitions", err)
 	}
 
 	messages := projectMessages(facts)
 	if len(messages) == 0 {
-		return req.Proceed(ctx, nil)
+		return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, "prompter has no model-visible messages")
 	}
-	p.writeSnapshot(ctx, sessionID, model, baseline, messages)
+	p.writeSnapshot(ctx, sessionID, model, baseline, messages, tools)
 
-	payload, err := replaceMessages(raw, messages, model)
+	payload, err := replaceModelPayload(raw, messages, model, tools.Tools)
 	if err != nil {
-		logf("llm.stream passthrough: encode messages: %v", err)
-		return req.Proceed(ctx, nil)
+		return prompterError("assemble model payload", err)
 	}
 	return req.Proceed(ctx, payload)
+}
+
+func prompterError(scope string, err error) error {
+	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, "prompter "+scope+": "+err.Error())
 }
 
 func mergeCreateFacts(raw map[string]json.RawMessage, baseline []factIn) (json.RawMessage, error) {
@@ -119,22 +122,84 @@ func mergeCreateFacts(raw map[string]json.RawMessage, baseline []factIn) (json.R
 	return json.Marshal(raw)
 }
 
-func replaceMessages(raw map[string]json.RawMessage, messages []pluginsdk.ChatMessage, model string) (json.RawMessage, error) {
-	encoded, err := json.Marshal(messages)
+func replaceModelPayload(
+	raw map[string]json.RawMessage,
+	messages []pluginsdk.ChatMessage,
+	model string,
+	tools []pluginsdk.Tool,
+) (json.RawMessage, error) {
+	encodedMessages, err := json.Marshal(messages)
 	if err != nil {
 		return nil, err
 	}
-	raw["messages"] = encoded
-	if model != "" {
-		if current, ok := raw["model"]; !ok || len(current) == 0 || string(current) == "null" {
-			modelJSON, err := json.Marshal(model)
-			if err != nil {
-				return nil, err
-			}
-			raw["model"] = modelJSON
-		}
+	if tools == nil {
+		tools = []pluginsdk.Tool{}
 	}
-	return json.Marshal(raw)
+	encodedTools, err := json.Marshal(tools)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]json.RawMessage{
+		"messages": encodedMessages,
+		"tools":    encodedTools,
+	}
+	if model != "" {
+		encodedModel, err := json.Marshal(model)
+		if err != nil {
+			return nil, err
+		}
+		out["model"] = encodedModel
+	} else if current, ok := raw["model"]; ok {
+		out["model"] = current
+	}
+	if meta, ok := raw["meta"]; ok {
+		out["meta"] = meta
+	}
+	return json.Marshal(out)
+}
+
+func newToolCatalog(generation int64, tools []pluginsdk.Tool) toolCatalog {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return toolCatalog{
+		Generation: generation,
+		Tools:      tools,
+		Names:      names,
+		Hash:       toolCatalogHash(tools),
+	}
+}
+
+func toolCatalogHash(tools []pluginsdk.Tool) string {
+	encoded, err := json.Marshal(tools)
+	if err != nil {
+		return ""
+	}
+	return hashText(string(encoded))
+}
+
+func (p *plugin) modelTools(ctx context.Context) (toolCatalog, error) {
+	raw, err := p.sdk.Call(ctx, "tool", "list", json.RawMessage(`{}`))
+	if err != nil {
+		return toolCatalog{}, err
+	}
+	var out toolListResp
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return toolCatalog{}, err
+	}
+	tools := make([]pluginsdk.Tool, 0, len(out.Tools))
+	for _, tool := range out.Tools {
+		if strings.TrimSpace(tool.Name) == "" {
+			return toolCatalog{}, fmt.Errorf("tool definition has empty name")
+		}
+		tools = append(tools, pluginsdk.Tool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		})
+	}
+	return newToolCatalog(out.CatalogGeneration, tools), nil
 }
 
 func (p *plugin) writeBaseline(
@@ -159,6 +224,7 @@ func (p *plugin) writeSnapshot(
 	model string,
 	baseline []factIn,
 	messages []pluginsdk.ChatMessage,
+	tools toolCatalog,
 ) {
 	systemHash, runtimeHash := "", ""
 	if len(baseline) > 0 {
@@ -168,15 +234,18 @@ func (p *plugin) writeSnapshot(
 		runtimeHash = factHash(baseline[1])
 	}
 	meta, err := json.Marshal(snapshotMeta{
-		Source:             "prompter",
-		SessionID:          sessionID,
-		Model:              model,
-		SurfaceSeqs:        surfaceSeqs(messages),
-		SystemPromptHash:   systemHash,
-		RuntimeContextHash: runtimeHash,
-		MessagesHash:       messageHash(messages),
-		TokenEstimate:      estimateTokens(messages),
-		MessageCount:       len(messages),
+		Source:                "prompter",
+		SessionID:             sessionID,
+		Model:                 model,
+		SurfaceSeqs:           surfaceSeqs(messages),
+		SystemPromptHash:      systemHash,
+		RuntimeContextHash:    runtimeHash,
+		MessagesHash:          messageHash(messages),
+		TokenEstimate:         estimateTokens(messages),
+		MessageCount:          len(messages),
+		ToolCatalogGeneration: tools.Generation,
+		ToolCatalogHash:       tools.Hash,
+		ToolNames:             tools.Names,
 	})
 	if err != nil {
 		logf("context snapshot skipped: %v", err)

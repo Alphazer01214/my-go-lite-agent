@@ -6,7 +6,7 @@
   "autostart": true,
   "priority": 0,
   "provides": ["file"],
-  "requires": ["tool"],
+  "requires": [],
   "depends_on": [],
   "description": "Workspace file tool provider; exposes file.info plus read, write, glob, grep and edit"
 }

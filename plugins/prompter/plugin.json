@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "protocol": 1,
   "entry": "prompter",
-  "requires": ["session", "llm"],
-  "depends_on": ["session", "llm-openai"],
+  "requires": ["session", "llm", "tool"],
+  "depends_on": ["session", "tools", "llm-openai"],
   "consumes": [
     {
       "capability": "session",
@@ -16,5 +16,5 @@
     }
   ],
   "autostart": true,
-  "description": "Context projector: bootstrap system/runtime facts and assemble model-visible messages"
+  "description": "Model request assembler: owns model-visible messages and tool definitions"
 }

@@ -13,8 +13,8 @@ LLM OpenAI 调用 OpenAI-compatible Chat Completions 接口。
 | `llm.settings.get` | 读取模型设置 |
 | `llm.settings.save` | 保存模型设置 |
 
-`llm.stream` 的 `model` 是模型 ID。
-省略时使用 `default_model`。
+`llm.stream` 接收 `model`、`messages` 和 `tools`。
+`model` 省略时使用 `default_model`。
 OpenAI 请求在顶层携带 `model`，不写入 `messages`。
 
 ## 流式事件
@@ -31,6 +31,17 @@ OpenAI 请求在顶层携带 `model`，不写入 `messages`。
 兼容接口也可返回 `delta.reasoning`。
 最终助手消息的 `reasoning` 保存完整思考内容。
 reasoning 只用于展示和留存，不写入后续请求正文。
+
+## Tool Calls
+
+Tool 定义转换为 OpenAI `tools` 字段。
+流式 `delta.tool_calls` 会跨 chunk 累积。
+
+最终助手消息保存结构化 `tool_calls`。
+`function.arguments` 在内部保存为 JSON 对象。
+历史助手消息重新请求时转换回 OpenAI 字符串参数格式。
+
+`role=tool` 消息使用 `tool_call_id` 对应原调用。
 
 ## 模型能力
 

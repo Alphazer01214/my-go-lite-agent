@@ -114,13 +114,34 @@ type factMeta struct {
 }
 
 type snapshotMeta struct {
-	Source             string `json:"source"`
-	SessionID          string `json:"session_id"`
-	Model              string `json:"model,omitempty"`
-	SurfaceSeqs        []int  `json:"surface_seqs,omitempty"`
-	SystemPromptHash   string `json:"system_prompt_hash,omitempty"`
-	RuntimeContextHash string `json:"runtime_context_hash,omitempty"`
-	MessagesHash       string `json:"messages_hash,omitempty"`
-	TokenEstimate      int    `json:"token_estimate"`
-	MessageCount       int    `json:"message_count"`
+	Source                string   `json:"source"`
+	SessionID             string   `json:"session_id"`
+	Model                 string   `json:"model,omitempty"`
+	SurfaceSeqs           []int    `json:"surface_seqs,omitempty"`
+	SystemPromptHash      string   `json:"system_prompt_hash,omitempty"`
+	RuntimeContextHash    string   `json:"runtime_context_hash,omitempty"`
+	MessagesHash          string   `json:"messages_hash,omitempty"`
+	TokenEstimate         int      `json:"token_estimate"`
+	MessageCount          int      `json:"message_count"`
+	ToolCatalogGeneration int64    `json:"tool_catalog_generation,omitempty"`
+	ToolCatalogHash       string   `json:"tool_catalog_hash,omitempty"`
+	ToolNames             []string `json:"tool_names,omitempty"`
+}
+
+type toolListResp struct {
+	Tools             []toolListTool `json:"tools"`
+	CatalogGeneration int64          `json:"catalog_generation"`
+}
+
+type toolListTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type toolCatalog struct {
+	Generation int64            `json:"generation"`
+	Tools      []pluginsdk.Tool `json:"tools"`
+	Names      []string         `json:"names"`
+	Hash       string           `json:"hash"`
 }

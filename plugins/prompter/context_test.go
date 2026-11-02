@@ -88,15 +88,15 @@ func TestMergeCreateFactsPrependsBaseline(t *testing.T) {
 	}
 }
 
-func TestReplaceMessagesPreservesPayload(t *testing.T) {
+func TestReplaceModelPayloadPreservesMetadata(t *testing.T) {
 	raw := map[string]json.RawMessage{
 		"meta":     []byte(`{"session_id":"s-1"}`),
 		"messages": []byte(`[{"role":"user","text":"old"}]`),
 	}
-	payload, err := replaceMessages(raw, []pluginsdk.ChatMessage{
+	payload, err := replaceModelPayload(raw, []pluginsdk.ChatMessage{
 		{Role: pluginsdk.RoleSystem, Text: "system"},
 		{Role: pluginsdk.RoleUser, Text: "new"},
-	}, "model-a")
+	}, "model-a", nil)
 	if err != nil {
 		t.Fatalf("replace: %v", err)
 	}
@@ -136,4 +136,83 @@ func mustMarshal(t *testing.T, value any) json.RawMessage {
 		t.Fatalf("marshal: %v", err)
 	}
 	return data
+}
+
+func TestProjectMessagesPreservesToolCallAndResult(t *testing.T) {
+	facts := []sessionFact{
+		{Seq: 1, Type: factTypeSystemPrompt, Role: pluginsdk.RoleSystem, TextContent: "system"},
+		{Seq: 2, Type: factTypeMessage, Role: pluginsdk.RoleAssistant, ToolCalls: []pluginsdk.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			FunctionCall: pluginsdk.FunctionCall{
+				Name:      "file_glob",
+				Arguments: json.RawMessage(`{"pattern":"*.go"}`),
+			},
+		}}},
+		{Seq: 3, Type: factTypeMessage, Role: pluginsdk.RoleTool, ToolCallID: "call-1", TextContent: "main.go"},
+	}
+	messages := projectMessages(facts)
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	if len(messages[1].ToolCalls) != 1 || messages[1].ToolCalls[0].FunctionCall.Name != "file_glob" {
+		t.Fatalf("tool calls = %+v", messages[1])
+	}
+	if messages[2].Role != pluginsdk.RoleTool || messages[2].ToolCallID != "call-1" || messages[2].Text != "main.go" {
+		t.Fatalf("tool result = %+v", messages[2])
+	}
+}
+
+func TestReplaceModelPayloadOwnsModelVisibleContent(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"meta":     []byte(`{"session_id":"s-1"}`),
+		"model":    []byte(`"caller-model"`),
+		"messages": []byte(`[{"role":"user","text":"caller text"}]`),
+		"tools":    []byte(`[{"name":"caller_tool"}]`),
+		"stream":   []byte(`true`),
+	}
+	messages := []pluginsdk.ChatMessage{{Role: pluginsdk.RoleUser, Text: "projected"}}
+	tools := []pluginsdk.Tool{{
+		Name:        "file_glob",
+		Description: "List files.",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+	}}
+
+	payload, err := replaceModelPayload(raw, messages, "session-model", tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &out); err != nil {
+		t.Fatal(err)
+	}
+	if string(out["model"]) != `"session-model"` {
+		t.Fatalf("model = %s", out["model"])
+	}
+	if string(out["messages"]) != `[{"role":"user","text":"projected"}]` {
+		t.Fatalf("messages = %s", out["messages"])
+	}
+	if !strings.Contains(string(out["tools"]), `"file_glob"`) || strings.Contains(string(out["tools"]), "caller_tool") {
+		t.Fatalf("tools = %s", out["tools"])
+	}
+	if _, ok := out["stream"]; ok {
+		t.Fatalf("caller-only model field leaked: %s", payload)
+	}
+	if string(out["meta"]) != `{"session_id":"s-1"}` {
+		t.Fatalf("meta = %s", out["meta"])
+	}
+}
+
+func TestToolCatalogHashIsStable(t *testing.T) {
+	catalog := newToolCatalog(7, []pluginsdk.Tool{{
+		Name:        "file_glob",
+		Description: "List files.",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+	}})
+	if catalog.Generation != 7 || len(catalog.Tools) != 1 || catalog.Tools[0].Name != "file_glob" {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+	if catalog.Hash == "" || catalog.Hash != toolCatalogHash(catalog.Tools) {
+		t.Fatalf("catalog hash = %q", catalog.Hash)
+	}
 }
