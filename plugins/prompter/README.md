@@ -31,6 +31,8 @@ Prompter 只在 `meta.session_id` 存在时介入。
 
 `message` 类型仍由 Agent 追加。
 Prompter 只读 message fact，不修改 Session 日志。
+message fact 的 `reasoning` 随消息投影保留。
+正文 hash 和 token 估算只计算 `text`。
 
 ## 投影顺序
 

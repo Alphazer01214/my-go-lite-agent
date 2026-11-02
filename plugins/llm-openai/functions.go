@@ -53,10 +53,14 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 			fmt.Sprintf("llm upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(detail))))
 	}
 
-	var text strings.Builder
-	err = readSSE(resp.Body, func(delta string) error {
-		text.WriteString(delta)
-		payload, _ := json.Marshal(chunkEvent{Channel: "content", Delta: delta})
+	var text, reasoning strings.Builder
+	err = readSSE(resp.Body, func(channel, delta string) error {
+		if channel == "thinking" {
+			reasoning.WriteString(delta)
+		} else {
+			text.WriteString(delta)
+		}
+		payload, _ := json.Marshal(chunkEvent{Channel: channel, Delta: delta})
 		return p.sdk.EmitWithID(req.ID, "llm", "chunk", payload)
 	})
 	if err != nil {
@@ -69,8 +73,9 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 	return &streamResp{
 		Model: model.ID,
 		Messages: []pluginsdk.ChatMessage{{
-			Role: pluginsdk.RoleAssistant,
-			Text: text.String(),
+			Role:      pluginsdk.RoleAssistant,
+			Text:      text.String(),
+			Reasoning: reasoning.String(),
 		}},
 	}, nil
 }
@@ -83,7 +88,7 @@ func buildChatRequest(model string, messages []pluginsdk.ChatMessage) chatReques
 	}
 }
 
-func readSSE(r io.Reader, onDelta func(string) error) error {
+func readSSE(r io.Reader, onDelta func(channel, delta string) error) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -102,11 +107,23 @@ func readSSE(r io.Reader, onDelta func(string) error) error {
 		if chunk.Error != nil {
 			return fmt.Errorf("llm stream error: %s", chunk.Error.Message)
 		}
-		if len(chunk.Choices) == 0 || chunk.Choices[0].Delta.Content == "" {
+		if len(chunk.Choices) == 0 {
 			continue
 		}
-		if err := onDelta(chunk.Choices[0].Delta.Content); err != nil {
-			return err
+		delta := chunk.Choices[0].Delta
+		reasoning := delta.ReasoningContent
+		if reasoning == "" {
+			reasoning = delta.Reasoning
+		}
+		if reasoning != "" {
+			if err := onDelta("thinking", reasoning); err != nil {
+				return err
+			}
+		}
+		if delta.Content != "" {
+			if err := onDelta("content", delta.Content); err != nil {
+				return err
+			}
 		}
 	}
 	return scanner.Err()

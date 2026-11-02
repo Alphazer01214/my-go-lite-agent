@@ -10,7 +10,7 @@
 
 | 文档 | 定义什么 | 何时读 |
 |---|---|---|
-| [CONSTRAINT.md](CONSTRAINT.md) | 协作规则、文档归属、文档检查、测试流程 | 任何改动动手前 |
+| [CONSTRAINT.md](CONSTRAINT.md) | 协作规则、文档归属、文档检查、测试流程 | 阅读项目代码与任何改动动手前 |
 | [CONTEXT.md](CONTEXT.md) | 平台术语，含每个术语的 Avoid 用法 | 命名、写文档、提到平台概念前 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 平台结构、Frame 路由、消息边界、目录映射 | 改 `protocol`、`pluginsdk`、`internal/`、`cmd/` 前 |
 | [PRESSURE.md](PRESSURE.md) | 测试规程、数据档位、压力与错误条目 | 跑可用性、压力或错误场景前 |

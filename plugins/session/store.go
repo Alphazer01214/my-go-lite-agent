@@ -171,6 +171,7 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 			Type:        in.Type,
 			Role:        in.Role,
 			TextContent: in.TextContent,
+			Reasoning:   in.Reasoning,
 			Files:       in.Files,
 			ToolCalls:   in.ToolCalls,
 			ToolCallID:  in.ToolCallID,

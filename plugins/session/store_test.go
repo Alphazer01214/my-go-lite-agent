@@ -44,7 +44,7 @@ func TestCreateAppendRecover(t *testing.T) {
 		Facts: []factIn{
 			{Type: TypeSessionStart, Role: "host"},
 			{Type: "message", Role: "user", TextContent: "hi"},
-			{Type: "message", Role: "assistant", TextContent: "hello", Timestamp: 1700000000123},
+			{Type: "message", Role: "assistant", TextContent: "hello", Reasoning: "分析完成", Timestamp: 1700000000123},
 		},
 	})
 	if err != nil {
@@ -81,8 +81,18 @@ func TestCreateAppendRecover(t *testing.T) {
 	if len(page.Facts) != 1 || page.Facts[0].Seq != 3 || page.Facts[0].TextContent != "hello" {
 		t.Fatalf("page facts = %+v", page.Facts)
 	}
+	if page.Facts[0].Reasoning != "分析完成" {
+		t.Fatalf("reasoning = %q, want 分析完成", page.Facts[0].Reasoning)
+	}
 	if page.Facts[0].Timestamp != 1700000000123 {
 		t.Fatalf("caller timestamp lost: %d", page.Facts[0].Timestamp)
+	}
+	messages, err := p.messages(ctx, &infoReq{SessionId: meta.SessionId})
+	if err != nil {
+		t.Fatalf("messages: %v", err)
+	}
+	if len(messages.Messages) != 2 || messages.Messages[1].Reasoning != "分析完成" {
+		t.Fatalf("messages = %+v, want assistant reasoning", messages.Messages)
 	}
 
 	p.close()

@@ -19,6 +19,7 @@ Agent 接收 WebUI 输入，并串联 Session 与 LLM。
 ## 下游请求
 
 Agent 调 `llm.stream` 时带 `model`、`messages` 和 `meta`。
+助手消息的 `text` 与 `reasoning` 都写回 Session。
 `messages` 是当前会话的消息投影，作为 Prompter 缺席时的兜底。
 `meta` 包含 `session_id`、`turn_id`、`workspace` 和 `model`。
 

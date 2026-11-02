@@ -68,6 +68,7 @@ func projectMessages(facts []sessionFact) []pluginsdk.ChatMessage {
 			Seq:        fact.Seq,
 			Role:       fact.Role,
 			Text:       fact.TextContent,
+			Reasoning:  fact.Reasoning,
 			Files:      fact.Files,
 			ToolCalls:  fact.ToolCalls,
 			ToolCallID: fact.ToolCallID,

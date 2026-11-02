@@ -7,12 +7,7 @@
       "base_url": "https://api.deepseek.com/v1",
       "api_key": "",
       "capabilities": {
-        "streaming": true,
-        "tools": true,
-        "vision": false,
-        "audio": false,
-        "reasoning": false,
-        "json_schema": true
+        "vision": false
       }
     },
     {
@@ -22,12 +17,7 @@
       "base_url": "https://api.openai.com/v1",
       "api_key": "",
       "capabilities": {
-        "streaming": true,
-        "tools": true,
-        "vision": true,
-        "audio": false,
-        "reasoning": false,
-        "json_schema": true
+        "vision": true
       }
     }
   ],

@@ -67,6 +67,7 @@ type sessionFact struct {
 	Type        string               `json:"type"`
 	Role        string               `json:"role,omitempty"`
 	TextContent string               `json:"text_content,omitempty"`
+	Reasoning   string               `json:"reasoning,omitempty"`
 	Files       []pluginsdk.File     `json:"files,omitempty"`
 	ToolCalls   []pluginsdk.ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID  string               `json:"tool_call_id,omitempty"`

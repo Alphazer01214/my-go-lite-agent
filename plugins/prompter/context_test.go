@@ -14,7 +14,7 @@ func TestProjectMessagesOrdersBaselineBeforeHistory(t *testing.T) {
 		{Seq: 2, Type: factTypeRuntimeContext, Role: pluginsdk.RoleUser, TextContent: "runtime"},
 		{Seq: 3, Type: "turn_start", Role: "host"},
 		{Seq: 4, Type: factTypeMessage, Role: pluginsdk.RoleUser, TextContent: "hello"},
-		{Seq: 5, Type: factTypeMessage, Role: pluginsdk.RoleAssistant, TextContent: "hi"},
+		{Seq: 5, Type: factTypeMessage, Role: pluginsdk.RoleAssistant, TextContent: "hi", Reasoning: "思考"},
 	}
 	messages := projectMessages(facts)
 	if len(messages) != 4 {
@@ -26,6 +26,9 @@ func TestProjectMessagesOrdersBaselineBeforeHistory(t *testing.T) {
 		if messages[i].Role != wantRoles[i] || messages[i].Seq != wantSeqs[i] {
 			t.Fatalf("message %d = %+v, want role %s seq %d", i, messages[i], wantRoles[i], wantSeqs[i])
 		}
+	}
+	if messages[3].Reasoning != "思考" {
+		t.Fatalf("assistant reasoning = %q, want 思考", messages[3].Reasoning)
 	}
 }
 

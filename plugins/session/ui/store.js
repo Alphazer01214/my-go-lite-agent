@@ -380,6 +380,7 @@ export async function sendTurn(text, model = "") {
 		sessionId,
 		userText: input,
 		assistantText: "",
+		assistantReasoning: "",
 		status: "streaming",
 		error: "",
 		userPersisted: false,
@@ -400,11 +401,14 @@ export async function sendTurn(text, model = "") {
 					refreshSessions();
 					return;
 				}
-				if (event?.method !== "chunk" || payload.channel !== "content") return;
+				if (event?.method !== "chunk") return;
+				const channel = payload.channel === "thinking" ? "thinking" : payload.channel === "content" ? "content" : "";
+				if (!channel) return;
 				const delta = typeof payload.delta === "string" ? payload.delta : "";
 				if (!delta) return;
-				turn.assistantText += delta;
-				emit("chunk", { key: turn.key, delta });
+				if (channel === "thinking") turn.assistantReasoning += delta;
+				else turn.assistantText += delta;
+				emit("chunk", { key: turn.key, channel, delta });
 			},
 		);
 
@@ -415,13 +419,18 @@ export async function sendTurn(text, model = "") {
 			adopt(turn, resultId);
 			if (!state.sessionId) state.sessionId = resultId;
 		}
-		const finalText = Array.isArray(result?.messages)
-			? result.messages
-				.filter((message) => message?.role === "assistant")
-				.map((message) => String(message.text || ""))
-				.join("\n\n")
-			: "";
+		const assistantMessages = Array.isArray(result?.messages)
+			? result.messages.filter((message) => message?.role === "assistant")
+			: [];
+		const finalText = assistantMessages
+			.map((message) => String(message.text || ""))
+			.join("\n\n");
+		const finalReasoning = assistantMessages
+			.map((message) => String(message.reasoning || ""))
+			.filter(Boolean)
+			.join("\n\n");
 		if (finalText) turn.assistantText = finalText;
+		if (finalReasoning) turn.assistantReasoning = finalReasoning;
 		turn.status = "done";
 		turn.userPersisted = true;
 		emit("state");

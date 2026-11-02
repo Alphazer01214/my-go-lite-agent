@@ -295,6 +295,7 @@ func (p *plugin) messages(ctx context.Context, req *infoReq) (*messageResp, erro
 			Seq:        f.Seq,
 			Role:       f.Role,
 			Text:       f.TextContent,
+			Reasoning:  f.Reasoning,
 			Files:      f.Files,
 			ToolCalls:  f.ToolCalls,
 			ToolCallID: f.ToolCallID,

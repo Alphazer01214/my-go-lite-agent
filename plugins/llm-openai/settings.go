@@ -19,12 +19,7 @@ type modelSettings struct {
 	ContextWindow int             `json:"context_window,omitempty"`
 	BaseURL       string          `json:"base_url"`
 	APIKey        json.RawMessage `json:"api_key,omitempty"`
-	Streaming     bool            `json:"streaming"`
-	Tools         bool            `json:"tools"`
 	Vision        bool            `json:"vision"`
-	Audio         bool            `json:"audio"`
-	Reasoning     bool            `json:"reasoning"`
-	JsonSchema    bool            `json:"json_schema"`
 }
 
 type llmSettingsValues struct {
@@ -101,12 +96,7 @@ func settingsModelFromConfig(model ModelConfig) map[string]any {
 		"context_window": model.ContextWindow,
 		"base_url":       model.BaseURL,
 		"api_key":        map[string]any{"configured": model.APIKey != ""},
-		"streaming":      model.Capabilities.Streaming,
-		"tools":          model.Capabilities.Tools,
 		"vision":         model.Capabilities.Vision,
-		"audio":          model.Capabilities.Audio,
-		"reasoning":      model.Capabilities.Reasoning,
-		"json_schema":    model.Capabilities.JsonSchema,
 	}
 }
 
@@ -166,14 +156,7 @@ func (p *plugin) handleSettingsSave(_ context.Context, req *pluginsdk.Request) (
 			Label:         strings.TrimSpace(item.Label),
 			ContextWindow: item.ContextWindow,
 			BaseURL:       strings.TrimSpace(item.BaseURL),
-			Capabilities: ModelCapabilities{
-				Streaming:  item.Streaming,
-				Tools:      item.Tools,
-				Vision:     item.Vision,
-				Audio:      item.Audio,
-				Reasoning:  item.Reasoning,
-				JsonSchema: item.JsonSchema,
-			},
+			Capabilities:  ModelCapabilities{Vision: item.Vision},
 		}
 		update, present, err := parseSecretUpdate(item.APIKey)
 		if err != nil {

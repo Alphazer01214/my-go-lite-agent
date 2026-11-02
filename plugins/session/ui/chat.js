@@ -21,9 +21,12 @@ function shouldRenderTurn(turn, messages) {
 	if (!turn) return false;
 	if (turn.status !== "done") return true;
 	const text = String(turn.assistantText || "").trim();
-	if (!text) return true;
+	const reasoning = String(turn.assistantReasoning || "").trim();
+	if (!text && !reasoning) return true;
 	return !messages.some((message) =>
-		message?.role === "assistant" && String(message.text || "").trim() === text);
+		message?.role === "assistant"
+		&& String(message.text || "").trim() === text
+		&& String(message.reasoning || "").trim() === reasoning);
 }
 
 function messageText(message) {
@@ -31,6 +34,14 @@ function messageText(message) {
 	if (text) return text;
 	if (message?.tool_calls?.length) return `[tool calls] ${message.tool_calls.length}`;
 	return "(空)";
+}
+
+function reasoningBlock(reasoning, open = false) {
+	const body = el("div", { class: "reasoning-body" }, renderMarkdown(reasoning));
+	return el("details", { class: "reasoning", open },
+		el("summary", { text: "思考过程" }),
+		body,
+	);
 }
 
 export class SessionChat extends HTMLElement {
@@ -44,6 +55,8 @@ export class SessionChat extends HTMLElement {
 		this.inputKey = null;
 		this.draftBody = null;
 		this.draftText = null;
+		this.draftReasoningText = null;
+		this.reasoningDetails = null;
 		this.draftKey = "";
 		this.build();
 	}
@@ -213,6 +226,8 @@ export class SessionChat extends HTMLElement {
 		this.column.replaceChildren();
 		this.draftBody = null;
 		this.draftText = null;
+		this.draftReasoningText = null;
+		this.reasoningDetails = null;
 		this.draftKey = "";
 
 		if (messages.length === 0 && !turn) {
@@ -266,6 +281,7 @@ export class SessionChat extends HTMLElement {
 		}
 		if (role === "assistant") {
 			const body = el("div", { class: "body" });
+			if (message?.reasoning) body.append(reasoningBlock(String(message.reasoning)));
 			body.append(renderMarkdown(text));
 			this.column.append(el("div", { class: "msg assistant" }, body));
 			return;
@@ -277,6 +293,18 @@ export class SessionChat extends HTMLElement {
 
 	appendDraft(turn) {
 		const body = el("div", { class: "body" });
+		const hasReasoning = Boolean(turn.assistantReasoning);
+		this.draftReasoningText = document.createTextNode(turn.assistantReasoning || "");
+		const reasoningBody = el("div", { class: "reasoning-body live" }, this.draftReasoningText);
+		this.reasoningDetails = el("details", {
+			class: "reasoning",
+			open: hasReasoning,
+			hidden: !hasReasoning,
+		},
+			el("summary", { text: "思考过程" }),
+			reasoningBody,
+		);
+		body.append(this.reasoningDetails);
 		this.draftText = document.createTextNode(turn.assistantText || "");
 		body.append(this.draftText);
 		if (turn.status === "streaming" || turn.status === "stopping") {
@@ -358,11 +386,24 @@ export class SessionChat extends HTMLElement {
 			this.render();
 			return;
 		}
-		if (this.draftText) {
-			this.draftText.appendData(detail.delta);
+		if (detail.channel === "thinking") {
+			if (!this.draftReasoningText) {
+				this.draftReasoningText = document.createTextNode(detail.delta);
+				this.reasoningDetails?.querySelector(".reasoning-body")?.append(this.draftReasoningText);
+			} else {
+				this.draftReasoningText.appendData(detail.delta);
+			}
+			if (this.reasoningDetails) {
+				this.reasoningDetails.hidden = false;
+				if (!turn.assistantText) this.reasoningDetails.open = true;
+			}
 		} else {
-			this.draftText = document.createTextNode(detail.delta);
-			this.draftBody.prepend(this.draftText);
+			if (this.draftText) {
+				this.draftText.appendData(detail.delta);
+			} else {
+				this.draftText = document.createTextNode(detail.delta);
+				this.draftBody.append(this.draftText);
+			}
 		}
 		if (this.pinned) this.scrollToBottom();
 	}

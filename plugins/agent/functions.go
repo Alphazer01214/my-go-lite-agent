@@ -213,6 +213,7 @@ func (p *plugin) appendMessages(ctx context.Context, sessionID string, messages 
 			Type:        factTypeMessage,
 			Role:        m.Role,
 			TextContent: m.Text,
+			Reasoning:   m.Reasoning,
 			Files:       m.Files,
 			ToolCalls:   m.ToolCalls,
 			ToolCallID:  m.ToolCallID,

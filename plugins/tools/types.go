@@ -1,12 +1,9 @@
 package main
 
-import "encoding/json"
-
-type CallRequest struct {
-	Input json.RawMessage `json:"input,omitempty"`
+type listTools struct {
 }
 
-type CallResponse struct {
-	Accepted bool   `json:"accepted"`
-	Message  string `json:"message,omitempty"`
+type toolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }

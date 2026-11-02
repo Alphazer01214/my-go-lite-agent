@@ -20,3 +20,9 @@ Session 只要求 `type` 非空，不解释事实含义。
 Session Chat 的模型下拉框只用于新会话。
 发送 `loop.turn` 时把所选模型 ID 写入 `model`。
 
+
+## 消息 reasoning
+
+message fact 可保存 `reasoning`。
+`session.messages` 把它随助手消息返回。
+Session Chat 在正文中折叠渲染思考过程。

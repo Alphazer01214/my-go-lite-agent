@@ -27,7 +27,7 @@ func TestSettingsMaskSecretAndPreserveOmittedSecret(t *testing.T) {
 			Label:        "Model A",
 			BaseURL:      "https://example.test/v1",
 			APIKey:       "secret-value",
-			Capabilities: ModelCapabilities{Streaming: true, Tools: true},
+			Capabilities: ModelCapabilities{Vision: true},
 		}},
 	}}
 	p.sdk = pluginsdk.NewPlugin("llm-openai")
@@ -54,7 +54,7 @@ func TestSettingsMaskSecretAndPreserveOmittedSecret(t *testing.T) {
 	}
 
 	raw, err = p.handleSettingsSave(context.Background(), &pluginsdk.Request{
-		Payload: json.RawMessage(`{"values":{"models":[{"id":"model-a","label":"Model A","base_url":"https://example.test/v1","streaming":true,"tools":true,"vision":true}],"default_model":"model-a"}}`),
+		Payload: json.RawMessage(`{"values":{"models":[{"id":"model-a","label":"Model A","base_url":"https://example.test/v1","vision":true}],"default_model":"model-a"}}`),
 	})
 	if err != nil {
 		t.Fatalf("settings.save: %v", err)
@@ -68,6 +68,11 @@ func TestSettingsMaskSecretAndPreserveOmittedSecret(t *testing.T) {
 	}
 	if !p.cfg.Models[0].Capabilities.Vision {
 		t.Fatal("vision capability was not saved")
+	}
+	for _, key := range []string{`"streaming"`, `"tools"`, `"audio"`, `"reasoning"`, `"json_schema"`} {
+		if strings.Contains(string(raw), key) {
+			t.Fatalf("settings.get retained unsupported capability %s: %s", key, raw)
+		}
 	}
 
 	reloaded, err := loadConfig(llmConfigPath)
@@ -84,6 +89,12 @@ func TestSettingsMaskSecretAndPreserveOmittedSecret(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "secret-value") || strings.Contains(string(raw), "api_key") {
 		t.Fatalf("models.list leaked secret fields: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"vision":true`) {
+		t.Fatalf("models.list missing vision capability: %s", raw)
+	}
+	if strings.Contains(string(raw), `"streaming"`) || strings.Contains(string(raw), `"tools"`) {
+		t.Fatalf("models.list exposed removed capabilities: %s", raw)
 	}
 }
 

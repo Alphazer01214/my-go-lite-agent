@@ -311,6 +311,35 @@ export const CHAT_CSS = `${BASE}
 	white-space: pre-wrap;
 	word-break: break-word;
 }
+.msg.assistant .reasoning {
+	margin: 0 0 12px;
+	border: 1px solid var(--sx-border);
+	border-radius: 10px;
+	background: #f8fafc;
+	color: var(--sx-muted);
+	overflow: hidden;
+}
+.msg.assistant .reasoning[hidden] { display: none; }
+.msg.assistant .reasoning summary {
+	cursor: pointer;
+	padding: 8px 10px;
+	color: var(--sx-muted);
+	font-size: 12px;
+	font-weight: 600;
+	user-select: none;
+}
+.msg.assistant .reasoning summary::marker { color: var(--sx-faint); }
+.msg.assistant .reasoning-body {
+	padding: 0 12px 10px;
+	max-height: 360px;
+	overflow: auto;
+	font-size: 13px;
+	line-height: 21px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.msg.assistant .reasoning-body .md-p { margin: 0 0 8px; }
+.msg.assistant .reasoning-body .md-p:last-child { margin-bottom: 0; }
 .msg.assistant .md-p { margin: 0 0 10px; }
 .msg.assistant .md-p:last-child { margin-bottom: 0; }
 .msg.assistant .md-heading { margin: 14px 0 8px; font-size: 15px; font-weight: 600; }

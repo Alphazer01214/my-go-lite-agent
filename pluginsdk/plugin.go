@@ -174,7 +174,7 @@ func NewPlugin(name string) *Plugin {
 
 // Register binds capability.method to handler.
 // Same-plugin re-register is last-wins (protocol §4.2).
-func (p *Plugin) Register(capability string, method string, handler HandleFunc) {
+func (p *Plugin) Register(capability string, method string, handler HandleFunc) *Handler {
 	if capability == "" || method == "" {
 		panic("Register: capability and method must be non-empty")
 	}
@@ -183,7 +183,10 @@ func (p *Plugin) Register(capability string, method string, handler HandleFunc) 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.handlers[capability+"."+method] = Handler{handleFunc: handler}
+	h := Handler{handleFunc: handler}
+	p.handlers[capability+"."+method] = h
+	return &h
+
 }
 
 // Registration is one registered (capability, method) → Handler entry.

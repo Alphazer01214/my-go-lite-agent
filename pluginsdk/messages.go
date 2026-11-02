@@ -32,11 +32,13 @@ const (
 
 // ChatMessage needs to be compatible with text/image/audio...
 type ChatMessage struct {
-	ID    string `json:"id,omitempty"`
-	Seq   int    `json:"seq,omitempty"`
-	Role  string `json:"role"`
-	Text  string `json:"text"`
-	Files []File `json:"files,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Seq  int    `json:"seq,omitempty"`
+	Role string `json:"role"`
+	Text string `json:"text"`
+	// Reasoning 是模型返回的思考内容，只用于展示和留存。
+	Reasoning string `json:"reasoning,omitempty"`
+	Files     []File `json:"files,omitempty"`
 
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
