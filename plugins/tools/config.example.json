@@ -1,0 +1,5 @@
+{
+  "capabilities": ["file"],
+  "refresh_ttl_ms": 2000,
+  "info_timeout_ms": 1500
+}

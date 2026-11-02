@@ -18,11 +18,12 @@ func newPlugin() *plugin {
 }
 
 func (p *plugin) registerHandlers() {
-	p.sdk.Register(
-		"file",
-		"read",
-		p.handleRead,
-	)
+	p.sdk.Register("file", "info", p.handleToolInfo)
+	p.sdk.Register("file", "read", p.handleRead)
+	p.sdk.Register("file", "write", p.handleWrite)
+	p.sdk.Register("file", "glob", p.handleGlob)
+	p.sdk.Register("file", "grep", p.handleGrep)
+	p.sdk.Register("file", "edit", p.handleEdit)
 }
 
 func main() {
