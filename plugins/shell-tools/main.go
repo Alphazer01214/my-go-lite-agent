@@ -18,11 +18,8 @@ func newPlugin() *plugin {
 }
 
 func (p *plugin) registerHandlers() {
-	p.sdk.Register(
-		"shell",
-		"execute",
-		p.handleExecute,
-	)
+	p.sdk.Register("shell", "info", p.handleInfo)
+	p.sdk.Register("shell", "execute", p.handleExecute)
 }
 
 func main() {

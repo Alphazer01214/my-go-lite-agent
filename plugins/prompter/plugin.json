@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "protocol": 1,
   "entry": "prompter",
+  "provides": ["skill", "mcp"],
   "requires": ["session", "llm", "tool"],
-  "depends_on": ["session", "tools", "llm-openai"],
+  "depends_on": ["session", "llm-openai"],
   "consumes": [
     {
       "capability": "session",
@@ -16,5 +17,41 @@
     }
   ],
   "autostart": true,
+  "ui": {
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "prompter-context", "mount_id": "context", "slot": "right" },
+      { "tag": "prompter-resources", "mount_id": "resources", "slot": "bottom" }
+    ]
+  },
+  "settings": {
+    "get": { "capability": "prompter", "method": "settings.get" },
+    "save": { "capability": "prompter", "method": "settings.save" },
+    "schema": [
+      {
+        "key": "skills_global_dir",
+        "label": "全局 Skills 目录",
+        "type": "string",
+        "description": "绝对路径；留空禁用。目录内每个 skill 使用 <name>/SKILL.md。"
+      },
+      {
+        "key": "skills_workspace_dir",
+        "label": "Workspace Skills 目录",
+        "type": "string",
+        "description": "相对 workspace；默认 .liteagent/skills，留空禁用。"
+      },
+      {
+        "key": "mcp_enabled",
+        "label": "启用 MCP",
+        "type": "boolean"
+      },
+      {
+        "key": "mcp_timeout_ms",
+        "label": "MCP 全局超时 (ms)",
+        "type": "number",
+        "description": "默认 30000，最大 600000。"
+      }
+    ]
+  },
   "description": "Model request assembler: owns model-visible messages and tool definitions"
 }

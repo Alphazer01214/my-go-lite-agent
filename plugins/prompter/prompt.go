@@ -55,7 +55,7 @@ func (c config) renderRuntime(vars map[string]string) (string, error) {
 			sections = append(sections, renderedSection{order: section.Order, name: section.Name, text: text})
 		}
 	}
-	if text := renderSkills(c.Skills); text != "" {
+	if text := renderSkills(c.Skills, c.SkillsReadable); text != "" {
 		sections = append(sections, renderedSection{order: 200, name: "skills", text: text})
 	}
 	if text := renderMCPServers(c.MCPServers); text != "" {
@@ -92,7 +92,7 @@ func renderEnvironment(vars map[string]string) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderSkills(skills []skillEntry) string {
+func renderSkills(skills []skillEntry, readable bool) string {
 	if len(skills) == 0 {
 		return ""
 	}
@@ -103,6 +103,9 @@ func renderSkills(skills []skillEntry) string {
 			line += ": " + skill.Description
 		}
 		lines = append(lines, line)
+	}
+	if readable {
+		lines = append(lines, "", "Use skill_read with a skill name from this list to load its full instructions.")
 	}
 	return strings.Join(lines, "\n")
 }

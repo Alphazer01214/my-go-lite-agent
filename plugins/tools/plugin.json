@@ -7,6 +7,6 @@
   "priority": 0,
   "provides": ["tool"],
   "requires": [],
-  "depends_on": ["file-tools"],
+  "depends_on": ["file-tools", "shell-tools", "python", "prompter"],
   "description": "Tool catalog and dispatcher; loads provider catalogs from capability.info"
 }

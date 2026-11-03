@@ -7,29 +7,21 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-type plugin struct {
-	sdk *pluginsdk.Plugin
-}
-
-func newPlugin() *plugin {
-	return &plugin{
-		sdk: pluginsdk.NewPlugin("subagent"),
-	}
-}
-
-func (p *plugin) registerHandlers() {
-	p.sdk.Register(
-		"subagent",
-		"run",
-		p.handleRun,
-	)
-}
-
 func main() {
-	plugin := newPlugin()
-	plugin.registerHandlers()
+	sdk := pluginsdk.NewPlugin("subagent")
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "subagent: load config: %v\n", err)
+		cfg = defaultConfig()
+	}
+	p := newPlugin(sdk, cfg)
 
-	if err := plugin.sdk.Serve(); err != nil {
+	sdk.Register("subagent", "info", p.handleInfo)
+	sdk.Register("subagent", "run", p.handleRun)
+	sdk.Register("subagent", "settings.get", p.handleSettingsGet)
+	sdk.Register("subagent", "settings.save", p.handleSettingsSave)
+
+	if err := sdk.Serve(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

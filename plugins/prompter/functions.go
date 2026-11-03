@@ -85,7 +85,10 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 	if len(messages) == 0 {
 		return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, "prompter has no model-visible messages")
 	}
-	p.writeSnapshot(ctx, sessionID, model, baseline, messages, tools)
+	turnID := strings.TrimSpace(in.Meta.TurnID)
+	snapshot := buildSnapshotMeta(sessionID, model, baseline, messages, tools)
+	p.writeSnapshot(ctx, sessionID, snapshot)
+	p.rememberContext(sessionID, turnID, model, messages, tools, snapshot)
 
 	payload, err := replaceModelPayload(raw, messages, model, tools.Tools)
 	if err != nil {
@@ -218,14 +221,28 @@ func (p *plugin) writeBaseline(
 	return p.sessionFacts(ctx, sessionID)
 }
 
-func (p *plugin) writeSnapshot(
-	ctx context.Context,
+func (p *plugin) writeSnapshot(ctx context.Context, sessionID string, snapshot snapshotMeta) {
+	meta, err := json.Marshal(snapshot)
+	if err != nil {
+		logf("context snapshot skipped: %v", err)
+		return
+	}
+	if _, err := p.appendFacts(ctx, sessionID, []factIn{{
+		Type: factTypeContextSnapshot,
+		Role: "host",
+		Meta: meta,
+	}}); err != nil {
+		logf("context snapshot skipped: %v", err)
+	}
+}
+
+func buildSnapshotMeta(
 	sessionID string,
 	model string,
 	baseline []factIn,
 	messages []pluginsdk.ChatMessage,
 	tools toolCatalog,
-) {
+) snapshotMeta {
 	systemHash, runtimeHash := "", ""
 	if len(baseline) > 0 {
 		systemHash = factHash(baseline[0])
@@ -233,7 +250,7 @@ func (p *plugin) writeSnapshot(
 	if len(baseline) > 1 {
 		runtimeHash = factHash(baseline[1])
 	}
-	meta, err := json.Marshal(snapshotMeta{
+	return snapshotMeta{
 		Source:                "prompter",
 		SessionID:             sessionID,
 		Model:                 model,
@@ -246,17 +263,6 @@ func (p *plugin) writeSnapshot(
 		ToolCatalogGeneration: tools.Generation,
 		ToolCatalogHash:       tools.Hash,
 		ToolNames:             tools.Names,
-	})
-	if err != nil {
-		logf("context snapshot skipped: %v", err)
-		return
-	}
-	if _, err := p.appendFacts(ctx, sessionID, []factIn{{
-		Type: factTypeContextSnapshot,
-		Role: "host",
-		Meta: meta,
-	}}); err != nil {
-		logf("context snapshot skipped: %v", err)
 	}
 }
 

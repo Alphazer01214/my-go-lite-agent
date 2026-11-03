@@ -1,0 +1,12 @@
+{
+  "name": "python",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "python",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["python"],
+  "requires": ["shell"],
+  "depends_on": ["shell-tools"],
+  "description": "Python tool provider; runs inline code or workspace scripts through shell.execute"
+}

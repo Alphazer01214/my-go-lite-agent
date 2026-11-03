@@ -7,29 +7,30 @@ import (
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-type plugin struct {
-	sdk *pluginsdk.Plugin
-}
-
-func newPlugin() *plugin {
-	return &plugin{
-		sdk: pluginsdk.NewPlugin("sandbox"),
-	}
-}
-
-func (p *plugin) registerHandlers() {
-	p.sdk.Register(
-		"sandbox",
-		"check",
-		p.handleCheck,
-	)
-}
-
 func main() {
-	plugin := newPlugin()
-	plugin.registerHandlers()
+	cfg, err := loadConfig(configFile)
+	if err != nil {
+		logf("load config: %v", err)
+		cfg = defaultConfig()
+	}
 
-	if err := plugin.sdk.Serve(); err != nil {
+	sdk := pluginsdk.NewPlugin("sandbox")
+	p := newPlugin(sdk, cfg, configFile)
+	p.ui = sdk.WebUI()
+
+	// The consumer set comes from the plugin's own manifest so the handlers
+	// registered here always match the Host discovery used by the pipeline.
+	for _, seam := range loadManifestSeams("plugin.json") {
+		sdk.Register(seam.Capability, seam.Method, p.handleSeam)
+	}
+
+	sdk.Register("sandbox", "check", p.handleCheck)
+	sdk.Register("sandbox", "pending.list", p.handlePendingList)
+	sdk.Register("sandbox", "decide", p.handleDecide)
+	sdk.Register("sandbox", "settings.get", p.handleSettingsGet)
+	sdk.Register("sandbox", "settings.save", p.handleSettingsSave)
+
+	if err := sdk.Serve(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

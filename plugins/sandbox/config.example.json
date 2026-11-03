@@ -1,0 +1,5 @@
+{
+  "default_action": "allow",
+  "confirm_ttl_seconds": 300,
+  "rules": []
+}

@@ -67,10 +67,11 @@ Bash 脚本的参数别名：
 | `plugin:agent` | 插件可执行 | `dist/plugins/agent/agent` |
 | `plugin:session` | 插件可执行 | `dist/plugins/session/session` |
 | `plugin:llm-openai` | 插件可执行 | `dist/plugins/llm-openai/llm-openai` |
-| `plugin:model-context` | 插件可执行 | `dist/plugins/model-context/model-context` |
+| `plugin:prompter` | 插件可执行 | `dist/plugins/prompter/prompter` |
 | `plugin:tools` | 插件可执行 | `dist/plugins/tools/tools` |
 | `plugin:file-tools` | 插件可执行 | `dist/plugins/file-tools/file-tools` |
 | `plugin:shell-tools` | 插件可执行 | `dist/plugins/shell-tools/shell-tools` |
+| `plugin:python` | 插件可执行 | `dist/plugins/python/python` |
 | `plugin:subagent` | 插件可执行 | `dist/plugins/subagent/subagent` |
 | `plugin:sandbox` | 插件可执行 | `dist/plugins/sandbox/sandbox` |
 
@@ -135,11 +136,12 @@ dist/
 │   │   ├── config.example.json 配置模板
 │   │   └── README.md           插件文档
 │   ├── llm-openai/             同上结构
-│   ├── model-context/
-│   │   ├── model-context       插件可执行
+│   ├── prompter/
+│   │   ├── prompter            插件可执行
 │   │   ├── plugin.json
 │   │   ├── config.json         配置种子，构建不覆写
 │   │   ├── config.example.json 配置模板
+│   │   ├── ui/main.js          插件静态资源
 │   │   └── README.md
 │   ├── tools/
 │   │   ├── tools               插件可执行
@@ -149,8 +151,12 @@ dist/
 │   ├── shell-tools/
 │   │   ├── shell-tools         插件可执行
 │   │   ├── plugin.json
-│   │   ├── config.json         解释器策略
-│   │   ├── config.example.json
+│   │   └── README.md
+│   ├── python/
+│   │   ├── python              插件可执行
+│   │   ├── plugin.json
+│   │   ├── config.json         解释器配置，构建不覆写
+│   │   ├── config.example.json 配置模板
 │   │   └── README.md
 │   ├── subagent/
 │   │   ├── subagent            插件可执行
@@ -214,7 +220,7 @@ flowchart LR
 | 插件自己的 `config.example.json` | 该插件 |
 | `internal/webui/static/**` | 仅 `liteagent-server` |
 
-`config.example.json` 进入哈希是因为 `model-context` 用 `go:embed` 把它当默认提示词。漏掉会导致只改模板却复用旧二进制。
+`config.example.json` 进入哈希是因为 `prompter` 用 `go:embed` 把它当默认提示词。漏掉会导致只改模板却复用旧二进制。
 
 静态资源进入服务器哈希是必需项：它们被 `go:embed` 编进二进制，漏掉会导致只改前端却复用旧二进制。
 
@@ -232,8 +238,9 @@ flowchart LR
 |---|---|
 | llm-openai 配置（含 API Key） | `dist/plugins/llm-openai/config.json` |
 | agent 配置（scheme 选择） | `dist/plugins/agent/config.json` |
-| model-context 配置 | `dist/plugins/model-context/config.json` |
-| shell-tools 解释器策略 | `dist/plugins/shell-tools/config.json` |
+| prompter 配置 | `dist/plugins/prompter/config.json` |
+| tools capability 配置 | `dist/plugins/tools/config.json` |
+| python 解释器配置 | `dist/plugins/python/config.json` |
 | sandbox 风险档与默认动作 | `dist/plugins/sandbox/config.json` |
 | sandbox 规则集 | `dist/plugins/sandbox/rules.json` |
 | 会话记录 | `dist/plugins/session/sessions/` |
@@ -251,9 +258,7 @@ flowchart LR
 2. 仓库内 `plugins/<name>/config.json`（已被 gitignore，仅本机有效）；
 3. 插件自带的 `config.example.json` 模板。
 
-两个脚本的落种子范围不完全一致。Bash 脚本对五个插件都按上面的三级优先级处理。PowerShell 脚本只对 llm-openai 使用仓库内的 `config.json`，其余四个插件直接落到 `config.example.json`。
-
-会落种子的插件是 llm-openai、agent、model-context、shell-tools 和 sandbox。其余插件不生成 `config.json`。
+两个脚本都按上面的三级优先级处理。当前会落种子的插件是 llm-openai、agent、prompter、tools 和 python；其余插件不生成 `config.json`。
 
 llm-openai 首次构建只有空密钥模板，需要启动后通过设置接口或直接编辑 `dist/plugins/llm-openai/config.json` 填入密钥。后续构建保留该文件。
 

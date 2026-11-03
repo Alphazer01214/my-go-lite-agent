@@ -14,6 +14,7 @@ export const state = {
 	workspace: "",
 	sessions: [],
 	sessionId: "",
+	tabs: [],
 	meta: null,
 	messages: [],
 	facts: [],
@@ -76,6 +77,87 @@ export function notify(text) {
 	emit("state");
 }
 
+const TAB_STORAGE_KEY = "liteagent.session.tabs.v1";
+
+function tabStorage() {
+	try {
+		return globalThis.sessionStorage || null;
+	} catch {
+		return null;
+	}
+}
+
+function readTabStore() {
+	const storage = tabStorage();
+	if (!storage) return {};
+	try {
+		const parsed = JSON.parse(storage.getItem(TAB_STORAGE_KEY) || "{}");
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function writeTabStore(store) {
+	const storage = tabStorage();
+	if (!storage) return;
+	try {
+		storage.setItem(TAB_STORAGE_KEY, JSON.stringify(store));
+	} catch {
+		// 存储不可用时退化为仅内存状态。
+	}
+}
+
+function normalizeTabs(tabs) {
+	const seen = new Set();
+	const result = [];
+	for (const key of Array.isArray(tabs) ? tabs : []) {
+		if (typeof key !== "string") continue;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(key);
+	}
+	return result;
+}
+
+function saveTabState(workspace = state.workspace) {
+	if (!workspace) return;
+	const store = readTabStore();
+	store[workspace] = {
+		tabs: normalizeTabs(state.tabs),
+		active: state.sessionId,
+	};
+	writeTabStore(store);
+}
+
+function loadTabState(workspace) {
+	if (!workspace) return null;
+	const value = readTabStore()[workspace];
+	if (!value || !Array.isArray(value.tabs)) return null;
+	return {
+		tabs: normalizeTabs(value.tabs),
+		active: typeof value.active === "string" ? value.active : "",
+	};
+}
+
+function rememberTab(key) {
+	const tabs = normalizeTabs([...state.tabs, key]);
+	if (tabs.length === state.tabs.length) return;
+	state.tabs = tabs;
+	saveTabState();
+}
+
+function resetCurrent() {
+	selectionSeq += 1;
+	state.sessionId = "";
+	state.meta = null;
+	state.messages = [];
+	state.facts = [];
+	state.factsTotal = 0;
+	state.selectedModel = state.defaultModel;
+	state.error = "";
+}
+
 let initPromise = null;
 
 export function init() {
@@ -89,6 +171,7 @@ async function bootstrap() {
 		state.ready = true;
 		emit("state");
 		await refreshSessions();
+		await restoreTabState();
 	} catch (error) {
 		reportError("初始化", error);
 	}
@@ -146,6 +229,7 @@ export async function refreshSessions() {
 	try {
 		const payload = await call("session", "list", state.workspace ? { workspace: state.workspace } : {});
 		state.sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+		await pruneTabs();
 	} catch (error) {
 		reportError("会话列表", error);
 	} finally {
@@ -154,23 +238,110 @@ export async function refreshSessions() {
 	}
 }
 
+async function pruneTabs() {
+	if (!state.tabs.length) return;
+	const previous = state.tabs;
+	const activeMissing = Boolean(
+		state.sessionId
+		&& !findSession(state.sessionId)
+		&& !isSessionRunning(state.sessionId));
+	let next = previous.filter((key) =>
+		key === "" || isSessionRunning(key) || Boolean(findSession(key)) || (key === state.sessionId && !activeMissing));
+	if (activeMissing) {
+		const index = previous.indexOf(state.sessionId);
+		next = next.filter((key) => key !== state.sessionId);
+		state.tabs = normalizeTabs(next);
+		saveTabState();
+		const fallback = state.tabs[index] ?? state.tabs[index - 1] ?? state.tabs[0] ?? "";
+		if (fallback === "") newChat();
+		else await selectSession(fallback);
+		emit("state");
+		return;
+	}
+	if (next.length !== previous.length) {
+		state.tabs = normalizeTabs(next);
+		saveTabState();
+		emit("state");
+	}
+}
+
+async function restoreTabState() {
+	const saved = loadTabState(state.workspace);
+	if (!saved) return;
+	const tabs = saved.tabs.filter((key) => key === "" || Boolean(findSession(key)));
+	let active = saved.active;
+	if (active && active !== "" && !findSession(active)) active = "";
+	if (active && !tabs.includes(active)) tabs.push(active);
+	if (!tabs.length) return;
+	state.tabs = normalizeTabs(tabs);
+	saveTabState();
+	emit("state");
+	if (active && active !== "") {
+		await selectSession(active);
+		return;
+	}
+	if (active === "" && state.tabs.includes("")) {
+		resetCurrent();
+		emit("state");
+		saveTabState();
+		return;
+	}
+	const first = state.tabs[0];
+	if (first) await activateTab(first);
+}
+
+export function tabTitle(key) {
+	if (!key) return "新会话";
+	if (state.sessionId === key && state.meta?.title) return String(state.meta.title);
+	const session = findSession(key);
+	return String(session?.title || "会话").trim() || "会话";
+}
+
+export async function activateTab(key) {
+	const target = String(key ?? "");
+	if (!target) {
+		newChat();
+		return;
+	}
+	await selectSession(target);
+}
+
+export function closeTab(key) {
+	const target = String(key ?? "");
+	const running = target === "" ? state.sessionId === "" && isBusy() : isSessionRunning(target);
+	if (running) return false;
+	const index = state.tabs.indexOf(target);
+	if (index < 0) return false;
+	const wasActive = target === state.sessionId;
+	state.tabs = state.tabs.filter((_, itemIndex) => itemIndex !== index);
+	saveTabState();
+	if (!wasActive) {
+		emit("state");
+		return true;
+	}
+	const fallback = state.tabs[index] ?? state.tabs[index - 1] ?? "";
+	if (fallback === "") newChat();
+	else selectSession(fallback);
+	return true;
+}
+
 let selectionSeq = 0;
 
 export function newChat() {
-	selectionSeq += 1;
-	state.sessionId = "";
-	state.meta = null;
-	state.messages = [];
-	state.facts = [];
-	state.factsTotal = 0;
-	state.selectedModel = state.defaultModel;
-	state.error = "";
+	rememberTab("");
+	resetCurrent();
 	emit("state");
+	saveTabState();
 }
 
 export async function selectSession(id) {
 	const sessionId = String(id || "");
-	if (!sessionId || sessionId === state.sessionId) return;
+	if (!sessionId) return;
+	rememberTab(sessionId);
+	if (sessionId === state.sessionId) {
+		saveTabState();
+		return;
+	}
 	selectionSeq += 1;
 	const seq = selectionSeq;
 	state.sessionId = sessionId;
@@ -180,8 +351,24 @@ export async function selectSession(id) {
 	state.facts = [];
 	state.factsTotal = 0;
 	state.error = "";
+	saveTabState();
 	emit("state");
 	await Promise.all([loadMeta(sessionId, seq), loadMessages(sessionId, seq), loadFacts(sessionId, seq)]);
+	const turn = state.turns.get(`s:${sessionId}`);
+	if (turn) {
+		turn.userPersisted = state.messages.some((message) =>
+			message?.role === "user" && String(message.text || "") === turn.userText);
+		if (turn.status === "error" || turn.status === "stopped") {
+			const lastUser = [...state.messages].reverse().find((message) => message?.role === "user");
+			const terminal = terminalTurnEnd();
+			if (turn.userPersisted && lastUser && terminal
+				&& Number(terminal.seq) > Number(lastUser.seq)
+				&& String(lastUser.text || "") === turn.userText) {
+				state.turns.delete(turn.key);
+			}
+		}
+		emit("state");
+	}
 }
 
 function findSession(id) {
@@ -246,11 +433,16 @@ export async function selectWorkspace(path) {
 	const next = String(path || "");
 	if (!next || next === state.workspace) return;
 	clearError();
+	const previous = state.workspace;
+	if (previous) saveTabState(previous);
 	try {
 		await call("workspace", "select", { path: next });
 		state.workspace = next;
-		newChat();
+		state.tabs = [];
+		resetCurrent();
+		emit("state");
 		await refreshSessions();
+		await restoreTabState();
 	} catch (error) {
 		reportError("切换工作区", error);
 	}
@@ -263,10 +455,15 @@ export async function addWorkspace() {
 		if (!picked || picked.cancelled || !picked.path) return;
 		const payload = await call("workspace", "create", { path: picked.path });
 		const selected = payload?.selected || payload?.workspace?.path || picked.path;
+		const previous = state.workspace;
+		if (previous) saveTabState(previous);
 		state.workspace = selected;
-		newChat();
+		state.tabs = [];
+		resetCurrent();
+		emit("state");
 		await loadWorkspaces();
 		await refreshSessions();
+		await restoreTabState();
 		notify(`已添加工作区：${payload?.workspace?.name || selected}`);
 	} catch (error) {
 		reportError("添加工作区", error);
@@ -300,9 +497,18 @@ export async function togglePin(id) {
 
 export async function deleteSession(id) {
 	clearError();
+	const target = String(id || "");
+	const index = state.tabs.indexOf(target);
+	const wasActive = state.sessionId === target;
 	try {
-		await call("session", "delete", { session_id: id });
-		if (state.sessionId === id) newChat();
+		await call("session", "delete", { session_id: target });
+		state.tabs = state.tabs.filter((key) => key !== target);
+		saveTabState();
+		if (wasActive) {
+			const fallback = state.tabs[index] ?? state.tabs[index - 1] ?? "";
+			if (fallback === "") newChat();
+			else await selectSession(fallback);
+		}
 		await refreshSessions();
 	} catch (error) {
 		reportError("删除会话", error);
@@ -356,7 +562,28 @@ function adopt(turn, sessionId) {
 	turn.key = `s:${sessionId}`;
 	state.turns.delete(oldKey);
 	state.turns.set(turn.key, turn);
-	if (wasNew && !state.sessionId) state.sessionId = sessionId;
+	if (wasNew) {
+		const newIndex = state.tabs.indexOf("");
+		if (newIndex >= 0) {
+			state.tabs.splice(newIndex, 1, sessionId);
+		} else if (!state.tabs.includes(sessionId)) {
+			state.tabs.push(sessionId);
+		}
+		state.tabs = normalizeTabs(state.tabs);
+		if (!state.sessionId) state.sessionId = sessionId;
+		saveTabState();
+	}
+}
+
+function terminalTurnEnd() {
+	let latest = null;
+	for (const fact of state.facts) {
+		if (fact?.type !== "turn_end") continue;
+		const status = String(fact.meta?.status || "");
+		if (status !== "error" && status !== "cancelled") continue;
+		if (!latest || Number(fact.seq) > Number(latest.seq)) latest = fact;
+	}
+	return latest;
 }
 
 export async function sendTurn(text, model = "") {
@@ -451,9 +678,25 @@ export async function sendTurn(text, model = "") {
 		}
 		turn.userPersisted = state.messages.some((message) =>
 			message?.role === "user" && String(message.text || "") === turn.userText);
-		emit("state");
-		if (cancelled) notify("已停止生成");
-		else reportError("本轮", error);
+		const lastUser = [...state.messages].reverse().find((message) => message?.role === "user");
+		const terminal = terminalTurnEnd();
+		const persisted = Boolean(
+			turn.userPersisted
+			&& lastUser
+			&& terminal
+			&& Number(terminal.seq) > Number(lastUser.seq)
+			&& String(lastUser.text || "") === turn.userText);
+		const visible = turn.sessionId ? state.sessionId === turn.sessionId : state.sessionId === "";
+		if (persisted) {
+			state.turns.delete(turn.key);
+			emit("state");
+		} else {
+			emit("state");
+			if (visible) {
+				if (cancelled) notify("已停止生成");
+				else reportError("本轮", error);
+			}
+		}
 	}
 	return true;
 }

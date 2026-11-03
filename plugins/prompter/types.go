@@ -15,7 +15,9 @@ const (
 	trackStatic  = "static"
 	trackDynamic = "dynamic"
 
-	configPath = "config.json"
+	configPath          = "config.json"
+	defaultMCPTimeoutMS = 30000
+	maxMCPTimeoutMS     = 600000
 )
 
 type promptSection struct {
@@ -31,15 +33,27 @@ type skillEntry struct {
 }
 
 type mcpEntry struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Tools       []string `json:"tools,omitempty"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	Transport   string            `json:"transport,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	TimeoutMS   int               `json:"timeout_ms,omitempty"`
+	Tools       []string          `json:"tools,omitempty"`
 }
 
 type config struct {
-	PromptSections []promptSection `json:"prompt_sections"`
-	Skills         []skillEntry    `json:"skills,omitempty"`
-	MCPServers     []mcpEntry      `json:"mcp_servers,omitempty"`
+	PromptSections     []promptSection `json:"prompt_sections"`
+	SkillsGlobalDir    string          `json:"skills_global_dir,omitempty"`
+	SkillsWorkspaceDir string          `json:"skills_workspace_dir,omitempty"`
+	MCPEnabled         bool            `json:"mcp_enabled,omitempty"`
+	MCPTimeoutMS       int             `json:"mcp_timeout_ms,omitempty"`
+	Skills             []skillEntry    `json:"skills,omitempty"`
+	MCPServers         []mcpEntry      `json:"mcp_servers,omitempty"`
+	SkillsReadable     bool            `json:"-"`
 }
 
 type createPayload struct {
@@ -54,6 +68,7 @@ type streamPayload struct {
 
 type streamPayloadSession struct {
 	SessionID string `json:"session_id,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
 }
 
 type sessionInfo struct {

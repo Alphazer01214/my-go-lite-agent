@@ -1,0 +1,77 @@
+{
+  "name": "sandbox",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "sandbox",
+  "description": "Permission adjudication on tool seams: allow, confirm, modify, deny",
+  "autostart": false,
+  "priority": 500,
+  "provides": ["sandbox"],
+  "consumes": [
+    { "capability": "tool", "method": "call" },
+    { "capability": "file", "method": "write" },
+    { "capability": "file", "method": "edit" },
+    { "capability": "shell", "method": "execute" }
+  ],
+  "requires": ["session", "tool"],
+  "depends_on": ["session", "tools"],
+  "settings": {
+    "get": { "capability": "sandbox", "method": "settings.get" },
+    "save": { "capability": "sandbox", "method": "settings.save" },
+    "schema": [
+      {
+        "key": "default_action",
+        "label": "默认动作",
+        "type": "select",
+        "required": true,
+        "description": "没有命中任何规则时使用的动作。",
+        "options": [
+          { "value": "allow", "label": "allow：直接放行" },
+          { "value": "confirm", "label": "confirm：等待用户确认" },
+          { "value": "deny", "label": "deny：拒绝" }
+        ]
+      },
+      {
+        "key": "confirm_ttl_seconds",
+        "label": "确认超时（秒）",
+        "type": "number",
+        "required": true,
+        "description": "确认请求等待用户决定的时长。范围 30 到 3600。"
+      },
+      {
+        "key": "rules",
+        "label": "规则",
+        "type": "list",
+        "description": "条件之间是合取，至少填一个条件。动作留空按 confirm 处理。",
+        "item_fields": [
+          { "key": "rule_id", "label": "规则 ID（留空自动生成）", "type": "string" },
+          {
+            "key": "action",
+            "label": "动作",
+            "type": "select",
+            "options": [
+              { "value": "confirm", "label": "confirm（等待允许/拒绝）" },
+              { "value": "allow", "label": "allow" },
+              { "value": "deny", "label": "deny" },
+              { "value": "modify", "label": "modify" }
+            ]
+          },
+          { "key": "tool", "label": "工具名", "type": "string" },
+          { "key": "capability", "label": "能力名", "type": "string" },
+          { "key": "method", "label": "方法名", "type": "string" },
+          { "key": "path_glob", "label": "路径通配", "type": "string" },
+          { "key": "command_pattern", "label": "命令模式", "type": "string" },
+          { "key": "priority", "label": "权重", "type": "number" },
+          { "key": "note", "label": "说明", "type": "string" },
+          { "key": "modified_arguments", "label": "改写参数（JSON，仅 modify）", "type": "string" }
+        ]
+      }
+    ]
+  },
+  "ui": {
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "sandbox-confirm", "mount_id": "confirm", "slot": "right" }
+    ]
+  }
+}

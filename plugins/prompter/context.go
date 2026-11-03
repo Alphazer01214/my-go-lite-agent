@@ -11,11 +11,16 @@ import (
 
 func (p *plugin) baselineFacts(workspace, model string) ([]factIn, error) {
 	vars := promptVars(workspace, model)
-	staticText, err := p.cfg.renderStatic(vars)
+	cfg := p.currentConfig()
+	skills, _ := p.skillCatalog(workspace, false)
+	cfg.Skills = skillEntries(skills)
+	cfg.SkillsReadable = p.skillsReadable()
+	cfg.MCPServers = p.runtimeMCPServers(cfg)
+	staticText, err := cfg.renderStatic(vars)
 	if err != nil {
 		return nil, err
 	}
-	runtimeText, err := p.cfg.renderRuntime(vars)
+	runtimeText, err := cfg.renderRuntime(vars)
 	if err != nil {
 		return nil, err
 	}

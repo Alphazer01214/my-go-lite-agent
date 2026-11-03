@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -23,9 +24,9 @@ var dynamicVariables = map[string]bool{
 	"date":      true,
 }
 
-func loadConfig() (config, error) {
+func loadConfig(path string) (config, error) {
 	data := defaultConfigJSON
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
 		data = raw
@@ -35,6 +36,42 @@ func loadConfig() (config, error) {
 	}
 
 	return parseConfig(data)
+}
+
+func saveConfig(path string, cfg config) error {
+	if err := cfg.normalize(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".config-*.json")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func parseConfig(data []byte) (config, error) {
@@ -95,6 +132,15 @@ func (c *config) normalize() error {
 	}
 	c.PromptSections = kept
 
+	c.SkillsGlobalDir = strings.TrimSpace(c.SkillsGlobalDir)
+	c.SkillsWorkspaceDir = strings.TrimSpace(c.SkillsWorkspaceDir)
+	if c.MCPTimeoutMS == 0 {
+		c.MCPTimeoutMS = defaultMCPTimeoutMS
+	}
+	if c.MCPTimeoutMS < 0 || c.MCPTimeoutMS > maxMCPTimeoutMS {
+		return fmt.Errorf("prompt_config_invalid: mcp_timeout_ms must be between 1 and %d", maxMCPTimeoutMS)
+	}
+
 	if err := normalizeSkills(c.Skills); err != nil {
 		return err
 	}
@@ -132,23 +178,69 @@ func normalizeSkills(skills []skillEntry) error {
 func normalizeMCP(servers []mcpEntry) error {
 	seen := make(map[string]bool, len(servers))
 	for i := range servers {
-		servers[i].Name = strings.TrimSpace(servers[i].Name)
-		servers[i].Description = strings.TrimSpace(servers[i].Description)
-		if servers[i].Name == "" {
+		entry := &servers[i]
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Description = strings.TrimSpace(entry.Description)
+		entry.Transport = strings.TrimSpace(entry.Transport)
+		entry.Command = strings.TrimSpace(entry.Command)
+		entry.Cwd = strings.TrimSpace(entry.Cwd)
+		if entry.Name == "" {
 			return fmt.Errorf("prompt_config_invalid: mcp server name is required")
 		}
-		if seen[servers[i].Name] {
-			return fmt.Errorf("prompt_config_invalid: duplicate mcp server %s", servers[i].Name)
+		if seen[entry.Name] {
+			return fmt.Errorf("prompt_config_invalid: duplicate mcp server %s", entry.Name)
 		}
-		seen[servers[i].Name] = true
-		tools := servers[i].Tools[:0]
-		for _, tool := range servers[i].Tools {
+		seen[entry.Name] = true
+		if entry.Enabled == nil {
+			enabled := true
+			entry.Enabled = &enabled
+		}
+		if entry.Transport == "" {
+			entry.Transport = "stdio"
+		}
+		if entry.Transport != "stdio" {
+			return fmt.Errorf("prompt_config_invalid: mcp server %s uses unsupported transport %q", entry.Name, entry.Transport)
+		}
+		if entry.TimeoutMS < 0 || entry.TimeoutMS > maxMCPTimeoutMS {
+			return fmt.Errorf("prompt_config_invalid: mcp server %s timeout_ms is out of range", entry.Name)
+		}
+		if strings.ContainsRune(entry.Command, 0) || strings.ContainsRune(entry.Cwd, 0) {
+			return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in command or cwd", entry.Name)
+		}
+		for _, arg := range entry.Args {
+			if strings.ContainsRune(arg, 0) {
+				return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in args", entry.Name)
+			}
+		}
+		for key, value := range entry.Env {
+			if !validMCPEnvName(key) || strings.ContainsRune(value, 0) {
+				return fmt.Errorf("prompt_config_invalid: mcp server %s has invalid env %q", entry.Name, key)
+			}
+		}
+		tools := entry.Tools[:0]
+		for _, tool := range entry.Tools {
 			tool = strings.TrimSpace(tool)
 			if tool != "" {
 				tools = append(tools, tool)
 			}
 		}
-		servers[i].Tools = tools
+		entry.Tools = tools
 	}
 	return nil
+}
+
+func validMCPEnvName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, char := range value {
+		if char == '_' || char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' {
+			continue
+		}
+		if index > 0 && char >= '0' && char <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }

@@ -1,0 +1,25 @@
+{
+  "name": "subagent",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "subagent",
+  "description": "Delegate a self-contained task to a child agent and return its final answer",
+  "autostart": true,
+  "priority": 0,
+  "provides": ["subagent"],
+  "requires": ["session", "loop"],
+  "depends_on": ["agent"],
+  "settings": {
+    "get": { "capability": "subagent", "method": "settings.get" },
+    "save": { "capability": "subagent", "method": "settings.save" },
+    "schema": [
+      {
+        "key": "max_depth",
+        "label": "最大委派深度",
+        "type": "number",
+        "required": true,
+        "description": "子代理可继续委派的层数。默认 1，即子代理不能再生成子代理。范围 1 到 3。"
+      }
+    ]
+  }
+}

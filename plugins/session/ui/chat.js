@@ -11,10 +11,15 @@ import {
 	stopTurn,
 	currentTurn,
 	isBusy,
+	isSessionRunning,
 	setSelectedModel,
 	clearError,
 	reportError,
 	workspaceLabel,
+	newChat,
+	activateTab,
+	closeTab,
+	tabTitle,
 } from "./store.js";
 
 function shouldRenderTurn(turn, messages) {
@@ -27,6 +32,49 @@ function shouldRenderTurn(turn, messages) {
 		message?.role === "assistant"
 		&& String(message.text || "").trim() === text
 		&& String(message.reasoning || "").trim() === reasoning);
+}
+
+function factMeta(fact) {
+	let meta = fact?.meta;
+	if (typeof meta === "string") {
+		try {
+			meta = JSON.parse(meta);
+		} catch {
+			meta = null;
+		}
+	}
+	return meta && typeof meta === "object" ? meta : {};
+}
+
+function turnEndStatus(fact) {
+	if (fact?.type !== "turn_end") return "";
+	const status = String(factMeta(fact).status || "");
+	return status === "error" || status === "cancelled" ? status : "";
+}
+
+function buildTimeline(messages, facts) {
+	const ends = (Array.isArray(facts) ? facts : [])
+		.filter((fact) => fact?.type === "turn_end")
+		.sort((a, b) => Number(a.seq) - Number(b.seq));
+	const ordered = [...(Array.isArray(messages) ? messages : [])]
+		.sort((a, b) => Number(a.seq) - Number(b.seq));
+	const items = [];
+	let lastUser = "";
+	let endIndex = 0;
+	const flush = (beforeSeq) => {
+		while (endIndex < ends.length && Number(ends[endIndex].seq) < beforeSeq) {
+			const fact = ends[endIndex++];
+			items.push({ kind: "turn_end", fact, status: turnEndStatus(fact), retryText: lastUser });
+			lastUser = "";
+		}
+	};
+	for (const message of ordered) {
+		flush(Number(message.seq));
+		items.push({ kind: "message", message });
+		if (message?.role === "user") lastUser = String(message.text || "");
+	}
+	flush(Infinity);
+	return items;
 }
 
 function messageText(message) {
@@ -58,6 +106,7 @@ export class SessionChat extends HTMLElement {
 		this.draftReasoningText = null;
 		this.reasoningDetails = null;
 		this.draftKey = "";
+		this.lastActiveTabKey = null;
 		this.build();
 	}
 
@@ -121,7 +170,24 @@ export class SessionChat extends HTMLElement {
 		);
 		this.banner = banner;
 
+		this.tabsList = el("div", {
+			class: "tabs-list",
+			attrs: { role: "tablist", "aria-label": "会话标签" },
+		});
+		this.tabsAdd = el("button", {
+			class: "tab-add",
+			type: "button",
+			title: "新建会话",
+			attrs: { "aria-label": "新建会话" },
+			onclick: () => newChat(),
+		}, icon("plus", 14));
+		this.tabsBar = el("div", { class: "tabs-bar", hidden: true },
+			this.tabsList,
+			this.tabsAdd,
+		);
+
 		const root = el("div", { class: "chat" },
+			this.tabsBar,
 			el("div", { class: "head" },
 				el("div", { class: "head-main" }, this.headTitle, this.headMeta),
 			),
@@ -193,11 +259,61 @@ export class SessionChat extends HTMLElement {
 			this.bannerText.textContent = "";
 		}
 
+		this.renderTabs();
 		this.renderMessages();
 		this.renderModels();
 		this.updateButtons();
 		if (keyChanged || this.pinned) this.scrollToBottom();
 		else this.updateJump();
+	}
+
+	renderTabs() {
+		const tabs = Array.isArray(state.tabs) ? state.tabs : [];
+		this.tabsBar.hidden = tabs.length === 0;
+		if (tabs.length === 0) {
+			this.tabsList.replaceChildren();
+			this.lastActiveTabKey = null;
+			return;
+		}
+		const activeKey = state.sessionId || "";
+		this.tabsList.replaceChildren(...tabs.map((key) => this.buildTab(key, activeKey)));
+		if (this.lastActiveTabKey !== activeKey) {
+			this.lastActiveTabKey = activeKey;
+			const active = [...this.tabsList.querySelectorAll(".session-tab")]
+				.find((tab) => tab.dataset.tabKey === activeKey);
+			active?.querySelector(".tab-select")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+		}
+	}
+
+	buildTab(key, activeKey) {
+		const active = key === activeKey;
+		const running = key ? isSessionRunning(key) : state.sessionId === "" && isBusy();
+		const title = tabTitle(key);
+		const select = el("button", {
+			class: "tab-select",
+			type: "button",
+			title,
+			attrs: { role: "tab", "aria-selected": String(active), "aria-label": title },
+			onclick: () => activateTab(key),
+		},
+			el("span", { class: "tab-label", text: title }),
+			running ? el("span", { class: "tab-running", attrs: { "aria-hidden": "true" } }) : null,
+		);
+		const close = el("button", {
+			class: "tab-close",
+			type: "button",
+			title: running ? "生成中不可关闭" : "关闭标签",
+			attrs: { "aria-label": running ? `${title} 生成中，不能关闭` : `关闭 ${title}` },
+			disabled: running,
+			onclick: (event) => {
+				event.stopPropagation();
+				closeTab(key);
+			},
+		}, icon("x", 12));
+		return el("div", {
+			class: `session-tab${active ? " active" : ""}${running ? " running" : ""}`,
+			dataset: { tabKey: key },
+		}, select, close);
 	}
 
 	renderModels() {
@@ -235,10 +351,25 @@ export class SessionChat extends HTMLElement {
 			return;
 		}
 
-		for (const message of messages) {
-			this.appendMessage(message);
+		const items = buildTimeline(messages, state.facts);
+		let suppressEndSeq = null;
+		if (turn && turn.sessionId === state.sessionId && (turn.status === "error" || turn.status === "stopped")) {
+			const terminalItems = items.filter((item) => item.kind === "turn_end" && item.status);
+			const latest = terminalItems[terminalItems.length - 1];
+			const lastUserSeq = [...messages].reverse().find((message) => message?.role === "user")?.seq;
+			if (latest && turn.userPersisted
+				&& (lastUserSeq === undefined || Number(latest.fact.seq) > Number(lastUserSeq))) {
+				suppressEndSeq = Number(latest.fact.seq);
+			}
 		}
-		if (turn && !turn.userPersisted) {
+		for (const item of items) {
+			if (item.kind === "message") this.appendMessage(item.message);
+			else if (item.status && Number(item.fact.seq) !== suppressEndSeq) this.appendTurnStatus(item);
+		}
+		const userPersisted = Boolean(turn && (turn.userPersisted
+			|| messages.some((message) =>
+				message?.role === "user" && String(message.text || "") === String(turn.userText || ""))));
+		if (turn && !userPersisted) {
 			this.appendUserRow(turn.userText);
 		}
 		if (turn && shouldRenderTurn(turn, messages)) {
@@ -291,6 +422,48 @@ export class SessionChat extends HTMLElement {
 		));
 	}
 
+	appendTurnStatus(item) {
+		const meta = factMeta(item.fact);
+		const cancelled = item.status === "cancelled";
+		const error = String(meta.error || "").trim();
+		const title = cancelled ? "本轮已取消" : "本轮执行失败";
+		const note = cancelled ? "已保留部分输出" : "";
+		const details = !cancelled && error
+			? el("details", { class: "turn-details" },
+				el("summary", { text: "查看详情" }),
+				el("div", { class: "turn-error-text", text: error }),
+			)
+			: null;
+		const retryText = String(item.retryText || "");
+		const actions = cancelled ? null : el("div", { class: "turn-status-actions" },
+			el("button", {
+				class: "turn-retry",
+				type: "button",
+				disabled: isBusy() || !retryText,
+				title: retryText ? "重试本轮" : "缺少原始输入",
+				onclick: () => {
+					if (!retryText || isBusy()) return;
+					this.pinned = true;
+					this.scrollToBottom();
+					sendTurn(retryText, state.meta?.model || "");
+				},
+			}, "重试"),
+		);
+		this.column.append(el("div", {
+			class: `turn-status ${cancelled ? "cancelled" : "error"}`,
+			attrs: { role: cancelled ? "status" : "alert" },
+		},
+			el("span", { class: "turn-status-mark", attrs: { "aria-hidden": "true" } },
+				cancelled ? icon("stop", 12) : "!"),
+			el("div", { class: "turn-status-main" },
+				el("div", { class: "turn-status-title", text: title }),
+				note ? el("div", { class: "turn-status-note", text: note }) : null,
+				details,
+				actions,
+			),
+		));
+	}
+
 	appendDraft(turn) {
 		const body = el("div", { class: "body" });
 		const hasReasoning = Boolean(turn.assistantReasoning);
@@ -315,10 +488,10 @@ export class SessionChat extends HTMLElement {
 			: turn.status === "stopping"
 				? "正在停止…"
 				: turn.status === "stopped"
-					? "已停止 · 本轮内容未保存"
+					? "已停止"
 					: turn.status === "done"
 						? "已完成"
-						: turn.error || "本轮失败";
+						: "本轮失败";
 		this.column.append(el("div", { class: `msg assistant draft ${turn.status}` },
 			body,
 			el("div", { class: "draft-status", text: status }),
