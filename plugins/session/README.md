@@ -23,7 +23,7 @@ Session Chat 的模型下拉框只用于新会话。
 
 ## 运行期元数据
 
-Turn 运行期间，Session Chat 每 2 秒调用一次 `session.info`。
+Turn 运行期间，Session Chat 每 2 秒调用 `session.info` 和 `session.list`。
 标题、消息数和 Facts 总数随落库进度更新，不重新加载完整消息和 Facts。
 Turn 结束后仍由 `refreshCurrent()` 加载完整正文和 Facts 列表。
 
@@ -34,6 +34,12 @@ Session Chat 顶部显示已打开会话的选项卡。
 标签状态按工作区保存在 `sessionStorage`。
 刷新后恢复标签和当前标签。
 关闭标签不删除会话；运行中的标签不可关闭。
+
+## Subagent 会话
+
+Session History 默认显示 `origin=subagent` 的子会话，并用“子代理”标记区分。
+子会话可以单独打开，查看自己的消息和 Facts。
+父会话的 `subagent_spawned` / `subagent_finished` Facts 仍保留 `child_session_id`，可追踪派发关系。
 
 ## 回合终态
 

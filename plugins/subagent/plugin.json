@@ -21,5 +21,11 @@
         "description": "子代理可继续委派的层数。默认 1，即子代理不能再生成子代理。范围 1 到 3。"
       }
     ]
+  },
+  "ui": {
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "subagent", "mount_id": "subagent", "slot": "bottom" }
+    ]
   }
 }

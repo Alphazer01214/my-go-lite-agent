@@ -275,6 +275,15 @@ export class SessionHistory extends HTMLElement {
 		row.append(
 			el("div", { class: "row-main" },
 				running ? el("span", { class: "running-dot", title: "正在生成" }) : null,
+				session.origin === "subagent"
+					? el("span", {
+						class: "origin-badge",
+						text: "子代理",
+						title: session.parent_session_id
+							? `父会话：${session.parent_session_id}`
+							: "Subagent session",
+					})
+					: null,
 				el("span", { class: "row-title", text: sessionTitle(session), title: sessionTitle(session) }),
 			),
 			el("div", { class: "row-meta", text: sessionMeta(session) }),

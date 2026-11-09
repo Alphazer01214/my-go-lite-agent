@@ -33,6 +33,7 @@ Tools 依赖 Provider 先启动，避免目录在 Provider 就绪前被固定为
 
 `config.json` 的 `capabilities` 决定拉取哪些 Provider，当前为 `["file", "shell", "python", "skill", "mcp", "subagent"]`。
 构建只在文件缺失时从 `config.example.json` 落种子；已有的 `config.json` 不会被覆盖。
+旧版仅含 `file` 的默认配置会在加载时迁移到当前模板，避免历史运行配置隐藏新 Provider。
 
 ## 调用结果
 

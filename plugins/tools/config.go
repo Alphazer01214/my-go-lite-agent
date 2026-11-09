@@ -1,11 +1,15 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 )
+
+//go:embed config.example.json
+var configExample []byte
 
 func loadConfig(path string) (config, []diagnostic, error) {
 	cfg := defaultConfig()
@@ -28,7 +32,28 @@ func loadConfig(path string) (config, []diagnostic, error) {
 			Message: err.Error(),
 		}}, err
 	}
+	migrateLegacyConfig(&cfg)
 	return cfg, cfg.normalize(), nil
+}
+
+// migrateLegacyConfig upgrades the original shipped default where tools only
+// discovered file-tools. Runtime config is preserved across builds, so that
+// exact historical default otherwise keeps newly shipped providers hidden.
+func migrateLegacyConfig(cfg *config) {
+	if len(cfg.Capabilities) != 1 || cfg.Capabilities[0] != "file" {
+		return
+	}
+	if cfg.RefreshTTLMS != defaultRefreshTTLMS {
+		return
+	}
+	if cfg.InfoTimeoutMS != defaultInfoTimeoutMS {
+		return
+	}
+	var current config
+	if err := json.Unmarshal(configExample, &current); err != nil {
+		return
+	}
+	*cfg = current
 }
 
 func (c *config) normalize() []diagnostic {

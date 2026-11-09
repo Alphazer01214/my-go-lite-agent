@@ -53,6 +53,12 @@ type wireFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
+type usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type chatChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -73,6 +79,8 @@ type chatChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+
+	Usage usage `json:"usage,omitempty"`
 }
 
 type toolCallAccumulator struct {

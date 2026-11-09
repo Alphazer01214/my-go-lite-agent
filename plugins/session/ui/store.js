@@ -256,15 +256,25 @@ export async function refreshSessions() {
 	state.loading.sessions = true;
 	emit("state");
 	try {
-		const payload = await call("session", "list", state.workspace ? { workspace: state.workspace } : {});
-		state.sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
-		await pruneTabs();
+		await syncSessions();
 	} catch (error) {
 		reportError("会话列表", error);
 	} finally {
 		state.loading.sessions = false;
 		emit("state");
 	}
+}
+
+async function syncSessions() {
+	const payload = await call("session", "list", sessionListRequest(state.workspace));
+	state.sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+	await pruneTabs();
+}
+
+export function sessionListRequest(workspace) {
+	const payload = { include_subagents: true };
+	if (workspace) payload.workspace = workspace;
+	return payload;
 }
 
 async function pruneTabs() {
@@ -681,6 +691,12 @@ async function pollRunningTurns() {
 			}
 		}
 	} finally {
+		try {
+			await syncSessions();
+			changed = true;
+		} catch {
+			// A transient list failure must not interrupt turn progress polling.
+		}
 		turnPollBusy = false;
 		if (changed) emit("progress");
 		stopTurnPollIfIdle();

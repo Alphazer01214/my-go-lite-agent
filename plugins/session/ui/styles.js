@@ -167,6 +167,15 @@ export const HISTORY_CSS = `${BASE}
 	animation: sx-pulse 1.2s ease-in-out infinite;
 	flex: none;
 }
+.origin-badge {
+	flex: none;
+	padding: 1px 5px;
+	border: 1px solid var(--sx-accent);
+	border-radius: 999px;
+	color: var(--sx-accent-strong);
+	font-size: 10px;
+	line-height: 1.2;
+}
 @keyframes sx-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 .actions {
 	position: absolute;
