@@ -90,8 +90,8 @@ func (p *plugin) info(ctx context.Context, req *infoReq) (*infoResp, error) {
 	if err != nil {
 		return nil, err
 	}
-	meta, factCnt, nextSeq, _ := st.snapshot()
-	return &infoResp{Meta: meta, FactCnt: factCnt, NextSeq: nextSeq}, nil
+	meta, factCnt, messageCnt, nextSeq, _ := st.snapshot()
+	return &infoResp{Meta: meta, FactCnt: factCnt, MessageCnt: messageCnt, NextSeq: nextSeq}, nil
 }
 
 func validateFacts(facts []factIn) error {
@@ -251,9 +251,10 @@ func (p *plugin) listSessions(ctx context.Context, req *listReq) (*listResp, err
 		}
 		summary := sessionSummary{Meta: meta}
 		if st := p.reg[id]; st != nil {
-			current, factCnt, nextSeq, lastTs := st.snapshot()
+			current, factCnt, messageCnt, nextSeq, lastTs := st.snapshot()
 			summary.Meta = current
 			summary.FactCnt = factCnt
+			summary.MessageCnt = messageCnt
 			summary.NextSeq = nextSeq
 			summary.LastTs = lastTs
 		}

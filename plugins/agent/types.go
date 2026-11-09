@@ -133,6 +133,7 @@ type turnEndMeta struct {
 	TurnId     string `json:"turn_id"`
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
 }
 

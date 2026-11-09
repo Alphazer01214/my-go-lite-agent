@@ -266,7 +266,13 @@ async function parseManagementResponse(response) {
 
 async function applyBootstrap(payload, { loadMounts = true, resync = false } = {}) {
 	const plugins = Array.isArray(payload?.plugins) ? payload.plugins : [];
-	currentMounts = Array.isArray(payload?.mounts) ? payload.mounts : [];
+	const unavailable = new Set(
+		plugins
+			.filter((plugin) => ["inactive", "failed", "stopping"].includes(plugin?.state))
+			.map((plugin) => plugin.name),
+	);
+	currentMounts = (Array.isArray(payload?.mounts) ? payload.mounts : [])
+		.filter((mount) => !unavailable.has(mount?.mount?.plugin ?? mount?.plugin));
 	renderPluginCenter(plugins);
 	if (loadMounts && mountLoader) {
 		if (resync) await mountLoader.resync(currentMounts);

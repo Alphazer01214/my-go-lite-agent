@@ -35,6 +35,12 @@ func (p *plugin) execute(ctx context.Context, req *providerRequest, in *executeA
 		return toolResult{}, err
 	}
 	command = resolveCommand(command, cwd)
+	if strings.ContainsAny(command, " \t") {
+		if _, err := os.Stat(command); err != nil {
+			return toolResult{}, badArguments(
+				"command must be one executable; pass arguments in args[] (got %q)", in.Command)
+		}
+	}
 
 	env, err := mergedEnv(in.Env)
 	if err != nil {

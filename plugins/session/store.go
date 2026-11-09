@@ -16,12 +16,13 @@ type store struct {
 	id   string
 	path string
 
-	mu      sync.Mutex
-	f       *os.File
-	meta    Meta
-	factCnt int
-	nextSeq int
-	lastTS  int64
+	mu         sync.Mutex
+	f          *os.File
+	meta       Meta
+	factCnt    int
+	messageCnt int
+	nextSeq    int
+	lastTS     int64
 }
 
 // createStore 新建日志并写入首行 meta。文件已存在时返回 os.IsExist 可识别的错误。
@@ -107,6 +108,9 @@ func (s *store) recover() error {
 			continue
 		}
 		s.factCnt++
+		if isMessageFact(fact) {
+			s.messageCnt++
+		}
 		if fact.Seq >= s.nextSeq {
 			s.nextSeq = fact.Seq + 1
 		}
@@ -136,6 +140,11 @@ func decodeFact(line string) (Fact, error) {
 	return rec.Fact, nil
 }
 
+// isMessageFact matches the rows session.messages projects into chat messages.
+func isMessageFact(fact Fact) bool {
+	return fact.Type == TypeMessage && fact.Role != ""
+}
+
 // isMetaLine 按 kind 判断记录类型；缺少 kind 时用 seq 是否存在兜底。
 func isMetaLine(line string) (bool, error) {
 	var head struct {
@@ -159,6 +168,7 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 	batchTS := time.Now().UnixMilli()
 	first := s.nextSeq
 	lastTS := s.lastTS
+	addedMessages := 0
 	seqs := make([]int, 0, len(ins))
 	var b strings.Builder
 	for i, in := range ins {
@@ -185,6 +195,9 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 		b.Write(line)
 		b.WriteByte('\n')
 		seqs = append(seqs, f.Seq)
+		if isMessageFact(f) {
+			addedMessages++
+		}
 		if ts > lastTS {
 			lastTS = ts
 		}
@@ -202,6 +215,7 @@ func (s *store) appendBatch(ins []factIn) ([]int, int, error) {
 
 	s.nextSeq = first + len(seqs)
 	s.factCnt += len(seqs)
+	s.messageCnt += addedMessages
 	s.lastTS = lastTS
 	return seqs, s.nextSeq, nil
 }
@@ -271,10 +285,10 @@ func (s *store) readFacts() ([]Fact, int, error) {
 }
 
 // snapshot 返回当前 meta 与计数快照。
-func (s *store) snapshot() (Meta, int, int, int64) {
+func (s *store) snapshot() (Meta, int, int, int, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.meta, s.factCnt, s.nextSeq, s.lastTS
+	return s.meta, s.factCnt, s.messageCnt, s.nextSeq, s.lastTS
 }
 
 func (s *store) close() {

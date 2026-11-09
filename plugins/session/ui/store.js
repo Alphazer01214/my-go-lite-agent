@@ -17,6 +17,7 @@ export const state = {
 	tabs: [],
 	meta: null,
 	messages: [],
+	messageCount: 0,
 	facts: [],
 	factsTotal: 0,
 	factsFilter: "all",
@@ -51,8 +52,35 @@ function errorMessage(error) {
 	return error instanceof Error ? error.message : String(error ?? "未知错误");
 }
 
+const ERROR_MESSAGES = {
+	llm_upstream_error: "模型服务请求失败，请检查模型端点或网络",
+	llm_timeout: "模型响应超时，请重试或换用更快的模型",
+	llm_output_limit_exceeded: "模型输出超过上限，请缩小任务后重试",
+	call_deadline_exceeded: "操作超时，请重试",
+	turn_busy: "该会话已有一轮正在运行",
+	max_steps_exceeded: "达到最大步数限制，请缩小任务后重试",
+	tool_call_invalid: "模型工具调用格式无效",
+	plugin_down: "所需插件未运行，请在插件面板检查",
+	plugin_not_mounted: "所需插件未挂载",
+	method_not_found: "插件能力不可用",
+	bad_arguments: "请求参数无效",
+	bad_payload: "请求内容无效",
+	handler_error: "执行失败",
+};
+
+export function errorCode(error) {
+	return String(error?.code || error?.response?.error_code || "");
+}
+
+export function friendlyErrorMessage(code, fallback = "执行失败") {
+	return ERROR_MESSAGES[String(code || "")] || fallback;
+}
+
 export function reportError(scope, error) {
-	state.error = `${scope}：${errorMessage(error)}`;
+	const code = errorCode(error);
+	const detail = errorMessage(error);
+	const text = code && ERROR_MESSAGES[code] ? `${friendlyErrorMessage(code)}（${code}）` : detail;
+	state.error = `${scope}：${text}`;
 	emit("error", { scope, error });
 	emit("state");
 }
@@ -152,6 +180,7 @@ function resetCurrent() {
 	state.sessionId = "";
 	state.meta = null;
 	state.messages = [];
+	state.messageCount = 0;
 	state.facts = [];
 	state.factsTotal = 0;
 	state.selectedModel = state.defaultModel;
@@ -348,6 +377,7 @@ export async function selectSession(id) {
 	state.meta = findSession(sessionId);
 	state.selectedModel = state.meta?.model || state.defaultModel;
 	state.messages = [];
+	state.messageCount = 0;
 	state.facts = [];
 	state.factsTotal = 0;
 	state.error = "";
@@ -380,6 +410,9 @@ async function loadMeta(id, seq) {
 		const info = await call("session", "info", { session_id: id });
 		if (seq !== selectionSeq) return;
 		state.meta = info;
+		if (info?.message_count !== undefined) {
+			state.messageCount = Number(info.message_count) || 0;
+		}
 		state.selectedModel = info.model || state.selectedModel || state.defaultModel;
 		emit("state");
 	} catch (error) {
@@ -394,6 +427,7 @@ async function loadMessages(id, seq = selectionSeq) {
 		const payload = await call("session", "messages", { session_id: id });
 		if (seq !== selectionSeq) return;
 		state.messages = Array.isArray(payload?.messages) ? payload.messages : [];
+		state.messageCount = state.messages.length;
 	} catch (error) {
 		if (seq === selectionSeq) reportError("消息", error);
 	} finally {
@@ -586,6 +620,73 @@ function terminalTurnEnd() {
 	return latest;
 }
 
+let turnPollTimer = 0;
+let turnPollBusy = false;
+
+function runningTurns() {
+	return [...state.turns.values()].filter((turn) =>
+		turn.sessionId && (turn.status === "streaming" || turn.status === "stopping"));
+}
+
+function startTurnPoll() {
+	if (turnPollTimer) return;
+	turnPollTimer = setInterval(pollRunningTurns, 2000);
+}
+
+function stopTurnPollIfIdle() {
+	if (runningTurns().length > 0) return;
+	if (!turnPollTimer) return;
+	clearInterval(turnPollTimer);
+	turnPollTimer = 0;
+}
+
+async function pollRunningTurns() {
+	if (turnPollBusy) return;
+	const running = runningTurns();
+	if (running.length === 0) {
+		stopTurnPollIfIdle();
+		return;
+	}
+	turnPollBusy = true;
+	let changed = false;
+	try {
+		for (const turn of running) {
+			const id = turn.sessionId;
+			let info = null;
+			try {
+				info = await call("session", "info", { session_id: id });
+			} catch {
+				continue;
+			}
+			if (!info || typeof info !== "object") continue;
+			const factCount = Number(info.fact_count) || 0;
+			const messageCount = Number(info.message_count) || 0;
+			const session = findSession(id);
+			if (session && (Number(session.fact_count) || 0) !== factCount) {
+				session.fact_count = factCount;
+				changed = true;
+			}
+			if (session && (Number(session.message_count) || 0) !== messageCount) {
+				session.message_count = messageCount;
+				changed = true;
+			}
+			if (state.sessionId !== id) continue;
+			if (state.meta?.title !== info.title
+				|| state.factsTotal !== factCount
+				|| state.messageCount !== messageCount) {
+				state.meta = { ...(state.meta || {}), ...info };
+				state.factsTotal = factCount;
+				state.messageCount = messageCount;
+				changed = true;
+			}
+		}
+	} finally {
+		turnPollBusy = false;
+		if (changed) emit("progress");
+		stopTurnPollIfIdle();
+	}
+}
+
 export async function sendTurn(text, model = "") {
 	const input = String(text || "").trim();
 	if (!input || !canSend()) return false;
@@ -610,9 +711,12 @@ export async function sendTurn(text, model = "") {
 		assistantReasoning: "",
 		status: "streaming",
 		error: "",
+		errorCode: "",
+		startedAt: Date.now(),
 		userPersisted: false,
 	};
 	state.turns.set(key, turn);
+	startTurnPoll();
 	emit("state");
 
 	try {
@@ -626,6 +730,7 @@ export async function sendTurn(text, model = "") {
 					adopt(turn, String(payload.session_id));
 					emit("state");
 					refreshSessions();
+					pollRunningTurns();
 					return;
 				}
 				if (event?.method !== "chunk") return;
@@ -666,11 +771,13 @@ export async function sendTurn(text, model = "") {
 		await refreshSessions();
 		if (resultId && state.sessionId === resultId) await refreshCurrent();
 		state.turns.delete(turn.key);
+		stopTurnPollIfIdle();
 		emit("state");
 	} catch (error) {
 		const cancelled = error?.code === "call_cancelled" || turn.status === "stopping";
 		turn.status = cancelled ? "stopped" : "error";
 		turn.error = cancelled ? "" : errorMessage(error);
+		turn.errorCode = cancelled ? "" : errorCode(error);
 		emit("state");
 		await refreshSessions();
 		if (turn.sessionId && state.sessionId === turn.sessionId) {
@@ -689,13 +796,12 @@ export async function sendTurn(text, model = "") {
 		const visible = turn.sessionId ? state.sessionId === turn.sessionId : state.sessionId === "";
 		if (persisted) {
 			state.turns.delete(turn.key);
+			stopTurnPollIfIdle();
 			emit("state");
 		} else {
+			stopTurnPollIfIdle();
 			emit("state");
-			if (visible) {
-				if (cancelled) notify("已停止生成");
-				else reportError("本轮", error);
-			}
+			if (visible && cancelled) notify("已停止生成");
 		}
 	}
 	return true;

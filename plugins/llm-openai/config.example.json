@@ -6,6 +6,7 @@
       "context_window": 65536,
       "base_url": "https://api.deepseek.com/v1",
       "api_key": "",
+      "max_tokens": 0,
       "capabilities": {
         "vision": false
       }
@@ -16,10 +17,14 @@
       "context_window": 128000,
       "base_url": "https://api.openai.com/v1",
       "api_key": "",
+      "max_tokens": 0,
       "capabilities": {
         "vision": true
       }
     }
   ],
-  "default_model": "deepseek-chat"
+  "default_model": "deepseek-chat",
+  "request_timeout_ms": 900000,
+  "stream_idle_timeout_ms": 120000,
+  "max_response_bytes": 4194304
 }

@@ -29,6 +29,13 @@
             "description": "OpenAI-compatible 端点，例如 https://api.deepseek.com/v1。"
           },
           { "key": "api_key", "label": "API Key", "type": "secret" },
+          {
+            "key": "max_tokens",
+            "label": "最大输出 tokens",
+            "type": "number",
+            "min": 0,
+            "description": "0 表示不下发 max_tokens；仅在端点支持该字段时设置。"
+          },
           { "key": "vision", "label": "图像输入", "type": "boolean" }
         ]
       },
@@ -41,6 +48,24 @@
         "option_value": "id",
         "option_label": "label",
         "description": "新会话默认使用该模型；已有会话保持创建时的选择。"
+      },
+      {
+        "key": "request_timeout_ms",
+        "label": "请求总超时 (ms)",
+        "type": "number",
+        "description": "单次 LLM 请求的总时限，默认 900000（15 分钟）。"
+      },
+      {
+        "key": "stream_idle_timeout_ms",
+        "label": "流空闲超时 (ms)",
+        "type": "number",
+        "description": "连续多久没有收到 chunk 就中断，默认 120000（2 分钟）。"
+      },
+      {
+        "key": "max_response_bytes",
+        "label": "单次响应上限 (bytes)",
+        "type": "number",
+        "description": "单次流式响应最多读取的字节数，默认 4194304（4 MiB）。"
       }
     ]
   },

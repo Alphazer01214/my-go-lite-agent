@@ -96,6 +96,7 @@ export class SessionHistory extends HTMLElement {
 
 	connectedCallback() {
 		this.off.push(on("state", () => this.render()));
+		this.off.push(on("progress", () => this.renderList()));
 		init();
 		this.render();
 	}

@@ -32,6 +32,8 @@ type Server struct {
 	connections   map[*uiConnection]struct{}
 	logger        func(string, ...any)
 	diagnostics   []plugin.Diagnostic
+	discovery     []plugin.Diagnostic
+	runtime       []plugin.Diagnostic
 	sequence      atomic.Uint64
 	connectionSeq atomic.Uint64
 }
@@ -43,13 +45,30 @@ func NewServer(registry *Registry, backend CallBackend) *Server {
 		registry, _ = NewRegistry(plugin.Discoveries{})
 	}
 	bootstrap := registry.Bootstrap()
+	diagnostics := append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...)
 	return &Server{
 		registry:      registry,
 		backend:       backend,
 		pickDirectory: pickDirectoryNative,
 		connections:   make(map[*uiConnection]struct{}),
-		diagnostics:   append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...),
+		diagnostics:   diagnostics,
+		discovery:     diagnostics,
 	}
+}
+
+// combineDiagnostics keeps discovery diagnostics separate from runtime failures.
+// A rescan replaces discovery diagnostics but must not erase errors emitted by
+// long-lived plugin calls.
+func combineDiagnostics(discovery, runtime []plugin.Diagnostic) []plugin.Diagnostic {
+	total := len(discovery) + len(runtime)
+	start := 0
+	if total > maxDiagnostics {
+		start = total - maxDiagnostics
+	}
+	combined := make([]plugin.Diagnostic, 0, total-start)
+	combined = append(combined, discovery...)
+	combined = append(combined, runtime...)
+	return combined[start:]
 }
 
 // SetLogFunc sets the optional connection/diagnostic logger.

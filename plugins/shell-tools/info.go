@@ -8,8 +8,8 @@ import (
 var executeParameters = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "command": {"type": "string", "minLength": 1, "description": "Executable name or path. No shell parsing: pipes, redirection, && and shell built-ins are not interpreted."},
-    "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments passed to the executable verbatim."},
+    "command": {"type": "string", "minLength": 1, "description": "One executable name or path only. Do NOT put arguments, flags, quotes or shell syntax here; pass each argument as a separate args[] item. For example use {\"command\":\"python\",\"args\":[\"-c\",\"print(1)\"]}, not {\"command\":\"python -c print(1)\"}."},
+    "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments passed to the executable verbatim, one array item per argument."},
     "cwd": {"type": "string", "default": ".", "description": "Working directory. Relative paths are resolved against the workspace."},
     "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Environment variable overrides for this process."},
     "stdin": {"type": "string", "description": "Text written to the process stdin. Maximum 1048576 bytes."},
@@ -25,7 +25,9 @@ func (p *plugin) toolInfo() infoResponse {
 	if runtime.GOOS == "windows" {
 		hint = "call cmd.exe /c or powershell.exe -Command explicitly when shell syntax is needed."
 	}
-	description := "Execute one executable process and return exit code, stdout, stderr, duration and truncation metadata. " +
+	description := "Execute exactly one executable process and return exit code, stdout, stderr, duration and truncation metadata. " +
+		"`command` must contain only the executable name or path; never include arguments or flags in it. " +
+		"Pass every argument as a separate item in `args` (for example command=\"python\", args=[\"-c\",\"print(1)\"]). " +
 		"No shell parsing is performed: pipes, redirection, && and shell built-ins are not interpreted; " +
 		hint + " " +
 		"Platform: " + runtime.GOOS + ". " +

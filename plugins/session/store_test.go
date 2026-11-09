@@ -61,14 +61,21 @@ func TestCreateAppendRecover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("info: %v", err)
 	}
-	if info.FactCnt != 3 || info.NextSeq != 4 {
-		t.Fatalf("info = count %d next %d, want 3/4", info.FactCnt, info.NextSeq)
+	if info.FactCnt != 3 || info.MessageCnt != 2 || info.NextSeq != 4 {
+		t.Fatalf("info = count %d messages %d next %d, want 3/2/4", info.FactCnt, info.MessageCnt, info.NextSeq)
 	}
 	if info.Title != "demo" || info.Workspace != canonical {
 		t.Fatalf("info meta = %+v", info.Meta)
 	}
 	if info.Model != "model-a" {
 		t.Fatalf("info model = %q, want model-a", info.Model)
+	}
+	list, err := p.listSessions(ctx, &listReq{Workspace: canonical})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(list.Sessions) != 1 || list.Sessions[0].MessageCnt != 2 {
+		t.Fatalf("list message count = %+v, want 2", list.Sessions)
 	}
 
 	page, err := p.facts(ctx, &factsReq{SessionId: meta.SessionId, AfterSeq: 2, Types: []string{"message"}})
@@ -104,8 +111,8 @@ func TestCreateAppendRecover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("info after reopen: %v", err)
 	}
-	if info.FactCnt != 3 || info.NextSeq != 4 {
-		t.Fatalf("info after reopen = count %d next %d, want 3/4", info.FactCnt, info.NextSeq)
+	if info.FactCnt != 3 || info.MessageCnt != 2 || info.NextSeq != 4 {
+		t.Fatalf("info after reopen = count %d messages %d next %d, want 3/2/4", info.FactCnt, info.MessageCnt, info.NextSeq)
 	}
 	if info.Title != "demo" {
 		t.Fatalf("title after reopen = %q", info.Title)

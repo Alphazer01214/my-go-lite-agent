@@ -74,8 +74,9 @@ type infoReq struct {
 type infoResp struct {
 	Meta
 	//Facts   []Fact `json:"facts"`
-	FactCnt int `json:"fact_count"`
-	NextSeq int `json:"next_seq"`
+	FactCnt    int `json:"fact_count"`
+	MessageCnt int `json:"message_count"`
+	NextSeq    int `json:"next_seq"`
 }
 
 type messageResp struct {
@@ -197,7 +198,8 @@ type listResp struct {
 
 type sessionSummary struct {
 	Meta
-	FactCnt int   `json:"fact_count"`
-	NextSeq int   `json:"next_seq"`
-	LastTs  int64 `json:"last_ts"`
+	FactCnt    int   `json:"fact_count"`
+	MessageCnt int   `json:"message_count"`
+	NextSeq    int   `json:"next_seq"`
+	LastTs     int64 `json:"last_ts"`
 }

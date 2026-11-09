@@ -15,6 +15,7 @@ Agent 通过 `tool.call` 执行该工具，Tools 根据 `shell.info` 把 `shell_
 
 ## 行为
 
+- `command` 只能是一个可执行文件名或路径，不能包含参数、flag 或 shell 语法；每个参数作为独立的 `args[]` 项传入。
 - `command` 与 `args` 直接交给 `exec.Command`，不解析管道、重定向、`&&` 或 shell 内建命令。
 - 需要 shell 语法时显式调用解释器，例如 `cmd.exe /c`、`powershell.exe -Command`、`bash -lc`。工具层不拦截解释器，权限裁决留给 sandbox。
 - `cwd` 默认 `.`，相对路径以 workspace 为基准；工具层不检查路径越界。

@@ -5,16 +5,58 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
 )
 
-const codeLLMUpstreamError = "llm_upstream_error"
+const (
+	codeLLMUpstreamError = "llm_upstream_error"
+	codeLLMTimeout       = "llm_timeout"
+	codeLLMOutputLimit   = "llm_output_limit_exceeded"
+)
+
+var errResponseTooLarge = errors.New("llm response exceeds max_response_bytes")
+
+type idleReader struct {
+	reader io.Reader
+	touch  func()
+}
+
+func (r idleReader) Read(p []byte) (int, error) {
+	r.touch()
+	return r.reader.Read(p)
+}
+
+type cappedReader struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func (r *cappedReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		var probe [1]byte
+		n, err := r.reader.Read(probe[:])
+		if n > 0 {
+			return 0, errResponseTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.reader.Read(p)
+	r.remaining -= int64(n)
+	return n, err
+}
 
 func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamReq) (*streamResp, error) {
 	if len(in.Messages) == 0 {
@@ -26,13 +68,27 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 		return nil, err
 	}
 
-	body, err := json.Marshal(buildChatRequest(model.ID, in.Messages, in.Tools))
+	body, err := json.Marshal(buildChatRequest(model.ID, in.Messages, in.Tools, model.MaxTokens))
 	if err != nil {
 		return nil, err
 	}
 
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+	totalCtx, totalCancel := context.WithTimeout(streamCtx, cfg.requestTimeout())
+	defer totalCancel()
+
+	var idleExpired atomic.Bool
+	idleTimeout := cfg.streamIdleTimeout()
+	idleTimer := time.AfterFunc(idleTimeout, func() {
+		idleExpired.Store(true)
+		streamCancel()
+	})
+	defer idleTimer.Stop()
+	touch := func() { idleTimer.Reset(idleTimeout) }
+
 	url := strings.TrimRight(model.BaseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(totalCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -44,18 +100,25 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, p.streamFailure(ctx, totalCtx, &idleExpired, url, err, idleTimeout)
 	}
 	defer resp.Body.Close()
+	touch()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if trimmed := strings.TrimSpace(string(detail)); trimmed != "" {
+			fmt.Fprintf(os.Stderr, "llm-openai: upstream %d: %s\n", resp.StatusCode, trimmed)
+		}
 		return nil, pluginsdk.ErrCode(codeLLMUpstreamError,
-			fmt.Sprintf("llm upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(detail))))
+			fmt.Sprintf("model endpoint returned HTTP %d", resp.StatusCode))
 	}
 
+	reader := io.Reader(idleReader{reader: resp.Body, touch: touch})
+	reader = &cappedReader{reader: reader, remaining: cfg.maxResponseBytes()}
+
 	var text, reasoning strings.Builder
-	toolCalls, err := readSSE(resp.Body, func(channel, delta string) error {
+	toolCalls, err := readSSE(reader, func(channel, delta string) error {
 		if channel == "thinking" {
 			reasoning.WriteString(delta)
 		} else {
@@ -65,10 +128,7 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 		return p.sdk.EmitWithID(req.ID, "llm", "chunk", payload)
 	})
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, pluginsdk.ErrCode(codeLLMUpstreamError, err.Error())
+		return nil, p.streamFailure(ctx, totalCtx, &idleExpired, url, err, idleTimeout)
 	}
 
 	return &streamResp{
@@ -82,7 +142,34 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 	}, nil
 }
 
-func buildChatRequest(model string, messages []pluginsdk.ChatMessage, tools []pluginsdk.Tool) chatRequest {
+func (p *plugin) streamFailure(
+	parent, total context.Context,
+	idleExpired *atomic.Bool,
+	url string,
+	err error,
+	idleTimeout time.Duration,
+) error {
+	if err := parent.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return pluginsdk.ErrCode(codeLLMTimeout, "model request timed out")
+		}
+		return err
+	}
+	if idleExpired.Load() {
+		return pluginsdk.ErrCode(codeLLMTimeout,
+			fmt.Sprintf("model stream idle for %s", idleTimeout))
+	}
+	if total.Err() != nil {
+		return pluginsdk.ErrCode(codeLLMTimeout, "model request timed out")
+	}
+	if errors.Is(err, errResponseTooLarge) {
+		return pluginsdk.ErrCode(codeLLMOutputLimit, "model response exceeded max_response_bytes")
+	}
+	fmt.Fprintf(os.Stderr, "llm-openai: %s: %v\n", url, err)
+	return pluginsdk.ErrCode(codeLLMUpstreamError, "model endpoint request failed")
+}
+
+func buildChatRequest(model string, messages []pluginsdk.ChatMessage, tools []pluginsdk.Tool, maxTokens int) chatRequest {
 	outTools := make([]wireTool, 0, len(tools))
 	for _, tool := range tools {
 		outTools = append(outTools, wireTool{
@@ -91,10 +178,11 @@ func buildChatRequest(model string, messages []pluginsdk.ChatMessage, tools []pl
 		})
 	}
 	return chatRequest{
-		Model:    model,
-		Stream:   true,
-		Messages: wireMessages(messages),
-		Tools:    outTools,
+		Model:     model,
+		Stream:    true,
+		MaxTokens: maxTokens,
+		Messages:  wireMessages(messages),
+		Tools:     outTools,
 	}
 }
 

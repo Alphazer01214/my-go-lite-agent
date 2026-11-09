@@ -32,14 +32,23 @@ async function writeClipboard(text) {
 	if (!copied) throw new Error("浏览器不支持复制");
 }
 
+const FACT_WINDOW = 200;
+const FACT_PREVIEW_LIMIT = 4096;
+
+function previewText(value) {
+	const text = String(value ?? "");
+	if (text.length <= FACT_PREVIEW_LIMIT) return text;
+	return `已截断：显示前 ${FACT_PREVIEW_LIMIT.toLocaleString()} 字符，共 ${text.length.toLocaleString()} 字符\n${text.slice(0, FACT_PREVIEW_LIMIT)}`;
+}
+
 function factPreview(fact) {
-	if (fact?.type === "message") return String(fact.text_content || "(空)");
-	if (fact?.text_content) return String(fact.text_content);
+	if (fact?.type === "message") return previewText(fact.text_content || "(空)");
+	if (fact?.text_content) return previewText(fact.text_content);
 	if (fact?.meta) {
 		try {
-			return JSON.stringify(fact.meta);
+			return previewText(JSON.stringify(fact.meta));
 		} catch {
-			return String(fact.meta);
+			return previewText(fact.meta);
 		}
 	}
 	if (fact?.tool_calls?.length) return `${fact.tool_calls.length} 个工具调用`;
@@ -55,6 +64,9 @@ export class SessionTrace extends HTMLElement {
 		this.expanded = new Set();
 		this.selected = new Set();
 		this.selectionSessionId = "";
+		this.factWindow = FACT_WINDOW;
+		this.factWindowSession = "";
+		this.factWindowFilter = "";
 		this.build();
 	}
 
@@ -133,6 +145,7 @@ export class SessionTrace extends HTMLElement {
 
 	connectedCallback() {
 		this.off.push(on("state", () => this.render()));
+		this.off.push(on("progress", () => this.renderLiveCount()));
 		init();
 		this.render();
 	}
@@ -146,15 +159,26 @@ export class SessionTrace extends HTMLElement {
 		return resync();
 	}
 
+	renderLiveCount() {
+		const facts = state.facts;
+		this.countBadge.textContent = String(state.factsTotal || facts.length);
+	}
+
 	render() {
 		if (this.selectionSessionId !== state.sessionId) {
 			this.selectionSessionId = state.sessionId;
 			this.selected.clear();
+			this.expanded.clear();
 		}
 		const facts = state.facts;
 		const messages = facts.filter((fact) => fact?.type === "message").length;
 		const others = facts.length - messages;
 		const visible = facts.filter((fact) => matchesFilter(fact, state.factsFilter));
+		if (this.factWindowSession !== state.sessionId || this.factWindowFilter !== state.factsFilter) {
+			this.factWindowSession = state.sessionId;
+			this.factWindowFilter = state.factsFilter;
+			this.factWindow = FACT_WINDOW;
+		}
 		const selectedCount = facts.filter((fact) => this.selected.has(Number(fact?.seq))).length;
 		const selectedVisible = visible.filter((fact) => this.selected.has(Number(fact?.seq))).length;
 		this.countBadge.textContent = String(state.factsTotal || facts.length);
@@ -194,8 +218,27 @@ export class SessionTrace extends HTMLElement {
 			this.list.append(el("div", { class: "empty", text: "这个分类下没有 facts。" }));
 			return;
 		}
-		for (const fact of visible) this.list.append(this.renderFact(fact));
+		const shown = visible.slice(Math.max(0, visible.length - this.factWindow));
+		const hidden = visible.length - shown.length;
+		if (hidden > 0) {
+			this.list.append(el("button", {
+				class: "load-earlier",
+				type: "button",
+				text: `加载更早的 ${hidden} 条`,
+				onclick: () => this.loadEarlierFacts(),
+			}));
+		}
+		for (const fact of shown) this.list.append(this.renderFact(fact));
 		this.list.scrollTop = scrollTop;
+	}
+
+	loadEarlierFacts() {
+		const before = this.list.scrollHeight;
+		const top = this.list.scrollTop;
+		this.factWindow += FACT_WINDOW;
+		this.render();
+		const after = this.list.scrollHeight;
+		this.list.scrollTop = top + Math.max(0, after - before);
 	}
 
 	renderFact(fact) {

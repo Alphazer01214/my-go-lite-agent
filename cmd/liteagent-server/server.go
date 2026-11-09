@@ -4,17 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/tomori/my-go-lite-agent/internal/host"
+	"github.com/tomori/my-go-lite-agent/internal/logging"
 	"github.com/tomori/my-go-lite-agent/internal/plugin"
 	"github.com/tomori/my-go-lite-agent/internal/webui"
 	"github.com/tomori/my-go-lite-agent/protocol"
@@ -22,20 +26,26 @@ import (
 
 const defaultHTTPAddress = "127.0.0.1:2333"
 
-// run 启动 Host 和 WebUI 并保持运行。纯 WebUI 方案：无命令行交互，仅日志展示到 stderr。
+// run 启动 Host 和 WebUI 并保持运行。纯 WebUI 方案：无命令行交互，日志默认展示到 stderr。
 // 退出码：0 正常；1 启动或 HTTP 服务失败。
 func run() int {
-	fmt.Fprintf(os.Stderr, "liteagent-server %s\n", version)
+	logOut, closeLog := setupLogOutput()
+	defer closeLog()
+	logf := func(level, format string, args ...any) {
+		logLine(logOut, level, format, args...)
+	}
+
+	logf("INFO", "liteagent-server %s", version)
 	pluginDir := pluginsDir()
 	discoveries := plugin.ScanRoot(pluginDir)
 	registry, diagnostics := webui.NewRegistry(discoveries)
 	for _, diagnostic := range diagnostics {
-		fmt.Fprintf(os.Stderr, "scan: %s\n", diagnostic)
+		logf("WARN", "scan: %s", diagnostic)
 	}
 
 	listener, err := net.Listen("tcp", httpAddress())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "webui listen: %v\n", err)
+		logf("ERROR", "webui listen: %v", err)
 		return 1
 	}
 	defer listener.Close()
@@ -43,14 +53,16 @@ func run() int {
 	// Build the Host first and start it only after the UI publisher is wired in:
 	// plugins publish ui.state as soon as they boot, and an unmounted publisher
 	// would answer ui_not_mounted.
-	h := host.New(discoveries, nil) // nil → Host 日志走 stderr
+	h := host.New(discoveries, func(message string) {
+		logf("INFO", "%s", message)
+	})
 	defer h.Close()
 	h.SetPluginDir(pluginDir)
-	h.SetTraceFunc(traceTo(os.Stderr))
+	h.SetTraceFunc(traceTo(logOut, traceMode()))
 
 	uiServer := webui.NewServer(registry, h)
 	uiServer.SetLogFunc(func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
+		logf("INFO", format, args...)
 	})
 	uiServer.SetPluginManager(h)
 	h.SetUIPublisher(uiServer)
@@ -59,7 +71,7 @@ func run() int {
 
 	mounted := h.GetMountedPlugins()
 	sort.Strings(mounted)
-	fmt.Fprintf(os.Stderr, "mounted: %v\n", mounted)
+	logf("INFO", "mounted: %v", mounted)
 
 	server := &http.Server{
 		Handler:           uiServer.Handler(),
@@ -71,7 +83,7 @@ func run() int {
 		serverErrors <- server.Serve(listener)
 	}()
 
-	fmt.Fprintf(os.Stderr, "webui: %s\n", serverURL(listener.Addr().String()))
+	logf("INFO", "webui: %s", serverURL(listener.Addr().String()))
 
 	signals := make(chan os.Signal, 1)
 	// SIGTERM matters on Linux/container stop: without it the process is killed
@@ -81,7 +93,7 @@ func run() int {
 	case <-signals:
 	case err := <-serverErrors:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(os.Stderr, "webui serve: %v\n", err)
+			logf("ERROR", "webui serve: %v", err)
 			return 1
 		}
 	}
@@ -89,11 +101,56 @@ func run() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "webui shutdown: %v\n", err)
+		logf("ERROR", "webui shutdown: %v", err)
 		return 1
 	}
-	fmt.Fprintln(os.Stderr, "\nshutting down…")
+	logf("INFO", "shutting down…")
 	return 0
+}
+
+func setupLogOutput() (io.Writer, func()) {
+	path := strings.TrimSpace(os.Getenv("LITEAGENT_LOG_FILE"))
+	if path == "" {
+		return os.Stderr, func() {}
+	}
+	maxBytes := int64(envInt("LITEAGENT_LOG_MAX_BYTES", 8<<20))
+	writer, err := logging.New(path, maxBytes, envInt("LITEAGENT_LOG_BACKUPS", 3))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "liteagent-server: open log file %s: %v\n", path, err)
+		return os.Stderr, func() {}
+	}
+	return writer, func() {
+		_ = writer.Close()
+	}
+}
+
+func envInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func logLine(w io.Writer, level, format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	fmt.Fprintf(w, "%s %-5s %s\n",
+		time.Now().Format("2006-01-02T15:04:05.000Z07:00"), level, message)
+}
+
+func traceMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LITEAGENT_TRACE"))) {
+	case "off":
+		return "off"
+	case "full":
+		return "full"
+	default:
+		return "summary"
+	}
 }
 
 func httpAddress() string {
@@ -131,9 +188,15 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// traceTo 打印 Host 边界上的每条 Frame（log 展示）。
-func traceTo(w *os.File) host.TraceFunc {
+// traceTo 打印 Host 边界上的 Frame。summary 模式跳过高频 chunk 帧。
+func traceTo(w io.Writer, mode string) host.TraceFunc {
+	if mode == "off" {
+		return nil
+	}
 	return func(dir, name string, f *protocol.Frame) {
+		if mode == "summary" && f.Method == "chunk" {
+			return
+		}
 		payload := f.Payload
 		if len(payload) > 200 {
 			// Cut on a rune boundary: a raw byte cut can split a multi-byte
@@ -144,7 +207,7 @@ func traceTo(w *os.File) host.TraceFunc {
 			}
 			payload = append(append([]byte(nil), truncated...), []byte("…")...)
 		}
-		fmt.Fprintf(w, "[%s] %s id=%s type=%s cap=%s method=%s from=%s err=%s payload=%s\n",
+		logLine(w, "TRACE", "[%s] %s id=%s type=%s cap=%s method=%s from=%s err=%s payload=%s",
 			dir, name, f.ID, f.Type, f.Capability, f.Method, f.From, f.ErrorCode, payload)
 	}
 }

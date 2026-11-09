@@ -15,10 +15,17 @@ Session 只要求 `type` 非空，不解释事实含义。
 
 `session.create` 可写入 `model`。
 `session.info` 和会话列表返回该字段。
+`session.info` 和会话列表同时返回 `message_count`，它统计可投影为聊天气泡的 message Facts。
 已有会话保持创建时的模型，不提供修改接口。
 
 Session Chat 的模型下拉框只用于新会话。
 发送 `loop.turn` 时把所选模型 ID 写入 `model`。
+
+## 运行期元数据
+
+Turn 运行期间，Session Chat 每 2 秒调用一次 `session.info`。
+标题、消息数和 Facts 总数随落库进度更新，不重新加载完整消息和 Facts。
+Turn 结束后仍由 `refreshCurrent()` 加载完整正文和 Facts 列表。
 
 ## 会话选项卡
 
@@ -31,7 +38,8 @@ Session Chat 顶部显示已打开会话的选项卡。
 ## 回合终态
 
 Session Chat 根据 `turn_end` 事实渲染失败和取消终态。
-失败回合显示错误详情和重试按钮。
+失败回合显示稳定错误码、友好文案和重试按钮；原始错误只在“查看详情”中展示。
+失败回合只在聊天区内联展示，不再同时弹出顶部 banner。
 重试会重发该回合的用户输入，不清空输入框草稿。
 取消回合显示“本轮已取消”，并保留已经写入的助手消息。
 
@@ -40,13 +48,26 @@ Session Chat 根据 `turn_end` 事实渲染失败和取消终态。
 
 message fact 可保存 `reasoning`。
 `session.messages` 把它随助手消息返回。
-Session Chat 在正文中折叠渲染思考过程。
+Session Chat 默认折叠思考过程，并在 summary 中显示字符数。
+思考正文首次展开时才做 Markdown 渲染；超过 32 KiB 默认只渲染前 32 KiB。
+运行中的推理正文最多写入 32 KiB DOM，超出后提示“显示已截断”。
+生成中的推理 summary 会附加“生成中”和已用时；长时间只推理时提示可停止后重试。
 
 ## 工具消息
 
 message fact 可保存 `tool_calls` 和 `tool_call_id`。
 Agent 用 `role=tool` 的 message Fact 保存工具结果。
 工具结果的 `is_error`、`truncated` 和 `meta` 保留在 Fact 中。
+
+## 大输出与长会话
+
+Session Chat 对工具消息正文按 8 KiB 截断。
+截断时显示省略字符数和“展开全文”按钮。
+展开后才把完整正文写入 DOM。
+
+Session Chat 默认渲染最近 80 个时间线条目。
+Session Trace 默认渲染最近 200 条 Facts。
+顶部“加载更早”按钮扩大窗口，并保持当前滚动位置。
 
 ## Facts 复制与导出
 

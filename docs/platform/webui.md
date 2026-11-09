@@ -131,6 +131,8 @@ Loader 按 `entry` 去重加载。多个 Mount 共享同一个 `entry` 时只导
 
 `load()` 是对齐而不是追加：不在新 Mount 列表里的元素会被移除，Slot 不会残留已经下线的 Mount。
 
+Shell 跳过状态为 `inactive`、`failed` 或 `stopping` 的插件 Mount。插件启动后，下一次 Bootstrap 对齐会挂载对应 Mount；插件停止后，下一次对齐会移除它。
+
 `resync()` 的行为：
 
 | 情况 | 处理 |
@@ -560,7 +562,7 @@ Shell 把服务端 Diagnostic 和浏览器本地 Diagnostic 放在一起显示�
 
 合并键是 `plugin`、`path`、`code` 三者的组合。相同键的条目合并为一条，计数加一，显示时在消息后附上次数。
 
-Diagnostic 面板只能整体关闭，没有逐条清除按钮。服务端 Diagnostic 在下一次 bootstrap 时被整体替换，浏览器本地 Diagnostic 累积到页面结束。
+Diagnostic 面板只能整体关闭，没有逐条清除按钮。Host 把诊断分为发现类和运行类：`rescan` 只替换发现类诊断，运行类诊断继续保留。Shell 在下一次 Bootstrap 时整体接收 Host 合并后的诊断列表。浏览器本地 Diagnostic 累积到页面结束。
 
 ## 9. Diagnostic 悬浮窗
 

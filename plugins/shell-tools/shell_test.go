@@ -286,6 +286,11 @@ func TestExecuteValidation(t *testing.T) {
 	if _, err := p.execute(ctx, &providerRequest{}, &executeArgs{Command: "go", MaxOutputBytes: -1}); pluginsdk.Code(err) != pluginsdk.CodeBadArguments {
 		t.Fatalf("negative max output err = %v", err)
 	}
+	if _, err := p.execute(ctx, &providerRequest{Workspace: t.TempDir()}, &executeArgs{Command: `python -c "print(1)"`}); pluginsdk.Code(err) != pluginsdk.CodeBadArguments {
+		t.Fatalf("command with args err = %v", err)
+	} else if !strings.Contains(err.Error(), "args[]") {
+		t.Fatalf("command hint = %v, want args[] guidance", err)
+	}
 }
 
 func TestMergedEnv(t *testing.T) {

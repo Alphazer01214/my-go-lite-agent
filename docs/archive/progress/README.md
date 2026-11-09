@@ -25,6 +25,7 @@
 
 | 文档 | 主题 |
 |---|---|
+| [2026-11-09-p2-fixes.md](2026-11-09-p2-fixes.md) | 当前实现：P2 修复（运行期元数据、日志收敛/轮转、LLM 超时、错误展示、shell 契约） |
 | [2026-10-27-pluginsdk-store-design-handoff.md](2026-10-27-pluginsdk-store-design-handoff.md) | 待实现：pluginsdk 进程内共享存储（Store）、ctx 注入方案与两步走策略 |
 | [2026-10-30-agent-session-llm-handoff.md](2026-10-30-agent-session-llm-handoff.md) | 待实现：tools 多步循环、model-context 接入、settings、UI 分页/实时更新与构建交接 |
 | [2026-10-29-plugin-proceed-transparent-handoff.md](2026-10-29-plugin-proceed-transparent-handoff.md) | 已实现：Plugin Proceed 透明转发、Consumer 不写业务 Response、终点 Response 直达原调用方 |
@@ -73,6 +74,7 @@
 | [2026-10-20-full-test-report.md](2026-10-20-full-test-report.md) | 全量测试的执行证据 | 问题清单尚未全部关闭 |
 | [2026-10-21-pressure-execution-records.md](2026-10-21-pressure-execution-records.md) | U9、U10、S11、S12 的压力测试执行记录 | 规程以根目录 PRESSURE.md 为准 |
 | [2026-10-30-prompter-user-journey-handoff.md](2026-10-30-prompter-user-journey-handoff.md) | Prompter 用户路径回归：伪 tool_call、刷新不恢复、取消上下文、模型失败死会话、错误归因与构建裁剪 | 仅参考：问题清单与建议方案；修复前先确认产品边界 |
+| [2026-11-05-real-usage-stress-and-p0-p1-fixes.md](2026-11-05-real-usage-stress-and-p0-p1-fixes.md) | 真实使用压力测试、会话选项卡、P0/P1 修复与验收 | 仅参考：执行证据与实现过程；契约以测试报告和平台文档为准 |
 
 ## 3. 归档规则
 

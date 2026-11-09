@@ -23,10 +23,11 @@ type chunkEvent struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Stream   bool          `json:"stream"`
-	Messages []wireMessage `json:"messages"`
-	Tools    []wireTool    `json:"tools,omitempty"`
+	Model     string        `json:"model"`
+	Stream    bool          `json:"stream"`
+	MaxTokens int           `json:"max_tokens,omitempty"`
+	Messages  []wireMessage `json:"messages"`
+	Tools     []wireTool    `json:"tools,omitempty"`
 }
 
 type wireMessage struct {

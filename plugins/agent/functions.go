@@ -399,6 +399,7 @@ func (p *plugin) finishTurn(sessionID, turnID, status string, cause error, elaps
 	meta := turnEndMeta{TurnId: turnID, Status: status, DurationMs: elapsed.Milliseconds()}
 	if cause != nil {
 		meta.Error = cause.Error()
+		meta.ErrorCode = pluginsdk.Code(cause)
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {

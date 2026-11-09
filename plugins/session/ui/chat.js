@@ -20,6 +20,7 @@ import {
 	activateTab,
 	closeTab,
 	tabTitle,
+	friendlyErrorMessage,
 } from "./store.js";
 
 function shouldRenderTurn(turn, messages) {
@@ -77,6 +78,78 @@ function buildTimeline(messages, facts) {
 	return items;
 }
 
+const MESSAGE_WINDOW = 80;
+const TOOL_PREVIEW_LIMIT = 8 * 1024;
+const REASONING_RENDER_LIMIT = 32 * 1024;
+const REASONING_DOM_LIMIT = 32 * 1024;
+const REASONING_HINT_AFTER_MS = 120_000;
+
+function reasoningSummaryText(length, live = false) {
+	const count = Number(length) || 0;
+	const suffix = count > 0 ? ` · ${count.toLocaleString()} 字符` : "";
+	return `思考过程${suffix}${live ? " · 生成中" : ""}`;
+}
+
+function renderReasoningBody(body, text) {
+	if (text.length <= REASONING_RENDER_LIMIT) {
+		body.replaceChildren(renderMarkdown(text));
+		return;
+	}
+	body.replaceChildren(renderMarkdown(text.slice(0, REASONING_RENDER_LIMIT)));
+	const omitted = text.length - REASONING_RENDER_LIMIT;
+	const note = el("div", {
+		class: "more-note",
+		text: `已省略 ${omitted.toLocaleString()} 字符，共 ${text.length.toLocaleString()} 字符`,
+	});
+	const button = el("button", {
+		class: "reasoning-full",
+		type: "button",
+		text: "展开全部",
+	});
+	button.addEventListener("click", () => {
+		note.remove();
+		button.remove();
+		body.replaceChildren(renderMarkdown(text));
+	});
+	body.append(note, button);
+}
+
+function formatBytes(size) {
+	const value = Number(size) || 0;
+	if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+	if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+	return `${value} B`;
+}
+
+function appendOtherBody(role, text) {
+	const body = el("div", { class: "body" });
+	const prefix = `${role.toUpperCase()} · `;
+	if (text.length <= TOOL_PREVIEW_LIMIT) {
+		body.textContent = prefix + text;
+		return body;
+	}
+	let expanded = false;
+	const content = document.createTextNode(prefix + text.slice(0, TOOL_PREVIEW_LIMIT));
+	const omitted = text.length - TOOL_PREVIEW_LIMIT;
+	const note = el("div", {
+		class: "more-note",
+		text: `已省略 ${omitted.toLocaleString()} 字符，共 ${formatBytes(text.length)}`,
+	});
+	const toggle = el("button", {
+		class: "load-full",
+		type: "button",
+		text: `展开全文（${formatBytes(text.length)}）`,
+		onclick: () => {
+			expanded = !expanded;
+			content.data = prefix + (expanded ? text : text.slice(0, TOOL_PREVIEW_LIMIT));
+			note.hidden = expanded;
+			toggle.textContent = expanded ? "收起" : `展开全文（${formatBytes(text.length)}）`;
+		},
+	});
+	body.append(content, note, toggle);
+	return body;
+}
+
 function messageText(message) {
 	const text = String(message?.text || "");
 	if (text) return text;
@@ -85,11 +158,23 @@ function messageText(message) {
 }
 
 function reasoningBlock(reasoning, open = false) {
-	const body = el("div", { class: "reasoning-body" }, renderMarkdown(reasoning));
-	return el("details", { class: "reasoning", open },
-		el("summary", { text: "思考过程" }),
+	const text = String(reasoning);
+	const body = el("div", { class: "reasoning-body" });
+	const details = el("details", { class: "reasoning", open },
+		el("summary", { text: reasoningSummaryText(text.length) }),
 		body,
 	);
+	let rendered = false;
+	const ensure = () => {
+		if (rendered) return;
+		rendered = true;
+		renderReasoningBody(body, text);
+	};
+	details.addEventListener("toggle", () => {
+		if (details.open) ensure();
+	});
+	if (open) ensure();
+	return details;
 }
 
 export class SessionChat extends HTMLElement {
@@ -105,8 +190,15 @@ export class SessionChat extends HTMLElement {
 		this.draftText = null;
 		this.draftReasoningText = null;
 		this.reasoningDetails = null;
+		this.reasoningSummary = null;
+		this.reasoningDomTruncated = false;
+		this.reasoningUserToggled = false;
+		this.lastReasoningSummaryAt = 0;
+		this.draftStatusEl = null;
+		this.tickTimer = 0;
 		this.draftKey = "";
 		this.lastActiveTabKey = null;
+		this.messageWindow = MESSAGE_WINDOW;
 		this.build();
 	}
 
@@ -215,6 +307,11 @@ export class SessionChat extends HTMLElement {
 	connectedCallback() {
 		this.off.push(on("state", () => this.render()));
 		this.off.push(on("chunk", (detail) => this.onChunk(detail)));
+		this.off.push(on("progress", () => {
+			this.renderHeader();
+			this.renderTabs();
+			this.updateTick();
+		}));
 		this.settingsSaved = () => resync();
 		window.addEventListener("liteagent:settings-saved", this.settingsSaved);
 		init();
@@ -223,6 +320,10 @@ export class SessionChat extends HTMLElement {
 
 	disconnectedCallback() {
 		if (this.settingsSaved) window.removeEventListener("liteagent:settings-saved", this.settingsSaved);
+		if (this.tickTimer) {
+			clearInterval(this.tickTimer);
+			this.tickTimer = 0;
+		}
 		for (const off of this.off) off();
 		this.off = [];
 	}
@@ -239,17 +340,11 @@ export class SessionChat extends HTMLElement {
 			this.inputKey = key;
 			this.textarea.value = this.drafts.get(key) || "";
 			this.autosize();
+			this.messageWindow = MESSAGE_WINDOW;
 			keyChanged = true;
 		}
 
-		const meta = state.meta;
-		this.headTitle.textContent = String(meta?.title || "").trim() || "新会话";
-		const workspace = workspaceLabel(meta?.workspace || state.workspace);
-		const count = state.messages.length;
-		this.headMeta.textContent = state.sessionId
-			? `${workspace} · ${count} 条消息${isBusy() ? " · 生成中" : ""}`
-			: `工作区：${workspace}`;
-		this.hint.textContent = workspace;
+		this.renderHeader();
 
 		if (state.error) {
 			this.banner.hidden = false;
@@ -265,6 +360,17 @@ export class SessionChat extends HTMLElement {
 		this.updateButtons();
 		if (keyChanged || this.pinned) this.scrollToBottom();
 		else this.updateJump();
+	}
+
+	renderHeader() {
+		const meta = state.meta;
+		this.headTitle.textContent = String(meta?.title || "").trim() || "新会话";
+		const workspace = workspaceLabel(meta?.workspace || state.workspace);
+		const count = state.messageCount || state.messages.length;
+		this.headMeta.textContent = state.sessionId
+			? `${workspace} · ${count} 条消息${isBusy() ? " · 生成中" : ""}`
+			: `工作区：${workspace}`;
+		this.hint.textContent = workspace;
 	}
 
 	renderTabs() {
@@ -339,11 +445,17 @@ export class SessionChat extends HTMLElement {
 	renderMessages() {
 		const turn = currentTurn();
 		const messages = state.messages;
+		this.stopTick();
 		this.column.replaceChildren();
 		this.draftBody = null;
 		this.draftText = null;
 		this.draftReasoningText = null;
 		this.reasoningDetails = null;
+		this.reasoningSummary = null;
+		this.reasoningDomTruncated = false;
+		this.reasoningUserToggled = false;
+		this.lastReasoningSummaryAt = 0;
+		this.draftStatusEl = null;
 		this.draftKey = "";
 
 		if (messages.length === 0 && !turn) {
@@ -352,6 +464,8 @@ export class SessionChat extends HTMLElement {
 		}
 
 		const items = buildTimeline(messages, state.facts);
+		const hidden = Math.max(0, items.length - this.messageWindow);
+		const visibleItems = hidden ? items.slice(-this.messageWindow) : items;
 		let suppressEndSeq = null;
 		if (turn && turn.sessionId === state.sessionId && (turn.status === "error" || turn.status === "stopped")) {
 			const terminalItems = items.filter((item) => item.kind === "turn_end" && item.status);
@@ -362,7 +476,8 @@ export class SessionChat extends HTMLElement {
 				suppressEndSeq = Number(latest.fact.seq);
 			}
 		}
-		for (const item of items) {
+		if (hidden) this.column.append(this.buildLoadEarlier(hidden));
+		for (const item of visibleItems) {
 			if (item.kind === "message") this.appendMessage(item.message);
 			else if (item.status && Number(item.fact.seq) !== suppressEndSeq) this.appendTurnStatus(item);
 		}
@@ -375,6 +490,26 @@ export class SessionChat extends HTMLElement {
 		if (turn && shouldRenderTurn(turn, messages)) {
 			this.appendDraft(turn);
 		}
+	}
+
+	buildLoadEarlier(hidden) {
+		return el("button", {
+			class: "load-earlier",
+			type: "button",
+			text: `加载更早的 ${hidden} 条`,
+			onclick: () => this.loadEarlierMessages(),
+		});
+	}
+
+	loadEarlierMessages() {
+		const before = this.scroll.scrollHeight;
+		const top = this.scroll.scrollTop;
+		this.messageWindow += MESSAGE_WINDOW;
+		this.pinned = false;
+		this.renderMessages();
+		const after = this.scroll.scrollHeight;
+		this.scroll.scrollTop = top + Math.max(0, after - before);
+		this.updateJump();
 	}
 
 	appendEmpty() {
@@ -418,16 +553,17 @@ export class SessionChat extends HTMLElement {
 			return;
 		}
 		this.column.append(el("div", { class: "msg other" },
-			el("div", { class: "body", text: `${role.toUpperCase()} · ${text}` }),
+			appendOtherBody(role, text),
 		));
 	}
 
 	appendTurnStatus(item) {
 		const meta = factMeta(item.fact);
 		const cancelled = item.status === "cancelled";
+		const code = String(meta.error_code || "");
 		const error = String(meta.error || "").trim();
-		const title = cancelled ? "本轮已取消" : "本轮执行失败";
-		const note = cancelled ? "已保留部分输出" : "";
+		const title = cancelled ? "本轮已取消" : friendlyErrorMessage(code, "本轮执行失败");
+		const note = cancelled ? "已保留部分输出" : code ? `错误码：${code}` : "";
 		const details = !cancelled && error
 			? el("details", { class: "turn-details" },
 				el("summary", { text: "查看详情" }),
@@ -466,38 +602,125 @@ export class SessionChat extends HTMLElement {
 
 	appendDraft(turn) {
 		const body = el("div", { class: "body" });
-		const hasReasoning = Boolean(turn.assistantReasoning);
-		this.draftReasoningText = document.createTextNode(turn.assistantReasoning || "");
+		const reasoning = String(turn.assistantReasoning || "");
+		this.reasoningDomTruncated = reasoning.length > REASONING_DOM_LIMIT;
+		this.draftReasoningText = document.createTextNode(reasoning.slice(0, REASONING_DOM_LIMIT));
 		const reasoningBody = el("div", { class: "reasoning-body live" }, this.draftReasoningText);
+		const live = turn.status === "streaming" || turn.status === "stopping";
+		this.reasoningSummary = el("summary", {
+			text: reasoningSummaryText(reasoning.length, live) + (this.reasoningDomTruncated ? " · 显示已截断" : ""),
+		});
 		this.reasoningDetails = el("details", {
 			class: "reasoning",
-			open: hasReasoning,
-			hidden: !hasReasoning,
+			hidden: !reasoning,
 		},
-			el("summary", { text: "思考过程" }),
+			this.reasoningSummary,
 			reasoningBody,
 		);
+		this.lastReasoningSummaryAt = 0;
 		body.append(this.reasoningDetails);
 		this.draftText = document.createTextNode(turn.assistantText || "");
 		body.append(this.draftText);
 		if (turn.status === "streaming" || turn.status === "stopping") {
 			body.append(el("span", { class: "caret" }));
 		}
-		const status = turn.status === "streaming"
-			? "正在生成…"
-			: turn.status === "stopping"
-				? "正在停止…"
-				: turn.status === "stopped"
-					? "已停止"
-					: turn.status === "done"
-						? "已完成"
-						: "本轮失败";
+		if (turn.status === "error") {
+			body.append(this.buildDraftError(turn));
+		}
+		this.draftStatusEl = el("div", { class: "draft-status", text: this.draftStatusText(turn) });
 		this.column.append(el("div", { class: `msg assistant draft ${turn.status}` },
 			body,
-			el("div", { class: "draft-status", text: status }),
+			this.draftStatusEl,
 		));
 		this.draftBody = body;
 		this.draftKey = turn.key;
+		if (turn.status === "streaming" || turn.status === "stopping") this.startTick();
+		else this.stopTick();
+	}
+
+	buildDraftError(turn) {
+		const retryText = String(turn.userText || "");
+		const code = String(turn.errorCode || "");
+		const detail = String(turn.error || "");
+		const retry = el("button", {
+			class: "turn-retry",
+			type: "button",
+			disabled: isBusy() || !retryText,
+			text: "重试",
+			title: retryText ? "重试本轮" : "缺少原始输入",
+			onclick: () => {
+				if (!retryText || isBusy()) return;
+				this.pinned = true;
+				this.scrollToBottom();
+				sendTurn(retryText, state.meta?.model || "");
+			},
+		});
+		return el("div", { class: "turn-status error", attrs: { role: "alert" } },
+			el("span", { class: "turn-status-mark", attrs: { "aria-hidden": "true" } }, "!"),
+			el("div", { class: "turn-status-main" },
+				el("div", { class: "turn-status-title", text: friendlyErrorMessage(code, "本轮执行失败") }),
+				code ? el("div", { class: "turn-status-note", text: `错误码：${code}` }) : null,
+				detail ? el("details", { class: "turn-details" },
+					el("summary", { text: "查看详情" }),
+					el("div", { class: "turn-error-text", text: detail }),
+				) : null,
+				el("div", { class: "turn-status-actions" }, retry),
+			),
+		);
+	}
+
+	formatElapsed(ms) {
+		const seconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+		const minutes = Math.floor(seconds / 60);
+		const rest = seconds % 60;
+		return minutes > 0 ? `${minutes} 分 ${rest} 秒` : `${rest} 秒`;
+	}
+
+	draftStatusText(turn) {
+		if (turn.status === "streaming" || turn.status === "stopping") {
+			const elapsedMs = Date.now() - Number(turn.startedAt || Date.now());
+			const base = turn.status === "streaming" ? "正在生成" : "正在停止";
+			const hint = !turn.assistantText && elapsedMs >= REASONING_HINT_AFTER_MS
+				? " · 模型推理中，可停止后重试"
+				: "";
+			return `${base} · 已用时 ${this.formatElapsed(elapsedMs)}${hint}`;
+		}
+		if (turn.status === "stopped") return "已停止";
+		if (turn.status === "done") return "已完成";
+		return "本轮失败";
+	}
+
+	startTick() {
+		if (this.tickTimer) return;
+		this.tickTimer = setInterval(() => this.updateTick(), 1000);
+	}
+
+	stopTick() {
+		if (!this.tickTimer) return;
+		clearInterval(this.tickTimer);
+		this.tickTimer = 0;
+	}
+
+	updateTick() {
+		const turn = currentTurn();
+		if (!turn || !this.draftStatusEl || this.draftKey !== turn.key) {
+			this.stopTick();
+			return;
+		}
+		this.draftStatusEl.textContent = this.draftStatusText(turn);
+		this.updateReasoningSummary(turn);
+		if (turn.status !== "streaming" && turn.status !== "stopping") this.stopTick();
+	}
+
+	updateReasoningSummary(turn, force = false) {
+		if (!this.reasoningSummary) return;
+		const now = Date.now();
+		if (!force && now - this.lastReasoningSummaryAt < 500) return;
+		this.lastReasoningSummaryAt = now;
+		const live = turn.status === "streaming" || turn.status === "stopping";
+		const suffix = this.reasoningDomTruncated ? " · 显示已截断" : "";
+		this.reasoningSummary.textContent =
+			reasoningSummaryText(String(turn.assistantReasoning || "").length, live) + suffix;
 	}
 
 	handleColumnClick(event) {
@@ -560,16 +783,22 @@ export class SessionChat extends HTMLElement {
 			return;
 		}
 		if (detail.channel === "thinking") {
-			if (!this.draftReasoningText) {
-				this.draftReasoningText = document.createTextNode(detail.delta);
-				this.reasoningDetails?.querySelector(".reasoning-body")?.append(this.draftReasoningText);
+			const currentLength = this.draftReasoningText?.length || 0;
+			if (currentLength >= REASONING_DOM_LIMIT) {
+				this.reasoningDomTruncated = true;
 			} else {
-				this.draftReasoningText.appendData(detail.delta);
+				const remaining = REASONING_DOM_LIMIT - currentLength;
+				const slice = detail.delta.length > remaining ? detail.delta.slice(0, remaining) : detail.delta;
+				if (!this.draftReasoningText) {
+					this.draftReasoningText = document.createTextNode(slice);
+					this.reasoningDetails?.querySelector(".reasoning-body")?.append(this.draftReasoningText);
+				} else {
+					this.draftReasoningText.appendData(slice);
+				}
+				if (detail.delta.length > remaining) this.reasoningDomTruncated = true;
 			}
-			if (this.reasoningDetails) {
-				this.reasoningDetails.hidden = false;
-				if (!turn.assistantText) this.reasoningDetails.open = true;
-			}
+			if (this.reasoningDetails) this.reasoningDetails.hidden = false;
+			this.updateReasoningSummary(turn);
 		} else {
 			if (this.draftText) {
 				this.draftText.appendData(detail.delta);

@@ -30,7 +30,8 @@ func (s *Server) servePluginRescan(w http.ResponseWriter, _ *http.Request) {
 	}
 	diagnostics := s.replaceRegistry(discoveries)
 	s.mu.Lock()
-	s.diagnostics = append([]plugin.Diagnostic(nil), diagnostics...)
+	s.discovery = append([]plugin.Diagnostic(nil), diagnostics...)
+	s.diagnostics = combineDiagnostics(s.discovery, s.runtime)
 	s.mu.Unlock()
 	writeManagementBootstrap(w, s.Bootstrap())
 }

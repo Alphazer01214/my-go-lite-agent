@@ -299,6 +299,8 @@ sequenceDiagram
 
 stdout 留给对话界面，日志全部走 stderr。
 
+日志行带时间戳和级别。`LITEAGENT_TRACE` 控制帧日志：默认 `summary` 跳过 chunk 帧，`full` 保留全部帧，`off` 关闭 trace。设置 `LITEAGENT_LOG_FILE` 后日志写入可轮转文件（`LITEAGENT_LOG_MAX_BYTES` 默认 8 MiB，`LITEAGENT_LOG_BACKUPS` 默认 3）；未设置时仍写 stderr。
+
 ## 10. 锁与并发
 
 平台层有四把锁：

@@ -19,12 +19,16 @@ type modelSettings struct {
 	ContextWindow int             `json:"context_window,omitempty"`
 	BaseURL       string          `json:"base_url"`
 	APIKey        json.RawMessage `json:"api_key,omitempty"`
+	MaxTokens     int             `json:"max_tokens,omitempty"`
 	Vision        bool            `json:"vision"`
 }
 
 type llmSettingsValues struct {
-	Models       []modelSettings `json:"models"`
-	DefaultModel string          `json:"default_model"`
+	Models              []modelSettings `json:"models"`
+	DefaultModel        string          `json:"default_model"`
+	RequestTimeoutMS    int             `json:"request_timeout_ms,omitempty"`
+	StreamIdleTimeoutMS int             `json:"stream_idle_timeout_ms,omitempty"`
+	MaxResponseBytes    int             `json:"max_response_bytes,omitempty"`
 }
 
 type llmSettingsSaveReq struct {
@@ -96,6 +100,7 @@ func settingsModelFromConfig(model ModelConfig) map[string]any {
 		"context_window": model.ContextWindow,
 		"base_url":       model.BaseURL,
 		"api_key":        map[string]any{"configured": model.APIKey != ""},
+		"max_tokens":     model.MaxTokens,
 		"vision":         model.Capabilities.Vision,
 	}
 }
@@ -121,6 +126,13 @@ func parseSecretUpdate(raw json.RawMessage) (string, bool, error) {
 	return "", false, nil
 }
 
+func positiveOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
 func (p *plugin) handleSettingsGet(_ context.Context, _ *pluginsdk.Request) (json.RawMessage, error) {
 	cfg := p.snapshotConfig()
 	models := make([]map[string]any, 0, len(cfg.Models))
@@ -129,8 +141,11 @@ func (p *plugin) handleSettingsGet(_ context.Context, _ *pluginsdk.Request) (jso
 	}
 	return json.Marshal(map[string]any{
 		"values": map[string]any{
-			"models":        models,
-			"default_model": cfg.DefaultModel,
+			"models":                 models,
+			"default_model":          cfg.DefaultModel,
+			"request_timeout_ms":     positiveOrDefault(cfg.RequestTimeoutMS, defaultRequestTimeoutMS),
+			"stream_idle_timeout_ms": positiveOrDefault(cfg.StreamIdleTimeoutMS, defaultStreamIdleTimeout),
+			"max_response_bytes":     positiveOrDefault(cfg.MaxResponseBytes, defaultMaxResponseBytes),
 		},
 	})
 }
@@ -148,7 +163,12 @@ func (p *plugin) handleSettingsSave(_ context.Context, req *pluginsdk.Request) (
 		existing[model.ID] = model
 	}
 
-	cfg := config{DefaultModel: strings.TrimSpace(input.Values.DefaultModel)}
+	cfg := config{
+		DefaultModel:        strings.TrimSpace(input.Values.DefaultModel),
+		RequestTimeoutMS:    input.Values.RequestTimeoutMS,
+		StreamIdleTimeoutMS: input.Values.StreamIdleTimeoutMS,
+		MaxResponseBytes:    input.Values.MaxResponseBytes,
+	}
 	cfg.Models = make([]ModelConfig, 0, len(input.Values.Models))
 	for _, item := range input.Values.Models {
 		model := ModelConfig{
@@ -156,6 +176,7 @@ func (p *plugin) handleSettingsSave(_ context.Context, req *pluginsdk.Request) (
 			Label:         strings.TrimSpace(item.Label),
 			ContextWindow: item.ContextWindow,
 			BaseURL:       strings.TrimSpace(item.BaseURL),
+			MaxTokens:     item.MaxTokens,
 			Capabilities:  ModelCapabilities{Vision: item.Vision},
 		}
 		update, present, err := parseSecretUpdate(item.APIKey)

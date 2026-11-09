@@ -361,11 +361,12 @@ type uiConnection struct {
 
 ### 6.6 Diagnostic 保留
 
-`PushDiagnostic` 把诊断追加进内存环形缓冲，上限 256 条。超出后丢弃最旧的。
-
+Host 把诊断分为发现类和运行类。
+发现类来自 Registry，`rescan` 时整体替换。
+运行类来自 `PushDiagnostic`，保留在独立环形缓冲中。
+两类诊断合并后上限 256 条，新的运行类诊断优先保留。
 诊断同时作为 `diagnostic` 包络推给所有连接。
-
-环形缓冲的内容会出现在每次 Bootstrap 的 `diagnostics` 字段里。
+合并结果会出现在每次 Bootstrap 的 `diagnostics` 字段里。
 
 ## 7. 管理接口
 
@@ -386,7 +387,7 @@ type PluginLifecycle interface {
 
 | 端点 | 行为 |
 |---|---|
-| `POST /bridge/plugins/rescan` | 重新扫描，替换 Registry，返回最新 Bootstrap |
+| `POST /bridge/plugins/rescan` | 重新扫描，替换 Registry 和发现类诊断，保留运行类诊断，返回最新 Bootstrap |
 | `POST /bridge/plugins/{plugin}/start` | 启动插件，返回最新 Bootstrap |
 | `POST /bridge/plugins/{plugin}/stop` | 停止插件，返回最新 Bootstrap |
 
@@ -558,6 +559,8 @@ Mount 键是 `plugin:id`。
 
 `load(mounts)` 是对齐而不是追加。不在新列表里的元素被移除。共享同一个 `entry` 的 Mount 只导入一次。
 
+Shell 在调用 Loader 前按插件状态过滤 Mount。状态为 `inactive`、`failed` 或 `stopping` 的插件不装载 Mount；插件启动后，下一次 Bootstrap 对齐会重新装载。
+
 导入失败的 entry 不缓存，下次 `load()` 会重试。
 
 `resync(mounts)` 同样做移除对齐。组件实现了 `resync()` 就调用它，失败时按退避重试。没有实现就移除元素重新挂载。
@@ -596,7 +599,7 @@ UI Push 分发的规则：
 
 诊断合并键是 `plugin`、`path`、`code` 三者的组合。相同键的条目合并并计数。
 
-Shell 的诊断来源分两路：服务端 Bootstrap 的诊断和浏览器本地产生的诊断。服务端诊断在每次 Bootstrap 时整体替换。
+Shell 的诊断来源分两路：服务端 Bootstrap 的诊断和浏览器本地产生的诊断。服务端诊断在每次 Bootstrap 时整体替换为发现类与运行类的合并结果。`rescan` 不会清除运行类诊断。
 
 ### 10.4 插件中心与设置
 

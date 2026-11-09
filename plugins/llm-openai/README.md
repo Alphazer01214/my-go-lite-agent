@@ -55,6 +55,23 @@ Tool 定义转换为 OpenAI `tools` 字段。
 
 ## Settings
 
-Settings 管理 `models` 和 `default_model`。
+Settings 管理 `models`、`default_model` 和三个流式保护参数。
 模型 ID 必须唯一，`base_url` 必须非空，`default_model` 必须存在。
 API Key 不回显；保存时留空表示保持原值。
+
+| 字段 | 说明 |
+|---|---|
+| `models[].max_tokens` | 可选；0 表示不下发 `max_tokens`，兼容不支持该字段的端点 |
+| `request_timeout_ms` | 单次请求总时限，默认 900000（15 分钟） |
+| `stream_idle_timeout_ms` | 连续无 chunk 的中断时限，默认 120000（2 分钟） |
+| `max_response_bytes` | 单次响应最多读取的字节数，默认 4194304（4 MiB） |
+
+## 错误码
+
+| 错误码 | 场景 |
+|---|---|
+| `llm_upstream_error` | 上游连接失败、非 2xx 或流解析失败；传输细节只写 Host 日志 |
+| `llm_timeout` | 请求总超时或流空闲超时 |
+| `llm_output_limit_exceeded` | 响应超过 `max_response_bytes` |
+
+错误信息由调用方通过 `turn_end.meta.error_code` 保留，UI 负责显示友好文案。

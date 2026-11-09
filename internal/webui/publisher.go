@@ -159,10 +159,11 @@ func (s *Server) enqueueUI(envelope *uiEnvelope) bool {
 // the active UI connection when one is available.
 func (s *Server) PushDiagnostic(diagnostic plugin.Diagnostic) {
 	s.mu.Lock()
-	s.diagnostics = append(s.diagnostics, diagnostic)
-	if len(s.diagnostics) > maxDiagnostics {
-		s.diagnostics = s.diagnostics[len(s.diagnostics)-maxDiagnostics:]
+	s.runtime = append(s.runtime, diagnostic)
+	if len(s.runtime) > maxDiagnostics {
+		s.runtime = s.runtime[len(s.runtime)-maxDiagnostics:]
 	}
+	s.diagnostics = combineDiagnostics(s.discovery, s.runtime)
 	s.mu.Unlock()
 
 	id := fmt.Sprintf("diag-%d", s.sequence.Add(1))
