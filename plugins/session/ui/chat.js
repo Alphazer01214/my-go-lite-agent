@@ -683,7 +683,8 @@ export class SessionChat extends HTMLElement {
 			const hint = !turn.assistantText && elapsedMs >= REASONING_HINT_AFTER_MS
 				? " · 模型推理中，可停止后重试"
 				: "";
-			return `${base} · 已用时 ${this.formatElapsed(elapsedMs)}${hint}`;
+			const truncated = turn.draftTruncated ? " · 部分输出未恢复" : "";
+			return `${base} · 已用时 ${this.formatElapsed(elapsedMs)}${hint}${truncated}`;
 		}
 		if (turn.status === "stopped") return "已停止";
 		if (turn.status === "done") return "已完成";

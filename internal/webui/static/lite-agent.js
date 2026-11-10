@@ -57,11 +57,15 @@ export function createLiteAgent({
 	const diagnosticHandlers = new Set();
 	const statusHandlers = new Set();
 	const resyncHandlers = new Set();
+	const callHandlers = new Set();
 	let uiStarted = false;
 	let uiClosed = false;
 	let connectedOnce = false;
 	let reconnectAttempt = 0;
 	let status = "connecting";
+	// Cursor over host-replayable envelopes (call lifecycle and diagnostics).
+	// Plugin UI state stays snapshot-only and is refreshed by resync.
+	let replayCursor = 0;
 
 	function setStatus(next) {
 		if (status === next) return;
@@ -152,6 +156,12 @@ export function createLiteAgent({
 	}
 
 	function dispatchUI(frame) {
+		if (typeof frame.rseq === "number" && frame.rseq > 0) {
+			// A reconnect replays the host lifecycle ring. The connection may
+			// have queued some of those frames already; drop duplicates.
+			if (frame.rseq <= replayCursor) return;
+			replayCursor = frame.rseq;
+		}
 		if (frame.type === "hello") {
 			const reconnected = connectedOnce;
 			connectedOnce = true;
@@ -160,6 +170,14 @@ export function createLiteAgent({
 			if (reconnected) {
 				for (const handler of resyncHandlers) handler(frame);
 			}
+			return;
+		}
+		if (frame.type === "resync") {
+			for (const handler of resyncHandlers) handler(frame);
+			return;
+		}
+		if (frame.type === "call") {
+			for (const handler of callHandlers) handler(frame);
 			return;
 		}
 		if (frame.type === "ui") {
@@ -175,7 +193,8 @@ export function createLiteAgent({
 		while (!uiClosed) {
 			if (!connectedOnce) setStatus("connecting");
 			try {
-				const response = await fetchImpl("/bridge/ui", {
+				const query = replayCursor > 0 ? `?after=${replayCursor}` : "";
+				const response = await fetchImpl(`/bridge/ui${query}`, {
 					headers: { Accept: "application/x-ndjson" },
 				});
 				if (!response.ok) {
@@ -218,6 +237,53 @@ export function createLiteAgent({
 		startUI();
 	}
 
+	/**
+	 * Read the attachable call snapshot. A reloaded page uses this before
+	 * opening any per-call stream.
+	 */
+	async function listCalls() {
+		const response = await fetchImpl("/bridge/calls", {
+			headers: { Accept: "application/json" },
+		});
+		if (!response.ok) {
+			throw new Error(`Call list failed with HTTP ${response.status}`);
+		}
+		return response.json();
+	}
+
+	/**
+	 * Follow one call: buffered events after `after`, then live events, ending
+	 * with a result frame. The caller owns `options.signal`.
+	 */
+	async function watchCall(callId, onFrame, options = {}) {
+		if (!callId) throw new TypeError("callId is required");
+		if (typeof onFrame !== "function") throw new TypeError("onFrame must be a function");
+		const after = Number(options.after) || 0;
+		const query = after > 0 ? `?after=${after}` : "";
+		const response = await fetchImpl(`/bridge/calls/${encodeURIComponent(callId)}${query}`, {
+			headers: { Accept: "application/x-ndjson" },
+			signal: options.signal,
+		});
+		if (!response.ok) {
+			let code = "";
+			try {
+				code = String((await response.json())?.error?.code || "");
+			} catch {
+				code = "";
+			}
+			const error = new Error(code || `Call attach failed with HTTP ${response.status}`);
+			error.code = code || "call_attach_failed";
+			throw error;
+		}
+		await readNDJSON(response, onFrame);
+	}
+
+	function onCall(handler) {
+		if (typeof handler !== "function") throw new TypeError("handler must be a function");
+		callHandlers.add(handler);
+		startUI();
+	}
+
 	// startUI opens the UI stream at most once. After closeUI the runtime is
 	// shut down for good, so re-registering a handler must not leave it wired to
 	// a loop that will never run again.
@@ -234,9 +300,21 @@ export function createLiteAgent({
 		diagnosticHandlers.clear();
 		statusHandlers.clear();
 		resyncHandlers.clear();
+		callHandlers.clear();
 	}
 
-	return { call, pickDirectory, onUI, onDiagnostic, onStatus, onResync, closeUI };
+	return {
+		call,
+		pickDirectory,
+		listCalls,
+		watchCall,
+		onUI,
+		onCall,
+		onDiagnostic,
+		onStatus,
+		onResync,
+		closeUI,
+	};
 }
 
 export const LiteAgent = createLiteAgent();

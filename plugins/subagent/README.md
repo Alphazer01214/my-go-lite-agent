@@ -41,8 +41,8 @@ Subagent 把一段自足任务交给子会话执行，并把子代理的最终�
 
 子会话有独立的 Fact 日志。`prompter` 在 `session.create` 时写入与主会话相同的 system prompt / runtime context 基线，但子会话不继承父会话的消息历史。工具描述会明确提示父代理：prompt 必须自足。
 
-子会话会出现在左侧历史列表，并带有“子代理”标记。
-父会话的 `subagent_spawned` / `subagent_finished` 事实带有 `child_session_id`，可通过 `session.facts` 或 Trace 查看。
+子会话在左侧历史列表中以树状嵌套在父会话下，可展开或收起，并带有“子代理”标记。
+父会话的 `subagent_spawned` / `subagent_finished` 事实带有 `child_session_id`，也可通过 `session.facts` 或 Trace 查看。
 
 ## 深度
 

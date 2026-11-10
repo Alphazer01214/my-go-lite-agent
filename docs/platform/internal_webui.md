@@ -32,6 +32,8 @@
 | `registry.go` | Mount Registry、UI 入口解析、插件资源解析 |
 | `bootstrap.go` | Bootstrap 数据结构 |
 | `bridge.go` | Browser Call 的 NDJSON 闭环与诊断生成 |
+| `calls.go` | Call Registry、事件缓冲、订阅与 attach 快照 |
+| `calls_http.go` | `/bridge/calls` 快照与 `/bridge/calls/{id}` attach 流 |
 | `wire.go` | 浏览器请求与响应的编解码 |
 | `publisher.go` | UI Push 队列、Diagnostic 推送与保留 |
 | `management.go` | 插件扫描与启停接口 |
@@ -254,6 +256,10 @@ payload 为空或 `null` 时归一为 `{}`。其余情况做一次压缩。
 
 帧转不出来的场合合成一条错误应答。不存在静默丢弃。
 
+每个调用同时进入 Call Registry：事件转成浏览器帧后先入有界缓冲，再写响应。
+缓冲上限是 8192 条 / 1 MiB，超出丢最旧并标记 `truncated`。
+没有事件的调用在结束时立即从 Registry 删除；有事件的调用保留 10 分钟供 attach。
+
 ### 5.4 诊断生成
 
 `callDiagnostic(request, code, message)` 的规则：
@@ -268,6 +274,32 @@ payload 为空或 `null` 时归一为 `{}`。其余情况做一次压缩。
 
 成功的调用不产生诊断。用户显式取消不产生诊断。
 
+### 5.5 Call Registry 与 attach
+
+`callHub` 以浏览器请求 ID 为 call ID，记录：
+
+| 字段 | 说明 |
+|---|---|
+| `capability`、`method`、`request` | 原样保存，供刷新后识别会话 |
+| `status` | `running`、`finished`、`failed` |
+| `events` | 浏览器形状的事件帧，带 per-call `seq` |
+| `final` | 终态应答 |
+| `firstSeq`、`nextSeq`、`truncated` | 缓冲窗口 |
+
+`/bridge/calls` 返回可 attach 的调用快照。排序是运行中优先，再按开始时间倒序。
+`/bridge/calls/{id}` 的 NDJSON 顺序：
+
+1. `replay`：调用元数据与缓冲窗口；
+2. `event`：`seq` 大于 `after` 的缓冲事件；
+3. `replay_end`：重放结束标记；
+4. 运行中继续推送 `event`，每 15 秒一条 `ping`；
+5. `result`：终态应答，随后关闭。
+
+`after` 缺省或为 0 时重放全部保留事件。
+缓冲已丢旧事件时 `replay.truncated` 为 true，客户端应回落到持久化消息。
+注册订阅与写缓冲在同一个记录锁内完成，attach 不会漏事件。
+订阅通道满时只关闭该订阅，调用继续运行。
+
 ## 6. UI 推送
 
 ### 6.1 包络
@@ -276,6 +308,8 @@ payload 为空或 `null` 时归一为 `{}`。其余情况做一次压缩。
 type uiEnvelope struct {
     Version    int
     ID         string
+    Seq        uint64
+    RSeq       uint64
     Type       string
     Mount      *MountRef
     Kind       string
@@ -285,14 +319,19 @@ type uiEnvelope struct {
 }
 ```
 
-| 场景 | `type` | `kind` |
+| 场景 | `type` | 说明 |
 |---|---|---|
-| State | `ui` | `state` |
-| Command | `ui` | `command` |
-| Diagnostic | `diagnostic` | 无 |
-| 连接建立 | `hello` | 无 |
+| State | `ui` + `kind=state` | 不进入重放环 |
+| Command | `ui` + `kind=command` | 不进入重放环 |
+| Diagnostic | `diagnostic` | 进入重放环 |
+| Call 生命周期 | `call` | payload 含 `call_id`、`phase`、`status`、`capability`、`method` |
+| 连接建立 | `hello` | 首帧 |
+| 游标缺口 | `resync` | 客户端应重新拉 `/bridge/calls` 与会话快照 |
+| 心跳 | `ping` | 不进入重放环 |
 
 `version` 固定是 `protocol.FrameVersion`，即 2。这与 Browser Call 的版本 1 不同。
+
+`seq` 是全局包络序号，`rseq` 只分配给可重放的包络（`call`、`diagnostic`），从 1 单调递增。
 
 id 前缀：`ui-push-N` 用于推送和 hello，`diag-N` 用于诊断。
 
@@ -314,12 +353,14 @@ type uiConnection struct {
 `serveUI` 建立连接后：
 
 1. 分配 `ui-conn-N` 形式的 id。
-2. 先发一条 hello。hello 一定排在已入队的推送前面。
-3. 循环取帧编码并 flush。
-4. 收到 `overflow` 信号时记日志并退出，关闭这条连接。
-5. 客户端断开时退出。
+2. 先发一条 hello，带当前 `seq`。
+3. 查询参数 `after` 大于 0 时，从重放环取 `rseq > after` 的包络；环已丢事件时只发 `resync`。
+4. 循环取帧编码并 flush。
+5. 每 15 秒写一条 `ping`。
+6. 收到 `overflow` 信号时记日志并退出，关闭这条连接。
+7. 客户端断开时退出。
 
-`onOverflow` 把写超时设到过去，让卡在慢 socket 上的 writer 立刻失败退出。
+重放环上限是 512 条，只收 `call` 与 `diagnostic`。插件 UI State 是快照，不回放。
 
 连接之间互不影响。新连接不挤掉旧连接。
 
@@ -329,6 +370,8 @@ type uiConnection struct {
 
 - 至少一个连接接下就算投递成功。
 - 某个连接队列满时，它的 `drops` 加一，并触发 `overflow`。其它连接不受影响。
+- 入队前分配 `seq`；`call` 与 `diagnostic` 额外分配 `rseq` 并写入重放环。
+- 调用生命周期由 `onCallStarted` / `onCallFinished` 生成：首个事件时广播 `phase=started`，终态时广播 `phase=finished`。没有事件的调用不广播。
 
 投递成功时 `PublishState` 和 `PublishCommand` 返回 `{}`。
 
@@ -458,6 +501,8 @@ Linux 上 `zenity` 退出码 1 表示用户取消。`kdialog` 不可用时返回
 | `POST` | `/bridge/call` | Browser Call |
 | `POST` | `/bridge/pick-directory` | 文件夹选择器 |
 | `GET` | `/bridge/ui` | UI Push 流 |
+| `GET` | `/bridge/calls` | 可 attach 的调用快照 |
+| `GET` | `/bridge/calls/{call}` | 单调用 attach 流 |
 | `POST` | `/bridge/plugins/rescan` | 重新扫描 |
 | `POST` | `/bridge/plugins/{plugin}/start` | 启动插件 |
 | `POST` | `/bridge/plugins/{plugin}/stop` | 停止插件 |
@@ -529,11 +574,16 @@ base-uri 'none'; frame-ancestors 'none'
 |---|---|
 | `call(capability, method, payload, onEvent)` | 发起 Capability Call |
 | `pickDirectory()` | 打开文件夹选择器 |
+| `listCalls()` | 读取可 attach 的调用快照 |
+| `watchCall(callId, onFrame, options)` | 跟随单调用 attach 流；`options.after` 指定 per-call seq，`options.signal` 取消 |
 | `onUI(handler)` | 订阅 State 和 Command |
+| `onCall(handler)` | 订阅 `call` 生命周期 |
 | `onDiagnostic(handler)` | 订阅 Diagnostic |
 | `onStatus(handler)` | 订阅连接状态 |
-| `onResync(handler)` | 订阅重连信号 |
+| `onResync(handler)` | 订阅重连与 `resync` 信号 |
 | `closeUI()` | 关闭 UI 流并清空订阅 |
+
+UI 流按 `rseq` 去重，重连时把最后看到的 `rseq` 作为 `after` 查询参数。`hello` 不参与去重。
 
 失败时 reject 的 Error 带 `code`。`code` 取自 `error_code`，缺省 `handler_error`。Error 上还有 `response` 指向完整应答帧。
 
@@ -647,6 +697,9 @@ Shell 只对当前选中插件调用 `settings.get`。设置表单挂在 `render
 | Call 闭环 | 已覆盖事件在前应答在后、非法 body 不触达后端、`host` capability 被拒、错误应答、无事件时只有一条应答 |
 | 诊断生成 | 已覆盖取消不产生诊断、空码不产生诊断、插件错误码产生诊断、非哨兵错误映射为 `handler_error` |
 | 断线 | 已覆盖浏览器断开不取消后端调用 |
+| Call Registry | 已覆盖事件缓冲与 reattach、无事件调用立即移除、缓冲截断、生命周期回调、游标缺口检测 |
+| Call 端点 | 已覆盖 `/bridge/calls` 快照与 `/bridge/calls/{id}` 的 replay、event、replay_end、result 顺序 |
+| UI 重放 | 已覆盖 hello 优先、`after` 重放 call 生命周期 |
 | 发布 | 已覆盖包络字段、属主校验、payload 校验、扇出、队列满时的隔离 |
 | 无连接 | 已覆盖发布不阻塞并返回错误。实际走的是 Mount 找不到分支 |
 | Registry | 已覆盖 Mount 构建、入口 URL、资源根、路径穿越拒绝、第 4.4 节六条校验码中的四条、坏 entry 不占位 |

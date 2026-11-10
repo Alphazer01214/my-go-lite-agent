@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,9 +22,18 @@ import (
 // every bootstrap, so an unbounded slice would grow the payload forever.
 const maxDiagnostics = 256
 
+// maxReplayEnvelopes bounds the bus replay ring. Only replayable envelopes
+// (call lifecycle and diagnostics) enter it; plugin UI state is a snapshot and
+// must not be replayed.
+const maxReplayEnvelopes = 512
+
+const uiHeartbeatInterval = 15 * time.Second
+
 type uiEnvelope struct {
 	Version    int                `json:"version"`
 	ID         string             `json:"id"`
+	Seq        uint64             `json:"seq,omitempty"`
+	RSeq       uint64             `json:"rseq,omitempty"`
 	Type       string             `json:"type"`
 	Mount      *MountRef          `json:"mount,omitempty"`
 	Kind       string             `json:"kind,omitempty"`
@@ -72,30 +83,63 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if err := http.NewResponseController(w).Flush(); err != nil {
+	if err := controller.Flush(); err != nil {
 		return
+	}
+	writeEnvelope := func(envelope *uiEnvelope) bool {
+		if err := json.NewEncoder(w).Encode(envelope); err != nil {
+			return false
+		}
+		return controller.Flush() == nil
 	}
 	// hello is per connection and always precedes queued pushes. The SDK uses
 	// every hello after the first one as the signal to resync page state.
 	hello := &uiEnvelope{
 		Version: protocol.FrameVersion,
 		ID:      s.nextUIID(),
+		Seq:     s.envelopeSeq.Load(),
 		Type:    "hello",
 	}
-	if err := json.NewEncoder(w).Encode(hello); err != nil {
-		return
-	}
-	if err := http.NewResponseController(w).Flush(); err != nil {
+	if !writeEnvelope(hello) {
 		return
 	}
 
+	// A reconnecting page passes the last replay seq it saw. Replay only the
+	// host-owned lifecycle stream; plugin UI state is refreshed by resync.
+	after, afterErr := strconv.ParseUint(strings.TrimSpace(r.URL.Query().Get("after")), 10, 64)
+	if afterErr == nil && after > 0 {
+		events, gap := s.replayAfter(after)
+		if gap {
+			if !writeEnvelope(&uiEnvelope{
+				Version: protocol.FrameVersion,
+				ID:      s.nextUIID(),
+				Type:    "resync",
+			}) {
+				return
+			}
+		} else {
+			for _, envelope := range events {
+				if !writeEnvelope(envelope) {
+					return
+				}
+			}
+		}
+	}
+
+	heartbeat := time.NewTicker(uiHeartbeatInterval)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case envelope := <-connection.queue:
-			if err := json.NewEncoder(w).Encode(envelope); err != nil {
+			if !writeEnvelope(envelope) {
 				return
 			}
-			if err := controller.Flush(); err != nil {
+		case <-heartbeat.C:
+			if !writeEnvelope(&uiEnvelope{
+				Version: protocol.FrameVersion,
+				ID:      s.nextUIID(),
+				Type:    "ping",
+			}) {
 				return
 			}
 		case <-connection.overflow:
@@ -105,6 +149,21 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// replayAfter returns replayable envelopes newer than after, plus whether the
+// ring already lost events the caller would need.
+func (s *Server) replayAfter(after uint64) ([]*uiEnvelope, bool) {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	events := make([]*uiEnvelope, 0, len(s.replay))
+	for _, envelope := range s.replay {
+		if envelope.RSeq > after {
+			events = append(events, envelope)
+		}
+	}
+	gap := len(s.replay) == 0 || s.replay[0].RSeq > after+1
+	return events, gap
 }
 
 // addUIConnection publishes one more UI stream. Connections are independent:
@@ -133,6 +192,20 @@ func (s *Server) removeUIConnection(connection *uiConnection) {
 // page only loses its own queue; delivery succeeds when at least one page took
 // the envelope.
 func (s *Server) enqueueUI(envelope *uiEnvelope) bool {
+	if envelope.Seq == 0 {
+		envelope.Seq = s.envelopeSeq.Add(1)
+	}
+	switch envelope.Type {
+	case "call", "diagnostic":
+		envelope.RSeq = s.replaySeq.Add(1)
+		s.replayMu.Lock()
+		s.replay = append(s.replay, envelope)
+		if len(s.replay) > maxReplayEnvelopes {
+			s.replay = append([]*uiEnvelope(nil), s.replay[len(s.replay)-maxReplayEnvelopes:]...)
+		}
+		s.replayMu.Unlock()
+	}
+
 	s.mu.Lock()
 	connections := make([]*uiConnection, 0, len(s.connections))
 	for connection := range s.connections {
@@ -258,6 +331,40 @@ func (s *Server) resolveMount(from, mountID string) (*MountRef, error) {
 
 func (s *Server) nextUIID() string {
 	return fmt.Sprintf("ui-push-%d", s.sequence.Add(1))
+}
+
+// onCallStarted announces the first observed event of a browser call. Calls
+// that never emit an event are unary work with nothing to recover.
+func (s *Server) onCallStarted(record *callRecord) {
+	s.publishCallPhase(record, "started")
+}
+
+// onCallFinished announces the terminal state so a refreshed page can drop its
+// recovered draft and reload durable messages.
+func (s *Server) onCallFinished(record *callRecord) {
+	s.publishCallPhase(record, "finished")
+}
+
+func (s *Server) publishCallPhase(record *callRecord, phase string) {
+	summary := record.summary()
+	payload, err := json.Marshal(map[string]any{
+		"call_id":     summary.CallID,
+		"phase":       phase,
+		"status":      summary.Status,
+		"capability":  summary.Capability,
+		"method":      summary.Method,
+		"started_at":  summary.StartedAt,
+		"finished_at": summary.FinishedAt,
+	})
+	if err != nil {
+		return
+	}
+	s.enqueueUI(&uiEnvelope{
+		Version: protocol.FrameVersion,
+		ID:      s.nextUIID(),
+		Type:    "call",
+		Payload: payload,
+	})
 }
 
 func decodeSingleJSON(payload []byte, out any) error {

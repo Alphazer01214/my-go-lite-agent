@@ -26,12 +26,63 @@ function sessionTimestamp(session) {
 	return Number(session?.last_ts || session?.created_at || 0);
 }
 
-function sessionMeta(session) {
+function sessionMeta(session, childCount = 0) {
 	const count = Number(session?.fact_count) || 0;
 	const parts = [count > 0 ? `${count} 条记录` : "空会话"];
+	if (childCount > 0) parts.push(`${childCount} 个子会话`);
 	const time = relativeTime(sessionTimestamp(session));
 	if (time) parts.push(time);
 	return parts.join(" · ");
+}
+
+function buildTree(sessions) {
+	const byId = new Map();
+	for (const session of sessions) byId.set(session.session_id, session);
+	const childrenOf = new Map();
+	const roots = [];
+	for (const session of sessions) {
+		const parentId = String(session.parent_session_id || "");
+		const parent = parentId ? byId.get(parentId) : null;
+		if (parent && parent.session_id !== session.session_id) {
+			const kids = childrenOf.get(parent.session_id);
+			if (kids) kids.push(session);
+			else childrenOf.set(parent.session_id, [session]);
+		} else {
+			roots.push(session);
+		}
+	}
+	// 子会话按创建时间正序排列，父会话的下级按委派顺序阅读。
+	for (const kids of childrenOf.values()) {
+		kids.sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0)
+			|| String(a.session_id).localeCompare(String(b.session_id)));
+	}
+	return { roots, childrenOf };
+}
+
+// 搜索命中的会话保留其祖先路径，并展开命中节点的整棵子树。
+function searchVisible(sessions, childrenOf, query) {
+	if (!query) return null;
+	const byId = new Map();
+	for (const session of sessions) byId.set(session.session_id, session);
+	const direct = sessions.filter((session) => sessionTitle(session).toLowerCase().includes(query));
+	const visible = new Set();
+	for (const session of direct) {
+		let cursor = session;
+		while (cursor && !visible.has(cursor.session_id)) {
+			visible.add(cursor.session_id);
+			cursor = byId.get(cursor.parent_session_id);
+		}
+	}
+	const stack = direct.map((session) => session.session_id);
+	while (stack.length) {
+		const kids = childrenOf.get(stack.pop()) || [];
+		for (const kid of kids) {
+			if (visible.has(kid.session_id)) continue;
+			visible.add(kid.session_id);
+			stack.push(kid.session_id);
+		}
+	}
+	return visible;
 }
 
 export class SessionHistory extends HTMLElement {
@@ -43,6 +94,7 @@ export class SessionHistory extends HTMLElement {
 		this.query = "";
 		this.editing = "";
 		this.confirming = "";
+		this.collapsed = new Set();
 		this.workspaceSignature = "";
 		this.listSignature = "";
 		this.build();
@@ -169,8 +221,11 @@ export class SessionHistory extends HTMLElement {
 			confirming: this.confirming,
 			active: state.sessionId,
 			loading: state.loading.sessions && state.sessions.length === 0,
+			collapsed: [...this.collapsed].sort(),
 			sessions: state.sessions.map((session) => [
 				session.session_id,
+				session.parent_session_id || "",
+				session.origin || "",
 				session.title || "",
 				!!session.pinned,
 				Number(session.fact_count) || 0,
@@ -183,12 +238,11 @@ export class SessionHistory extends HTMLElement {
 		this.list.replaceChildren();
 
 		const query = this.query.toLowerCase();
-		const sessions = state.sessions.filter((session) => {
-			if (!query) return true;
-			return sessionTitle(session).toLowerCase().includes(query);
-		});
+		const { roots, childrenOf } = buildTree(state.sessions);
+		const visible = searchVisible(state.sessions, childrenOf, query);
+		const shown = visible ? roots.filter((root) => visible.has(root.session_id)) : roots;
 
-		if (sessions.length === 0) {
+		if (shown.length === 0) {
 			const text = state.loading.sessions && state.sessions.length === 0
 				? "加载中…"
 				: state.sessions.length === 0
@@ -198,12 +252,13 @@ export class SessionHistory extends HTMLElement {
 			return;
 		}
 
-		const pinned = sessions.filter((session) => session.pinned);
+		const ctx = { childrenOf, visible, query };
+		const pinned = shown.filter((session) => session.pinned);
 		if (pinned.length) {
-			this.appendGroup("置顶", pinned);
+			this.appendGroup("置顶", pinned, ctx);
 		}
 		const buckets = new Map();
-		for (const session of sessions) {
+		for (const session of shown) {
 			if (session.pinned) continue;
 			const bucket = dayBucket(sessionTimestamp(session));
 			if (!buckets.has(bucket)) buckets.set(bucket, []);
@@ -211,19 +266,39 @@ export class SessionHistory extends HTMLElement {
 		}
 		for (const label of ["今天", "昨天", "7 天内", "更早"]) {
 			const items = buckets.get(label);
-			if (items?.length) this.appendGroup(label, items);
+			if (items?.length) this.appendGroup(label, items, ctx);
 		}
 	}
 
-	appendGroup(label, sessions) {
+	appendGroup(label, sessions, ctx) {
 		const group = el("div", { class: "group" },
 			el("div", { class: "group-title", text: label }),
 		);
-		for (const session of sessions) group.append(this.renderRow(session));
+		for (const session of sessions) group.append(this.renderNode(session, ctx));
 		this.list.append(group);
 	}
 
-	renderRow(session) {
+	renderNode(session, ctx) {
+		const id = session.session_id;
+		const total = ctx.childrenOf.get(id) || [];
+		let kids = total;
+		if (ctx.visible) kids = kids.filter((kid) => ctx.visible.has(kid.session_id));
+		const open = Boolean(ctx.query) || !this.collapsed.has(id);
+		const node = el("div", { class: "node" });
+		node.append(this.renderRow(session, {
+			childCount: total.length,
+			toggle: !ctx.query && kids.length > 0,
+			open,
+		}));
+		if (kids.length && open) {
+			const box = el("div", { class: "children" });
+			for (const kid of kids) box.append(this.renderNode(kid, ctx));
+			node.append(box);
+		}
+		return node;
+	}
+
+	renderRow(session, tree = {}) {
 		const id = session.session_id;
 		const active = state.sessionId === id;
 		const running = isSessionRunning(id);
@@ -274,6 +349,15 @@ export class SessionHistory extends HTMLElement {
 
 		row.append(
 			el("div", { class: "row-main" },
+				tree.toggle
+					? el("button", {
+						class: `toggle${tree.open ? " open" : ""}`,
+						type: "button",
+						title: tree.open ? "收起子会话" : "展开子会话",
+						dataset: { action: "toggle", id },
+						attrs: { "aria-expanded": tree.open ? "true" : "false" },
+					}, icon("chevron", 12))
+					: null,
 				running ? el("span", { class: "running-dot", title: "正在生成" }) : null,
 				session.origin === "subagent"
 					? el("span", {
@@ -286,7 +370,7 @@ export class SessionHistory extends HTMLElement {
 					: null,
 				el("span", { class: "row-title", text: sessionTitle(session), title: sessionTitle(session) }),
 			),
-			el("div", { class: "row-meta", text: sessionMeta(session) }),
+			el("div", { class: "row-meta", text: sessionMeta(session, tree.childCount) }),
 		);
 
 		const actions = el("div", { class: "actions" });
@@ -299,12 +383,14 @@ export class SessionHistory extends HTMLElement {
 			);
 		} else {
 			actions.append(
-				el("button", {
-					class: "icon-button",
-					type: "button",
-					title: session.pinned ? "取消置顶" : "置顶",
-					dataset: { action: "pin", id },
-				}, icon("bookmark", 14)),
+				session.origin === "subagent"
+					? null
+					: el("button", {
+						class: "icon-button",
+						type: "button",
+						title: session.pinned ? "取消置顶" : "置顶",
+						dataset: { action: "pin", id },
+					}, icon("bookmark", 14)),
 				el("button", {
 					class: "icon-button",
 					type: "button",
@@ -332,6 +418,11 @@ export class SessionHistory extends HTMLElement {
 			event.stopPropagation();
 			const id = actionNode.dataset.id || "";
 			switch (actionNode.dataset.action) {
+				case "toggle":
+					if (this.collapsed.has(id)) this.collapsed.delete(id);
+					else this.collapsed.add(id);
+					this.renderList();
+					break;
 				case "pin":
 					togglePin(id);
 					break;
@@ -369,7 +460,7 @@ export class SessionHistory extends HTMLElement {
 	handleKey(event) {
 		if (event.target instanceof HTMLInputElement) return;
 		const row = event.target.closest?.(".row[data-id]");
-		if (!row) return;
+		if (!row || row !== event.target) return;
 		if (event.key === "Enter" || event.key === " ") {
 			event.preventDefault();
 			selectSession(row.dataset.id);
