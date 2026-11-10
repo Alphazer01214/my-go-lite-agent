@@ -21,8 +21,8 @@ type CallBackend interface {
 	) (*protocol.Frame, error)
 }
 
-func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBackend, onDiagnostic func(plugin.Diagnostic)) {
-	if backend == nil {
+func (s *Server) serveBrowserCall(w http.ResponseWriter, r *http.Request) {
+	if s.backend == nil {
 		http.Error(w, "call backend unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -33,6 +33,7 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 		http.Error(w, "invalid browser call", http.StatusBadRequest)
 		return
 	}
+	record := s.callHub.begin(request.ID, request.Capability, request.Method, request.Payload, s.onCallStarted)
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -62,6 +63,9 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 		if err != nil {
 			return
 		}
+		// Buffer before the transport decision: a reloaded page can reattach
+		// even when the original response is already gone.
+		record.appendFrame(out)
 		select {
 		case queue <- out:
 		case <-done:
@@ -71,14 +75,16 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 	// sendFinal must not drop: it is the only res this request ever gets, so it
 	// blocks until the writer takes it or the browser goes away. A frame that
 	// cannot be represented becomes a synthetic error res rather than silence.
-	sendFinal := func(frame *protocol.Frame) {
+	sendFinal := func(frame *protocol.Frame, failed bool) {
 		out, err := browserFrame(frame, request.ID)
 		if err != nil {
 			out, err = browserFrame(callErrorResponse(request, err), request.ID)
 			if err != nil {
 				return
 			}
+			failed = true
 		}
+		s.callHub.finish(record, out, failed)
 		select {
 		case queue <- out:
 		case <-done:
@@ -90,7 +96,7 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 	// from persistent state. Host.Close cancels pending calls on shutdown.
 	callCtx := context.WithoutCancel(r.Context())
 	go func() {
-		frame, callErr := backend.CallWithEvents(
+		frame, callErr := s.backend.CallWithEvents(
 			callCtx,
 			"webui",
 			request.Capability,
@@ -99,18 +105,18 @@ func serveBrowserCall(w http.ResponseWriter, r *http.Request, backend CallBacken
 			sendEvent,
 		)
 		if callErr != nil {
-			if diagnostic, ok := callDiagnostic(request, callErrorCode(callErr), callErr.Error()); ok && onDiagnostic != nil {
-				onDiagnostic(diagnostic)
+			if diagnostic, ok := callDiagnostic(request, callErrorCode(callErr), callErr.Error()); ok {
+				s.PushDiagnostic(diagnostic)
 			}
-			sendFinal(callErrorResponse(request, callErr))
+			sendFinal(callErrorResponse(request, callErr), true)
 			return
 		}
 		if frame != nil && frame.ErrorCode != "" {
-			if diagnostic, ok := callDiagnostic(request, frame.ErrorCode, frame.ErrorMsg); ok && onDiagnostic != nil {
-				onDiagnostic(diagnostic)
+			if diagnostic, ok := callDiagnostic(request, frame.ErrorCode, frame.ErrorMsg); ok {
+				s.PushDiagnostic(diagnostic)
 			}
 		}
-		sendFinal(frame)
+		sendFinal(frame, frame != nil && frame.ErrorCode != "")
 	}()
 
 	for {

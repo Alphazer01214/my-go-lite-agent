@@ -128,6 +128,31 @@ export const HISTORY_CSS = `${BASE}
 .list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 12px; }
 .group { margin-top: 8px; }
 .group-title { padding: 4px 8px; color: var(--sx-faint); font-size: 11px; }
+.node { display: flex; flex-direction: column; }
+.node .children {
+	margin-left: 14px;
+	padding-left: 5px;
+	border-left: 1px solid var(--sx-border);
+}
+.children .row { padding-left: 6px; }
+.children .row-title { font-size: 12px; }
+.children .row-meta { font-size: 10px; }
+.toggle {
+	display: grid;
+	place-items: center;
+	width: 16px;
+	height: 16px;
+	flex: none;
+	margin-left: -3px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--sx-faint);
+}
+.toggle:hover { background: rgba(31, 35, 41, .08); color: var(--sx-text); }
+.toggle svg { transition: transform .12s ease; }
+.toggle.open svg { transform: rotate(90deg); }
 .row {
 	position: relative;
 	display: flex;

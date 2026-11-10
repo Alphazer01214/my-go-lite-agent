@@ -36,6 +36,11 @@ type Server struct {
 	runtime       []plugin.Diagnostic
 	sequence      atomic.Uint64
 	connectionSeq atomic.Uint64
+	envelopeSeq   atomic.Uint64
+	replaySeq     atomic.Uint64
+	replayMu      sync.Mutex
+	replay        []*uiEnvelope
+	callHub       *callHub
 }
 
 // NewServer creates the WebUI transport around one Host call backend.
@@ -46,7 +51,7 @@ func NewServer(registry *Registry, backend CallBackend) *Server {
 	}
 	bootstrap := registry.Bootstrap()
 	diagnostics := append([]plugin.Diagnostic(nil), bootstrap.Diagnostics...)
-	return &Server{
+	s := &Server{
 		registry:      registry,
 		backend:       backend,
 		pickDirectory: pickDirectoryNative,
@@ -54,6 +59,8 @@ func NewServer(registry *Registry, backend CallBackend) *Server {
 		diagnostics:   diagnostics,
 		discovery:     diagnostics,
 	}
+	s.callHub = newCallHub(s.onCallFinished)
+	return s
 }
 
 // combineDiagnostics keeps discovery diagnostics separate from runtime failures.
@@ -134,10 +141,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /bridge/plugins/{plugin}/start", sameOriginHandler(s.servePluginStart))
 	mux.HandleFunc("POST /bridge/plugins/{plugin}/stop", sameOriginHandler(s.servePluginStop))
 	mux.HandleFunc("GET /bridge/ui", s.serveUI)
+	mux.HandleFunc("GET /bridge/calls", s.serveCalls)
+	mux.HandleFunc("GET /bridge/calls/{call}", s.serveCallAttach)
 	mux.HandleFunc("POST /bridge/pick-directory", sameOriginHandler(s.servePickDirectory))
-	mux.HandleFunc("POST /bridge/call", sameOriginHandler(func(w http.ResponseWriter, r *http.Request) {
-		serveBrowserCall(w, r, s.backend, s.PushDiagnostic)
-	}))
+	mux.HandleFunc("POST /bridge/call", sameOriginHandler(s.serveBrowserCall))
 	mux.HandleFunc("GET /plugins/{plugin}/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		servePluginResource(w, r, s.currentRegistry(), r.PathValue("plugin"), r.PathValue("path"))
 	})

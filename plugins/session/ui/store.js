@@ -196,11 +196,13 @@ export function init() {
 
 async function bootstrap() {
 	try {
+		bindCallLifecycle();
 		await Promise.all([loadWorkspaces(), loadModels()]);
 		state.ready = true;
 		emit("state");
 		await refreshSessions();
 		await restoreTabState();
+		await recoverCalls();
 	} catch (error) {
 		reportError("初始化", error);
 	}
@@ -215,6 +217,7 @@ export function resync() {
 			await Promise.all([loadWorkspaces(), loadModels()]);
 			await refreshSessions();
 			if (state.sessionId) await refreshCurrent();
+			await recoverCalls();
 		} catch (error) {
 			reportError("同步", error);
 		} finally {
@@ -256,7 +259,10 @@ export async function refreshSessions() {
 	state.loading.sessions = true;
 	emit("state");
 	try {
-		const payload = await call("session", "list", state.workspace ? { workspace: state.workspace } : {});
+		const payload = await call("session", "list", {
+			...(state.workspace ? { workspace: state.workspace } : {}),
+			include_subagents: true,
+		});
 		state.sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
 		await pruneTabs();
 	} catch (error) {
@@ -403,6 +409,252 @@ export async function selectSession(id) {
 
 function findSession(id) {
 	return state.sessions.find((session) => session?.session_id === id) || null;
+}
+
+let callLifecycleBound = false;
+
+function findTurnByCall(callId) {
+	for (const turn of state.turns.values()) {
+		if (turn?.callId === callId) return turn;
+	}
+	return null;
+}
+
+function latestAssistantMessage() {
+	return [...state.messages].reverse().find((message) => message?.role === "assistant") || null;
+}
+
+// A persisted assistant message supersedes the matching prefix of the live
+// draft. Stripping only the prefix keeps chunks from a newer step attached.
+function stripPersistedDraft(turn) {
+	if (!turn) return;
+	const last = latestAssistantMessage();
+	if (!last) return;
+	turn.lastAssistantSeq = Math.max(Number(turn.lastAssistantSeq) || 0, Number(last.seq) || 0);
+	const text = String(last.text || "");
+	const reasoning = String(last.reasoning || "");
+	const draftText = String(turn.assistantText || "");
+	const draftReasoning = String(turn.assistantReasoning || "");
+	if (text && draftText.startsWith(text)) turn.assistantText = draftText.slice(text.length);
+	if (reasoning && draftReasoning.startsWith(reasoning)) {
+		turn.assistantReasoning = draftReasoning.slice(reasoning.length);
+	}
+}
+
+function bindCallLifecycle() {
+	if (callLifecycleBound) return;
+	const api = bridge();
+	if (typeof api.onCall !== "function") return;
+	callLifecycleBound = true;
+	api.onCall((frame) => {
+		const payload = frame?.payload && typeof frame.payload === "object" ? frame.payload : {};
+		if (payload.phase !== "finished") return;
+		const callId = String(payload.call_id || "");
+		if (!callId) return;
+		const turn = findTurnByCall(callId);
+		if (!turn || !turn.recovered || turn.finished) return;
+		void finishRecoveredTurn(turn, "done");
+	});
+}
+
+// Rebuild page-local running turns from the host call registry. This is the
+// only path that recovers a turn whose original HTTP stream belonged to a
+// previous page instance.
+async function recoverCalls() {
+	const api = bridge();
+	if (typeof api.listCalls !== "function") return;
+	let payload;
+	try {
+		payload = await api.listCalls();
+	} catch {
+		return;
+	}
+	const calls = Array.isArray(payload?.calls) ? payload.calls : [];
+	const statusByCall = new Map();
+	for (const call of calls) {
+		const callId = String(call?.call_id || "");
+		if (callId) statusByCall.set(callId, String(call.status || ""));
+	}
+	for (const call of calls) {
+		if (call?.capability !== "loop" || call?.method !== "turn") continue;
+		if (String(call.status || "") !== "running") continue;
+		const callId = String(call.call_id || "");
+		if (!callId) continue;
+		const request = call.request && typeof call.request === "object" ? call.request : {};
+		const sessionId = String(request.session_id || "");
+		const existing = findTurnByCall(callId) || (sessionId ? state.turns.get(`s:${sessionId}`) : null);
+		if (existing) {
+			if (existing.watchFailed && !existing.finished && !existing.watchActive) {
+				existing.watchFailed = false;
+				void watchRecoveredCall(existing);
+			}
+			continue;
+		}
+		recoverCall(call);
+	}
+	for (const turn of [...state.turns.values()]) {
+		if (!turn?.recovered || turn.finished || !turn.callId) continue;
+		const status = statusByCall.get(turn.callId);
+		if (status === "running") continue;
+		// Terminal or vanished host record: stop presenting a live draft. Its
+		// durable messages (or turn_end) are the source of truth.
+		void finishRecoveredTurn(turn, status ? "done" : "lost");
+	}
+	startTurnPoll();
+}
+
+function recoverCall(call) {
+	const callId = String(call.call_id || "");
+	const request = call.request && typeof call.request === "object" ? call.request : {};
+	const sessionId = String(request.session_id || "");
+	const key = sessionId ? `s:${sessionId}` : `new:${callId}`;
+	if (state.turns.has(key) || findTurnByCall(callId)) return;
+	const turn = {
+		key,
+		sessionId,
+		callId,
+		userText: String(request.user_input || ""),
+		assistantText: "",
+		assistantReasoning: "",
+		status: "streaming",
+		error: "",
+		errorCode: "",
+		startedAt: Number(call.started_at) || Date.now(),
+		userPersisted: false,
+		lastAssistantSeq: 0,
+		lastCallSeq: 0,
+		recovered: true,
+		finished: false,
+		watchActive: false,
+		watchFailed: false,
+	};
+	state.turns.set(key, turn);
+	startTurnPoll();
+	emit("state");
+	void watchRecoveredCall(turn);
+	if (sessionId && state.sessionId === sessionId) {
+		void refreshRecoveredSession(turn);
+	}
+}
+
+async function watchRecoveredCall(turn) {
+	const api = bridge();
+	if (typeof api.watchCall !== "function" || turn.finished) return;
+	if (turn.watchActive) return;
+	turn.watchActive = true;
+	const controller = new AbortController();
+	turn.watchAbort = controller;
+	try {
+		await api.watchCall(
+			turn.callId,
+			(frame) => handleRecoveredCallFrame(turn, frame),
+			{ after: Number(turn.lastCallSeq) || 0, signal: controller.signal },
+		);
+		if (!turn.finished) await finishRecoveredTurn(turn, "closed");
+	} catch (error) {
+		if (turn.finished || controller.signal.aborted) return;
+		turn.watchFailed = true;
+		emit("state");
+	} finally {
+		turn.watchActive = false;
+		if (turn.watchAbort === controller) turn.watchAbort = null;
+	}
+}
+
+function handleRecoveredCallFrame(turn, frame) {
+	if (turn.finished) return;
+	const type = String(frame?.type || "");
+	if (type === "replay") {
+		const startedAt = Number(frame.started_at);
+		if (startedAt) turn.startedAt = startedAt;
+		if (frame.truncated) turn.draftTruncated = true;
+		return;
+	}
+	if (type === "replay_end") {
+		if (!turn.userPersisted) {
+			turn.userPersisted = state.messages.some((message) =>
+				message?.role === "user" && String(message.text || "") === turn.userText);
+		}
+		stripPersistedDraft(turn);
+		emit("state");
+		return;
+	}
+	if (type === "ping") return;
+	if (type === "result") {
+		void finishRecoveredTurn(turn, frame.status === "failed" ? "error" : "done");
+		return;
+	}
+	if (type !== "event") return;
+	const seq = Number(frame.seq) || 0;
+	if (seq > 0 && seq <= (turn.lastCallSeq || 0)) return;
+	if (seq > 0) turn.lastCallSeq = seq;
+	const event = frame.event;
+	if (!event || event.type !== "evt") return;
+	let payload = event.payload;
+	if (typeof payload === "string") {
+		try {
+			payload = JSON.parse(payload);
+		} catch {
+			payload = {};
+		}
+	}
+	if (!payload || typeof payload !== "object") payload = {};
+	if (event.method === "started") {
+		const sessionId = String(payload.session_id || "");
+		if (sessionId) void bindRecoveredSession(turn, sessionId);
+		return;
+	}
+	if (event.method !== "chunk") return;
+	const channel = payload.channel === "thinking" ? "thinking" : payload.channel === "content" ? "content" : "";
+	const delta = typeof payload.delta === "string" ? payload.delta : "";
+	if (!channel || !delta) return;
+	if (channel === "thinking") turn.assistantReasoning += delta;
+	else turn.assistantText += delta;
+	if (currentTurn() === turn) emit("chunk", { key: turn.key, channel, delta });
+}
+
+async function bindRecoveredSession(turn, sessionId) {
+	if (turn.finished || !sessionId || turn.sessionId === sessionId) return;
+	adopt(turn, sessionId);
+	await refreshSessions();
+	if (state.sessionId === sessionId) await refreshRecoveredSession(turn);
+	else emit("state");
+}
+
+async function refreshRecoveredSession(turn) {
+	const sessionId = turn.sessionId;
+	if (!sessionId) return;
+	const seq = selectionSeq;
+	await Promise.all([
+		loadMeta(sessionId, seq),
+		loadMessages(sessionId, seq),
+		loadFacts(sessionId, seq),
+	]);
+	if (seq !== selectionSeq || state.sessionId !== sessionId) return;
+	turn.userPersisted = state.messages.some((message) =>
+		message?.role === "user" && String(message.text || "") === turn.userText);
+	stripPersistedDraft(turn);
+	emit("state");
+}
+
+async function finishRecoveredTurn(turn, reason) {
+	if (!turn || turn.finished) return;
+	turn.finished = true;
+	turn.watchAbort?.abort();
+	turn.watchAbort = null;
+	const sessionId = turn.sessionId;
+	await refreshSessions();
+	if (sessionId && state.sessionId === sessionId) {
+		await refreshCurrent();
+	}
+	if (state.turns.get(turn.key) === turn) state.turns.delete(turn.key);
+	stopTurnPollIfIdle();
+	emit("state");
+	if (reason === "error" && sessionId && state.sessionId === sessionId) {
+		// The terminal turn_end fact carries the user-visible error; nothing
+		// page-local remains to render.
+		emit("progress");
+	}
 }
 
 async function loadMeta(id, seq) {
@@ -671,6 +923,7 @@ async function pollRunningTurns() {
 				changed = true;
 			}
 			if (state.sessionId !== id) continue;
+			const messagesIncreased = messageCount > state.messageCount;
 			if (state.meta?.title !== info.title
 				|| state.factsTotal !== factCount
 				|| state.messageCount !== messageCount) {
@@ -678,6 +931,18 @@ async function pollRunningTurns() {
 				state.factsTotal = factCount;
 				state.messageCount = messageCount;
 				changed = true;
+			}
+			// Steps completed while the model is still streaming (assistant tool
+			// calls and tool results) are already durable. Pull them in so the
+			// process stays visible before the turn ends.
+			if (messagesIncreased && !state.loading.messages) {
+				await loadMessages(id, selectionSeq);
+				if (state.sessionId !== id) continue;
+				turn.userPersisted = state.messages.some((message) =>
+					message?.role === "user" && String(message.text || "") === turn.userText);
+				stripPersistedDraft(turn);
+				changed = true;
+				emit("state");
 			}
 		}
 	} finally {
@@ -706,6 +971,7 @@ export async function sendTurn(text, model = "") {
 	const turn = {
 		key,
 		sessionId,
+		callId: "",
 		userText: input,
 		assistantText: "",
 		assistantReasoning: "",
@@ -714,6 +980,10 @@ export async function sendTurn(text, model = "") {
 		errorCode: "",
 		startedAt: Date.now(),
 		userPersisted: false,
+		lastAssistantSeq: 0,
+		lastCallSeq: 0,
+		recovered: false,
+		finished: false,
 	};
 	state.turns.set(key, turn);
 	startTurnPoll();
@@ -726,6 +996,7 @@ export async function sendTurn(text, model = "") {
 			{ workspace, session_id: sessionId, user_input: input, model: selectedModel },
 			(event) => {
 				const payload = event?.payload || {};
+				if (event?.id && !turn.callId) turn.callId = String(event.id);
 				if (event?.method === "started" && payload.session_id) {
 					adopt(turn, String(payload.session_id));
 					emit("state");

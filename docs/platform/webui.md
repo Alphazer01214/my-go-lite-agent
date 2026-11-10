@@ -236,7 +236,9 @@ GET  /plugins/...         插件 UI 资源目录
 GET  /bridge/bootstrap    Plugin、Mount、Slot 和 Diagnostic
 POST /bridge/call         Capability Call
 POST /bridge/pick-directory  选择本地文件夹
-GET  /bridge/ui           State、Command 和 Diagnostic
+GET  /bridge/ui           State、Command、Diagnostic、Call 生命周期
+GET  /bridge/calls        可 attach 的调用快照
+GET  /bridge/calls/{id}   单调用事件流
 POST /bridge/plugins/rescan
 POST /bridge/plugins/{plugin}/start
 POST /bridge/plugins/{plugin}/stop
@@ -370,7 +372,9 @@ payload 为空或 `null` 时按 `{}` 处理。其余情况先做一次压缩再�
 
 Event 可以被丢弃。Response 不被丢弃：它要么写出去，要么被合成为一条错误 Response。
 
-浏览器断开只停止写回，不取消后端 Call。Host 继续等待后端唯一终态，并丢弃无法写入的 Event 和 Response。Host 不缓存结果，也不支持按 Call ID 重放。
+浏览器断开只停止写回，不取消后端 Call。Host 继续等待后端唯一终态，并把事件写入 Call Registry。
+
+有事件的 Call 在结束后保留 10 分钟，可通过 `/bridge/calls/{id}` 重新 attach。没有事件的 Call 在结束时立即丢弃。
 
 取消业务必须调用插件显式定义的取消方法（例如 `loop.cancel`）；刷新或关闭页面不会隐式取消。
 
@@ -491,13 +495,18 @@ SDK 是 `internal/webui/static/lite-agent.js` 导出的单例，名为 `LiteAgen
 |---|---|
 | `call(capability, method, payload, onEvent)` | 发起 Capability Call，返回 Promise |
 | `pickDirectory()` | 打开文件夹选择框，返回 Promise |
+| `listCalls()` | 读取可 attach 的调用快照，返回 Promise |
+| `watchCall(callId, onFrame, options)` | 跟随单调用 attach 流，返回 Promise |
 | `onUI(handler)` | 订阅 State 和 Command Push |
+| `onCall(handler)` | 订阅 Call 生命周期 |
 | `onDiagnostic(handler)` | 订阅 Diagnostic |
 | `onStatus(handler)` | 订阅连接状态 |
-| `onResync(handler)` | 订阅重连信号 |
+| `onResync(handler)` | 订阅重连与 `resync` 信号 |
 | `closeUI()` | 关闭 UI 流并清空全部订阅 |
 
 `capability` 和 `method` 必填，缺省抛 `TypeError`。`onEvent` 必须是函数。
+
+`watchCall` 的 `options` 支持 `after`（per-call seq，缺省 0 表示全部重放）和 `signal`（AbortSignal）。attach 流以 `replay`、`event`、`replay_end` 开始，运行中继续 `event`，最后以 `result` 结束。
 
 `call` 成功时 resolve 最终 Response 的 `payload`。失败时 reject 一个带 `code` 的 Error，`code` 取自 `error_code`，缺省为 `handler_error`。Error 上还有 `response` 字段，指向完整的 Response 帧。
 
@@ -507,7 +516,7 @@ SDK 自身抛出的错误没有 `code`，例如 HTTP 非 2xx、帧 id 不匹配�
 
 `onStatus` 注册后立即以当前状态调用一次 handler，之后只在状态变化时调用。状态取值只有三个：`connecting`、`connected`、`reconnecting`。
 
-`onUI`、`onDiagnostic`、`onStatus`、`onResync` 都不返回取消函数。同一函数重复注册会被去重，不会重复调用。`closeUI` 会清空全部订阅，之后注册的 handler 不再生效。
+`onUI`、`onDiagnostic`、`onStatus`、`onResync`、`onCall` 都不返回取消函数。同一函数重复注册会被去重，不会重复调用。`closeUI` 会清空全部订阅，之后注册的 handler 不再生效。
 
 ### 7.12 Hello
 
@@ -522,10 +531,63 @@ SDK 自身抛出的错误没有 `code`，例如 HTTP 非 2xx、帧 id 不匹配�
 ```
 
 第一条 hello 表示首次连接。之后的 hello 表示断线重连，SDK 触发 `onResync`。
+`resync` 类型的包络语义相同：客户端应重新读取 Bootstrap 与会话快照。
 
 ### 7.13 多连接
 
-Host 允许多个页面同时连接 `/bridge/ui`。每个连接有独立队列，State、Command 和 Diagnostic 广播给所有连接。新连接不会关闭旧连接，旧页面不会冻结。
+Host 允许多个页面同时连接 `/bridge/ui`。每个连接有独立队列，State、Command、Diagnostic 和 Call 生命周期广播给所有连接。新连接不会关闭旧连接，旧页面不会冻结。
+
+### 7.14 调用恢复
+
+`GET /bridge/calls` 返回当前可 attach 的调用：
+
+```json
+{
+  "version": 1,
+  "calls": [
+    {
+      "call_id": "ui-call-1",
+      "capability": "loop",
+      "method": "turn",
+      "request": {"session_id": "s-1", "user_input": "..."},
+      "status": "running",
+      "started_at": 1794277600637,
+      "event_count": 12,
+      "first_seq": 1,
+      "next_seq": 12,
+      "truncated": false
+    }
+  ]
+}
+```
+
+排序是运行中优先，再按 `started_at` 倒序。只包含浏览器发起的调用；没有事件的调用在结束后不再出现。
+
+`GET /bridge/calls/{call_id}?after=<seq>` 返回 NDJSON：
+
+```json
+{"version":1,"type":"replay","call_id":"ui-call-1","capability":"loop","method":"turn","request":{},"status":"running","started_at":1794277600637,"first_seq":1,"next_seq":12,"truncated":false}
+{"version":1,"type":"event","call_id":"ui-call-1","seq":1,"event":{"id":"ui-call-1","type":"evt","capability":"loop","method":"chunk","payload":{}}}
+{"version":1,"type":"replay_end","call_id":"ui-call-1","truncated":false}
+{"version":1,"type":"ping","call_id":"ui-call-1"}
+{"version":1,"type":"result","call_id":"ui-call-1","status":"finished","response":{}}
+```
+
+- `after` 缺省或为 0 时重放全部保留事件；
+- `replay.truncated` 为 true 表示缓冲已丢旧事件，客户端应回落到持久化消息；
+- 运行中每 15 秒一条 `ping`；
+- 调用结束后返回 `result` 并关闭流；
+- 未知或已过期的调用返回 404，错误体是 `{"error":{"code":"call_not_found","message":"..."}}`。
+
+`/bridge/ui` 同时广播 `call` 生命周期包络：
+
+```json
+{"version":2,"id":"ui-push-9","seq":9,"rseq":3,"type":"call",
+ "payload":{"call_id":"ui-call-1","phase":"started","status":"running",
+ "capability":"loop","method":"turn","started_at":1794277600637}}
+```
+
+`phase` 为 `started` 或 `finished`。`rseq` 是重放游标；客户端重连时把它作为 `/bridge/ui?after=<rseq>` 传入。重放环只包含 `call` 与 `diagnostic`，插件 UI State 不回放。
 
 ## 8. 顺序与恢复
 
@@ -534,15 +596,16 @@ UI Push 使用每个活动连接的有界 FIFO 队列，容量是 64。Publisher
 同一 Mount 的推送保持入队顺序。两个 HTTP 流之间不保证全局顺序。State 使用插件定义的 `revision` 丢弃旧值。插件必须保证 revision 跨进程重启仍递增，否则重连后的新状态会被当成旧值丢弃。Command 需要顺序时，由插件 payload 中的序号处理。
 
 某个连接离线或队列已满时，Host 标记并关闭该连接，其他连接不受影响。
-SDK 重连后收到 hello 并触发 resync。Host 不会缓存业务 State，也不会重放 Command。
+SDK 重连后把最后看到的 `rseq` 作为 `after` 传回，Host 重放期间遗漏的 Call 生命周期与 Diagnostic。
+重放环满或游标缺口时 Host 发 `resync`，SDK 触发 resync。
+Host 不重放插件 UI State 和 Command；它们由 resync 与插件读取方法恢复。
 当没有任何连接接受推送时，`host.ui.state` / `host.ui.command` 返回 `ui_not_mounted`，由插件决定重试还是降级。
 Diagnostic 快照单独保存在内存中，上限 256 条，超出后丢弃最旧的。
 
 Host 向所有活动 UI 连接广播推送。连接建立和关闭互不影响。浏览器关闭和重启不影响后端 Call。
 
-刷新或重启后不重放事件。Component 重新调用插件读取方法，Plugin Runtime 重建 State。Shell 重新读取 Bootstrap，恢复当前 Diagnostic 快照。
-
-断线重连后，SDK 触发 resync。Shell 重新读取 Bootstrap，组件通过 `resync()` 或重新挂载重新读取状态。Host 不重放断线期间的 Push。
+刷新或重启后，Component 重新调用插件读取方法，Plugin Runtime 重建 State。Shell 重新读取 Bootstrap，恢复当前 Diagnostic 快照。
+刷新页面时，Host 的 Call Registry 仍在：页面调用 `/bridge/calls` 找到运行中的调用，再用 `/bridge/calls/{id}` 重放缓冲并继续接收；终态后拉取持久化消息。插件协议不参与这条恢复路径。
 
 悬浮窗关闭只影响当前浏览器显示。Host 不删除对应诊断。
 
@@ -666,13 +729,15 @@ Drawer 使用原生 `dialog`：带遮罩，支持 Esc、遮罩点击和关闭按
 - Manifest、启动扫描、运行时手动扫描；
 - Mount Registry、Host Shell、五 Slot、Component Loader；
 - Plugin 状态快照、插件中心、Settings Renderer、依赖关系图、手动启停；
-- Bootstrap、插件 UI 资源服务、Browser Call、UI Push 和 Diagnostic Push。
+- Bootstrap、插件 UI 资源服务、Browser Call、UI Push 和 Diagnostic Push；
+- Call Registry、`/bridge/calls` attach 恢复、UI 总线游标与心跳。
 
 当前代码缺少：
 
 - 文件监听自动加载；
 - 自动重启；
-- 启停状态持久化。
+- 启停状态持久化；
+- 长调用的 background 模式。发起页仍持有原 Call 的 NDJSON 响应。
 
 ## 14. 长会话性能
 

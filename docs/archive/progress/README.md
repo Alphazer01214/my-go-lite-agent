@@ -25,6 +25,7 @@
 
 | 文档 | 主题 |
 |---|---|
+| [2026-11-10-webui-call-recovery-implementation-log.md](2026-11-10-webui-call-recovery-implementation-log.md) | 当前实现：Host Call Registry、attach 重放、UI 总线游标与会话刷新恢复 |
 | [2026-11-09-p2-fixes.md](2026-11-09-p2-fixes.md) | 当前实现：P2 修复（运行期元数据、日志收敛/轮转、LLM 超时、错误展示、shell 契约） |
 | [2026-10-27-pluginsdk-store-design-handoff.md](2026-10-27-pluginsdk-store-design-handoff.md) | 待实现：pluginsdk 进程内共享存储（Store）、ctx 注入方案与两步走策略 |
 | [2026-10-30-agent-session-llm-handoff.md](2026-10-30-agent-session-llm-handoff.md) | 待实现：tools 多步循环、model-context 接入、settings、UI 分页/实时更新与构建交接 |

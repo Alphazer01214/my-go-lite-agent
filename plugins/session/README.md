@@ -27,6 +27,21 @@ Turn 运行期间，Session Chat 每 2 秒调用一次 `session.info`。
 标题、消息数和 Facts 总数随落库进度更新，不重新加载完整消息和 Facts。
 Turn 结束后仍由 `refreshCurrent()` 加载完整正文和 Facts 列表。
 
+消息数增加时，Session Chat 会重新加载 `session.messages`。
+已完成的工具调用和工具结果因此在回合结束前就能显示。
+新持久化的助手消息会从本地 draft 中剥掉对应前缀，避免与流式文本重复。
+
+## 刷新与运行态恢复
+
+Host 为浏览器发起的调用维护 Call Registry，缓存事件并在调用结束后保留一段时间。
+刷新后 Session Chat 调用 `LiteAgent.listCalls()`，找出 `loop.turn` 的运行中调用。
+`LiteAgent.watchCall()` 重放已缓冲的 `started` 和 `chunk` 事件，恢复运行标记、已用时间与在途文本。
+停止按钮继续走现有 `loop.cancel`。
+请求里没有 `session_id` 的新会话，在重放收到 `started` 后绑定到真实会话。
+Call 结束时，`/bridge/ui` 的 `call` 生命周期或 attach 的 `result` 触发消息刷新并移除本地 draft。
+Host 重启或调用记录消失时，恢复出的本地 turn 会被收尾，不会长期显示“生成中”。
+缓冲被截断时，draft 状态显示“部分输出未恢复”，完整步骤仍以持久化消息为准。
+
 ## 会话选项卡
 
 Session Chat 顶部显示已打开会话的选项卡。
@@ -34,6 +49,16 @@ Session Chat 顶部显示已打开会话的选项卡。
 标签状态按工作区保存在 `sessionStorage`。
 刷新后恢复标签和当前标签。
 关闭标签不删除会话；运行中的标签不可关闭。
+
+## 会话树
+
+Session History 调用 `session.list` 时带 `include_subagents`。
+顶层会话按置顶和时间分组。
+`origin=subagent` 的子会话按 `parent_session_id` 嵌套在父会话下。
+父会话行显示子会话数量，可用行首箭头展开或收起。
+子会话按创建时间正序排列。
+搜索同时匹配合话标题；命中子会话时保留其祖先路径。
+子会话行不提供置顶操作。
 
 ## 回合终态
 
