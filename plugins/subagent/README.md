@@ -10,6 +10,7 @@ Subagent 把一段自足任务交给子会话执行，并把子代理的最终�
 |---|---|
 | `subagent.info` | 返回 `subagent` 工具定义，供 `tools` 目录拉取 |
 | `subagent.run` | 创建子会话并执行一次 `loop.turn` |
+| `subagent.runs` | 返回指定父会话的派出记录 |
 | `subagent.settings.get` | 读取最大委派深度 |
 | `subagent.settings.save` | 保存最大委派深度 |
 
@@ -43,6 +44,58 @@ Subagent 把一段自足任务交给子会话执行，并把子代理的最终�
 
 子会话在左侧历史列表中以树状嵌套在父会话下，可展开或收起，并带有“子代理”标记。
 父会话的 `subagent_spawned` / `subagent_finished` 事实带有 `child_session_id`，也可通过 `session.facts` 或 Trace 查看。
+
+## 派出记录
+
+`subagent.runs` 请求：
+
+```json
+{"session_id": "parent-session"}
+```
+
+响应：
+
+```json
+{
+  "session_id": "parent-session",
+  "runs": [
+    {
+      "child_session_id": "s-child",
+      "title": "subagent: self-contained brief",
+      "state": "completed",
+      "delegation_depth": 1,
+      "started_ts": 1793682665130,
+      "finished_ts": 1793682679072,
+      "duration_ms": 13941,
+      "turn_count": 1,
+      "fact_count": 7,
+      "message_count": 2
+    }
+  ]
+}
+```
+
+记录来自父会话的 `subagent_spawned` 与 `subagent_finished` Facts，按 `child_session_id` 合并。
+`state` 取 `running`、`completed`、`failed` 或 `cancelled`。
+只有 `subagent_spawned` 的记录保持 `running`。
+按 `started_ts` 倒序返回，最新派出的在前。
+子会话标题、Fact 数和消息数来自 `session.info`，读取失败时留空。
+
+## UI
+
+| 组件 | mount_id | slot |
+|---|---|---|
+| `subagent-panel` | `subagent` | `bottom` |
+
+组件声明 `static overlay`，以底部 dock 按钮出现，不参与 slot tab 分组。
+按钮显示派出总数；有运行中的子代理时显示脉冲圆点。
+点击按钮打开弹出面板，查看当前会话的完整派出记录。
+面板消费 Session UI 的 `liteagent:session-changed` 信号。
+面板挂载时广播 `liteagent:session-request`，获取当前活动会话。
+运行中的记录每秒更新已用时间。
+有运行中的记录时每 3 秒重新读取一次，dock 计数在弹层关闭时也保持更新。
+`subagent_spawned` 与 `subagent_finished` 写入后，插件向该 Mount 推送一次轻量 State。
+写入失败只记日志，不阻断委派任务。
 
 ## 深度
 

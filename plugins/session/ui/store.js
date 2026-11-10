@@ -42,10 +42,48 @@ export function on(type, handler) {
 	return () => handlers.delete(handler);
 }
 
+// 跨插件面板共享的“当前活动会话”信号：Session UI 在状态变化时广播，
+// 其他插件组件通过 session-request 主动查询一次，避免挂载顺序问题。
+const ACTIVE_SESSION_EVENT = "liteagent:session-changed";
+const ACTIVE_SESSION_REQUEST = "liteagent:session-request";
+
+let publishedSession = { session_id: "", workspace: "" };
+
+function publishActiveSession(force = false) {
+	const detail = {
+		session_id: String(state.sessionId || ""),
+		workspace: String(state.workspace || ""),
+	};
+	if (!force
+		&& detail.session_id === publishedSession.session_id
+		&& detail.workspace === publishedSession.workspace) {
+		return;
+	}
+	publishedSession = detail;
+	try {
+		globalThis.dispatchEvent?.(new CustomEvent(ACTIVE_SESSION_EVENT, { detail }));
+	} catch {
+		// 广播只驱动其他面板的可选刷新。
+	}
+}
+
+globalThis.addEventListener?.(ACTIVE_SESSION_REQUEST, () => publishActiveSession(true));
+
 function emit(type, detail) {
+	if (type === "state") publishActiveSession();
 	const handlers = bus.get(type);
 	if (!handlers) return;
 	for (const handler of [...handlers]) handler(detail);
+}
+
+function notifyTurnSettled(sessionId, status) {
+	try {
+		globalThis.dispatchEvent?.(new CustomEvent("liteagent:turn-settled", {
+			detail: { session_id: String(sessionId || ""), status },
+		}));
+	} catch {
+		// The event only drives optional cross-component refreshes.
+	}
 }
 
 function errorMessage(error) {
@@ -654,6 +692,7 @@ async function finishRecoveredTurn(turn, reason) {
 	if (sessionId && state.sessionId === sessionId) {
 		await refreshCurrent();
 	}
+	notifyTurnSettled(sessionId, reason);
 	if (state.turns.get(turn.key) === turn) state.turns.delete(turn.key);
 	stopTurnPollIfIdle();
 	emit("state");
@@ -1054,6 +1093,7 @@ export async function sendTurn(text, model = "") {
 
 		await refreshSessions();
 		if (resultId && state.sessionId === resultId) await refreshCurrent();
+		notifyTurnSettled(resultId, "done");
 		state.turns.delete(turn.key);
 		stopTurnPollIfIdle();
 		emit("state");
@@ -1067,6 +1107,7 @@ export async function sendTurn(text, model = "") {
 		if (turn.sessionId && state.sessionId === turn.sessionId) {
 			await refreshCurrent();
 		}
+		notifyTurnSettled(turn.sessionId, turn.status);
 		turn.userPersisted = state.messages.some((message) =>
 			message?.role === "user" && String(message.text || "") === turn.userText);
 		const lastUser = [...state.messages].reverse().find((message) => message?.role === "user");

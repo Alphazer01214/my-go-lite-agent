@@ -32,6 +32,20 @@ OpenAI 请求在顶层携带 `model`，不写入 `messages`。
 最终助手消息的 `reasoning` 保存完整思考内容。
 reasoning 只用于展示和留存，不写入后续请求正文。
 
+## Usage
+
+请求固定携带 `stream_options.include_usage=true`。
+供应商在流末尾返回 `usage`，`llm.stream` 响应原样返回：
+
+| 字段 | 说明 |
+|---|---|
+| `prompt_tokens` | 输入 token |
+| `completion_tokens` | 输出 token |
+| `total_tokens` | 总 token |
+
+供应商未返回 `usage` 时，响应省略该字段。
+不支持 `stream_options` 的端点会返回 `llm_upstream_error`。
+
 ## Tool Calls
 
 Tool 定义转换为 OpenAI `tools` 字段。

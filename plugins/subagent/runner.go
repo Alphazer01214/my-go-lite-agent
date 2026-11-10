@@ -114,6 +114,7 @@ func (p *plugin) run(
 			"started_ts":        started.UnixMilli(),
 		}),
 	}})
+	p.publishRunsState(parentID, "running")
 
 	turn, turnErr := p.callTurn(ctx, contextID, child.SessionId, workspace, parent.Model, prompt)
 	state := "completed"
@@ -189,6 +190,7 @@ func (p *plugin) finishParent(
 		Role: "host",
 		Meta: mustJSON(meta),
 	}})
+	p.publishRunsState(parentID, state)
 }
 
 func (p *plugin) parentDepth(ctx context.Context, contextID, parentID string) (int, error) {

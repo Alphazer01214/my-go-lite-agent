@@ -115,13 +115,3 @@ func messageHash(messages []pluginsdk.ChatMessage) string {
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
-
-func estimateTokens(messages []pluginsdk.ChatMessage) int {
-	total := 0
-	for _, message := range messages {
-		runes := len([]rune(message.Text))
-		total += (runes + 3) / 4
-		total += 4
-	}
-	return total
-}

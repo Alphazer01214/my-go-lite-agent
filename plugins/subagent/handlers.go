@@ -39,6 +39,18 @@ func (p *plugin) handleRun(ctx context.Context, req *pluginsdk.Request) (json.Ra
 	return json.Marshal(result)
 }
 
+func (p *plugin) handleRuns(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
+	var input runsReq
+	if err := pluginsdk.Decode(req, &input); err != nil {
+		return nil, pluginsdk.ErrCode(pluginsdk.CodeBadArguments, err.Error())
+	}
+	result, err := p.listRuns(ctx, req.ContextID, input.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
 func (p *plugin) handleSettingsGet(_ context.Context, _ *pluginsdk.Request) (json.RawMessage, error) {
 	return json.Marshal(settingsGetResp{
 		Values: settingsValues{MaxDepth: p.currentConfig().MaxDepth},

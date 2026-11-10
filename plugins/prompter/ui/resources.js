@@ -12,19 +12,20 @@ import { panelStyles } from "./styles.js";
 const dockStyles = `
 :host {
 	display: block;
-	height: auto;
+	height: 100%;
 	overflow: visible;
 }
 .dock {
 	display: flex;
 	align-items: center;
-	padding: 5px 12px;
+	height: 100%;
 }
 .dock-button {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 4px 10px;
+	height: 26px;
+	padding: 0 10px;
 	border: 1px solid rgba(127, 127, 127, .35);
 	border-radius: 6px;
 	background: transparent;
@@ -34,6 +35,7 @@ const dockStyles = `
 	cursor: pointer;
 }
 .dock-button:hover { background: rgba(127, 127, 127, .12); }
+.dock-button[aria-expanded="true"] { border-color: var(--accent, #4d6bfe); background: var(--accent-soft, #eef3ff); }
 .resources-dialog {
 	width: min(980px, calc(100vw - 40px));
 	max-height: min(760px, calc(100vh - 40px));
@@ -60,6 +62,7 @@ const dockStyles = `
 `;
 
 class PrompterResources extends HTMLElement {
+	static overlay = true;
 	static tabTitle = "MCP / Skills";
 	static tabOrder = 10;
 

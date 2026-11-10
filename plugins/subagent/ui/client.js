@@ -6,7 +6,7 @@ export async function callCapability(capability, method, payload = {}) {
 	return api.call(capability, method, payload ?? {});
 }
 
-export async function callPrompter(method, payload = {}) {
+export async function callSubagent(method, payload = {}) {
 	return callCapability("subagent", method, payload);
 }
 

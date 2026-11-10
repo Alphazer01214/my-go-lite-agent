@@ -50,14 +50,19 @@ func (h *toolLoopHost) llmRequest(index int) json.RawMessage {
 }
 
 func (h *toolLoopHost) hasAppend(fragment string) bool {
+	return h.appendCount(fragment) > 0
+}
+
+func (h *toolLoopHost) appendCount(fragment string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	count := 0
 	for _, payload := range h.appends {
 		if strings.Contains(string(payload), fragment) {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 func (h *toolLoopHost) run(t *testing.T) {
@@ -94,9 +99,9 @@ func (h *toolLoopHost) run(t *testing.T) {
 			llmCall := h.llm
 			h.mu.Unlock()
 			if llmCall == 1 {
-				payload = json.RawMessage(`{"model":"model-a","messages":[{"role":"assistant","text":"","tool_calls":[{"id":"call-1","type":"function","function_call":{"name":"file_glob","arguments":"{\"pattern\":\"*.go\"}"}}]}]}`)
+				payload = json.RawMessage(`{"model":"model-a","usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12},"messages":[{"role":"assistant","text":"","tool_calls":[{"id":"call-1","type":"function","function_call":{"name":"file_glob","arguments":"{\"pattern\":\"*.go\"}"}}]}]}`)
 			} else {
-				payload = json.RawMessage(`{"model":"model-a","messages":[{"role":"assistant","text":"done"}]}`)
+				payload = json.RawMessage(`{"model":"model-a","usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23},"messages":[{"role":"assistant","text":"done"}]}`)
 			}
 		default:
 			t.Errorf("unexpected call %s", call)
@@ -170,6 +175,12 @@ func TestAgentLoopExecutesToolCallsAndContinues(t *testing.T) {
 	}
 	if len(resp.Messages) == 0 || !strings.Contains(resp.Messages[len(resp.Messages)-1].Text, "done") {
 		t.Fatalf("response messages = %+v, want final answer", resp.Messages)
+	}
+	if got := host.appendCount(`"type":"usage"`); got != 2 {
+		t.Fatalf("usage fact count = %d, want 2; appends=%v", got, host.appends)
+	}
+	if !host.hasAppend(`"type":"usage","role":"host","meta":{"turn_id"`) || !host.hasAppend(`"total_tokens":23`) {
+		t.Fatalf("usage meta not recorded; appends=%v", host.appends)
 	}
 
 	var request map[string]json.RawMessage

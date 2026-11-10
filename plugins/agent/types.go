@@ -21,6 +21,7 @@ const (
 	factTypeMessage      = "message"
 	factTypeTurnStart    = "turn_start"
 	factTypeTurnEnd      = "turn_end"
+	factTypeUsage        = "usage"
 )
 
 // fromWebUI 由前端发出的请求，包括 session 等相关信息
@@ -100,6 +101,22 @@ type llmStreamMeta struct {
 type llmStreamResp struct {
 	Model    string                  `json:"model"`
 	Messages []pluginsdk.ChatMessage `json:"messages"`
+	Usage    *llmUsage               `json:"usage,omitempty"`
+}
+
+type llmUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type usageMeta struct {
+	TurnId           string `json:"turn_id,omitempty"`
+	Step             int    `json:"step,omitempty"`
+	Model            string `json:"model,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
 }
 
 type turnResp struct {

@@ -64,8 +64,10 @@ const edgeLabels = Object.freeze({
 
 const nodeWidth = 180;
 const nodeHeight = 76;
-const columnGap = 230;
-const rowGap = 96;
+const nodeGapX = 44;
+const rowGap = 64;
+const graphMarginX = 40;
+const graphMarginY = 36;
 
 function appendChipList(document, parent, className, label, values, emptyText, options = {}) {
 	const list = document.createElement("div");
@@ -197,32 +199,45 @@ function buildRelationshipGraphModel(plugins, includeHost) {
 		}
 	}
 
-	const pluginLeft = includeHost ? 250 : 70;
-	const maxRows = Math.max(1, ...[...groups.values()].map((group) => group.length));
-	const maxDepth = Math.max(0, ...names.map((name) => depths.get(name) || 0));
-	const width = Math.max(620, pluginLeft + nodeWidth + maxDepth * columnGap);
-	const height = Math.max(300, 80 + maxRows * rowGap);
-	const nodes = names.map((name) => {
-		const plugin = byName.get(name);
-		const depth = depths.get(name) || 0;
-		const group = groups.get(depth) || [name];
-		const index = group.indexOf(name);
-		const groupHeight = group.length * rowGap;
-		return {
-			id: name,
-			kind: "plugin",
-			state: displayState(plugin, null),
-			enabled: plugin?.enabled !== false,
-			depth,
-			x: pluginLeft + depth * columnGap,
-			y: 44 + (height - 80 - groupHeight) / 2 + index * rowGap,
-			missing: !plugin || plugin.missing === true,
-			provides: [...(plugin?.provides || [])],
-			dependsOn: [...(plugin?.depends_on || [])],
-			usedBy: [...(usedBy.get(name) || [])].sort(),
-			mounts: [...(plugin?.mounts || [])],
-		};
-	});
+	// 依赖深度决定行，行内节点居中。竖向分层比横向长条更适合插件中心的高窄面板。
+	const depthsInOrder = [...new Set(names.map((name) => depths.get(name) || 0))].sort((a, b) => a - b);
+	const baseRow = includeHost ? 1 : 0;
+	const rowOf = new Map(depthsInOrder.map((depth, index) => [depth, baseRow + index]));
+	const rowCount = baseRow + depthsInOrder.length;
+	const maxRowCount = Math.max(1, ...[...groups.values()].map((group) => group.length));
+	const width = Math.max(
+		nodeWidth + graphMarginX * 2,
+		maxRowCount * nodeWidth + (maxRowCount - 1) * nodeGapX + graphMarginX * 2,
+	);
+	const height = graphMarginY * 2 + rowCount * nodeHeight + Math.max(0, rowCount - 1) * rowGap;
+	const rowPitch = nodeHeight + rowGap;
+	const rowCenter = (rowIndex) => graphMarginY + nodeHeight / 2 + rowIndex * rowPitch;
+
+	const nodes = [];
+	for (const depth of depthsInOrder) {
+		const group = groups.get(depth) || [];
+		const count = group.length;
+		const rowWidth = count * nodeWidth + Math.max(0, count - 1) * nodeGapX;
+		const startX = (width - rowWidth) / 2 + nodeWidth / 2;
+		const y = rowCenter(rowOf.get(depth));
+		group.forEach((name, index) => {
+			const plugin = byName.get(name);
+			nodes.push({
+				id: name,
+				kind: "plugin",
+				state: displayState(plugin, null),
+				enabled: plugin?.enabled !== false,
+				depth,
+				x: startX + index * (nodeWidth + nodeGapX),
+				y,
+				missing: !plugin || plugin.missing === true,
+				provides: [...(plugin?.provides || [])],
+				dependsOn: [...(plugin?.depends_on || [])],
+				usedBy: [...(usedBy.get(name) || [])].sort(),
+				mounts: [...(plugin?.mounts || [])],
+			});
+		});
+	}
 
 	const edges = [];
 	if (includeHost) {
@@ -232,8 +247,8 @@ function buildRelationshipGraphModel(plugins, includeHost) {
 			state: "active",
 			enabled: true,
 			depth: -1,
-			x: 70,
-			y: height / 2,
+			x: width / 2,
+			y: rowCenter(0),
 			missing: false,
 			provides: [],
 			dependsOn: [],
@@ -265,26 +280,30 @@ function svgElement(document, tag, attributes = {}) {
 }
 
 function edgeGeometry(edge) {
-	const nodeWidthHalf = nodeWidth / 2;
+	const halfWidth = nodeWidth / 2;
+	const halfHeight = nodeHeight / 2;
 	if (edge.type === "mount") {
-		const startX = edge.from.x + nodeWidthHalf;
-		const endX = edge.to.x - nodeWidthHalf;
+		const startX = edge.from.x;
+		const startY = edge.from.y + halfHeight;
+		const endX = edge.to.x;
+		const endY = edge.to.y - halfHeight;
+		const bendY = (startY + endY) / 2;
 		return {
-			startX,
-			endX,
-			path: `M ${startX} ${edge.from.y} C ${startX + 44} ${edge.from.y}, ${endX - 44} ${edge.to.y}, ${endX} ${edge.to.y}`,
+			path: `M ${startX} ${startY} C ${startX} ${bendY}, ${endX} ${bendY}, ${endX} ${endY}`,
 			labelX: (startX + endX) / 2,
-			labelY: (edge.from.y + edge.to.y) / 2 - 7,
+			labelY: bendY,
 		};
 	}
-	const startX = edge.from.x - nodeWidthHalf;
-	const endX = edge.to.x + nodeWidthHalf;
+	// 依赖边从下层依赖方指向上层被依赖方。
+	const startX = edge.from.x;
+	const startY = edge.from.y - halfHeight;
+	const endX = edge.to.x;
+	const endY = edge.to.y + halfHeight;
+	const bendY = (startY + endY) / 2;
 	return {
-		startX,
-		endX,
-		path: `M ${startX} ${edge.from.y} C ${startX - 44} ${edge.from.y}, ${endX + 44} ${edge.to.y}, ${endX} ${edge.to.y}`,
+		path: `M ${startX} ${startY} C ${startX} ${bendY}, ${endX} ${bendY}, ${endX} ${endY}`,
 		labelX: (startX + endX) / 2,
-		labelY: (edge.from.y + edge.to.y) / 2 - 7,
+		labelY: bendY,
 	};
 }
 
@@ -372,14 +391,17 @@ export function renderDependencyGraph(document, root, plugins, options = {}) {
 			"data-to": edge.to,
 		});
 		svg.append(path);
-		const label = svgElement(document, "text", {
-			x: geometry.labelX,
-			y: geometry.labelY,
-			"text-anchor": "middle",
-			class: `graph-edge-label${active ? " is-active" : ""}${selectedId && !active ? " is-muted" : ""}`,
-		});
-		label.textContent = edgeLabels[edge.type] || edge.type;
-		svg.append(label);
+		// 装载边由虚线样式和 Host 节点说明表达，省略重复文字标签。
+		if (edge.type === "depends") {
+			const label = svgElement(document, "text", {
+				x: geometry.labelX,
+				y: geometry.labelY,
+				"text-anchor": "middle",
+				class: `graph-edge-label${active ? " is-active" : ""}${selectedId && !active ? " is-muted" : ""}`,
+			});
+			label.textContent = edgeLabels[edge.type] || edge.type;
+			svg.append(label);
+		}
 	}
 
 	for (const node of model.nodes) {

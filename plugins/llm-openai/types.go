@@ -15,6 +15,7 @@ type streamReq struct {
 type streamResp struct {
 	Model    string                  `json:"model"`
 	Messages []pluginsdk.ChatMessage `json:"messages"`
+	Usage    *usage                  `json:"usage,omitempty"`
 }
 
 type chunkEvent struct {
@@ -23,11 +24,16 @@ type chunkEvent struct {
 }
 
 type chatRequest struct {
-	Model     string        `json:"model"`
-	Stream    bool          `json:"stream"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
-	Messages  []wireMessage `json:"messages"`
-	Tools     []wireTool    `json:"tools,omitempty"`
+	Model         string         `json:"model"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Messages      []wireMessage  `json:"messages"`
+	Tools         []wireTool     `json:"tools,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type wireMessage struct {
@@ -57,6 +63,10 @@ type usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+func (u usage) empty() bool {
+	return u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0
 }
 
 type chatChunk struct {

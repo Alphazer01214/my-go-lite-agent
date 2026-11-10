@@ -37,8 +37,8 @@ func TestBuildContextViewTruncatesMessages(t *testing.T) {
 	if view.Source != "live" || view.SessionID != "s-1" || view.TurnID != "t-1" || view.Model != "model-a" {
 		t.Fatalf("view = %+v", view)
 	}
-	if view.Usage.TokenEstimate != estimateTokens(messages) {
-		t.Fatalf("token estimate = %d, want %d", view.Usage.TokenEstimate, estimateTokens(messages))
+	if view.Usage.PromptTokens != 0 || view.Usage.TotalTokens != 0 {
+		t.Fatalf("usage should be empty without a recorded fact: %+v", view.Usage)
 	}
 	if view.Usage.MessageCount != 3 || view.Usage.ToolCount != 1 || view.Usage.ToolCatalogGeneration != 7 {
 		t.Fatalf("usage = %+v", view.Usage)
@@ -118,9 +118,6 @@ func TestContextViewForReturnsCachedView(t *testing.T) {
 	if view.SessionID != "s-1" || view.Source != "live" || len(view.Messages) != 1 {
 		t.Fatalf("view = %+v", view)
 	}
-	if view.Usage.TokenEstimate == 0 {
-		t.Fatal("token estimate should be positive")
-	}
 }
 
 func TestContextViewForEmpty(t *testing.T) {
@@ -134,10 +131,29 @@ func TestContextViewForEmpty(t *testing.T) {
 	}
 }
 
-func TestEstimateMessageTokensAndTruncation(t *testing.T) {
-	if got := estimateMessageTokens("abcd"); got != 5 {
-		t.Fatalf("tokens = %d, want 5", got)
+func TestUsageFromFactsUsesLatestRecordedUsage(t *testing.T) {
+	facts := []sessionFact{
+		{Seq: 1, Type: factTypeUsage, Meta: json.RawMessage(`{"turn_id":"t-1","step":1,"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)},
+		{Seq: 2, Type: factTypeUsage, Meta: json.RawMessage(`{"turn_id":"t-1","step":2,"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)},
 	}
+	meta := usageFromFacts(facts)
+	if meta == nil || meta.PromptTokens != 20 || meta.CompletionTokens != 3 || meta.TotalTokens != 23 {
+		t.Fatalf("usage = %+v, want latest fact", meta)
+	}
+
+	view := contextView{}
+	applyUsage(&view, meta)
+	if view.Usage.PromptTokens != 20 || view.Usage.TotalTokens != 23 {
+		t.Fatalf("view usage = %+v", view.Usage)
+	}
+
+	applyUsage(&view, usageFromFacts([]sessionFact{{Seq: 3, Type: factTypeMessage}}))
+	if view.Usage.PromptTokens != 20 {
+		t.Fatalf("missing usage fact must keep view usage: %+v", view.Usage)
+	}
+}
+
+func TestTruncateContextText(t *testing.T) {
 	value, truncated := truncateContextText("hello", 3, 10)
 	if value != "hel" || !truncated {
 		t.Fatalf("truncate = %q, %v", value, truncated)

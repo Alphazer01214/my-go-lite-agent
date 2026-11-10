@@ -11,6 +11,7 @@ const (
 	factTypeSystemPrompt    = "system_prompt"
 	factTypeRuntimeContext  = "runtime_context"
 	factTypeContextSnapshot = "context_snapshot"
+	factTypeUsage           = "usage"
 
 	trackStatic  = "static"
 	trackDynamic = "dynamic"
@@ -136,11 +137,19 @@ type snapshotMeta struct {
 	SystemPromptHash      string   `json:"system_prompt_hash,omitempty"`
 	RuntimeContextHash    string   `json:"runtime_context_hash,omitempty"`
 	MessagesHash          string   `json:"messages_hash,omitempty"`
-	TokenEstimate         int      `json:"token_estimate"`
 	MessageCount          int      `json:"message_count"`
 	ToolCatalogGeneration int64    `json:"tool_catalog_generation,omitempty"`
 	ToolCatalogHash       string   `json:"tool_catalog_hash,omitempty"`
 	ToolNames             []string `json:"tool_names,omitempty"`
+}
+
+type usageMeta struct {
+	TurnId           string `json:"turn_id,omitempty"`
+	Step             int    `json:"step,omitempty"`
+	Model            string `json:"model,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
 }
 
 type toolListResp struct {

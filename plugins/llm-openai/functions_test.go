@@ -34,21 +34,28 @@ func TestReadSSEDispatchesReasoningAndContentDeltas(t *testing.T) {
 	}, "\n")
 
 	var got []string
-	if _, err := readSSE(strings.NewReader(stream), func(channel, delta string) error {
+	calls, used, err := readSSE(strings.NewReader(stream), func(channel, delta string) error {
 		got = append(got, channel+":"+delta)
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("readSSE: %v", err)
 	}
 	want := []string{"thinking:先分析", "thinking:再判断", "content:你", "content:好"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("chunks = %q, want %q", got, want)
 	}
+	if len(calls) != 0 {
+		t.Fatalf("tool calls = %+v, want none", calls)
+	}
+	if used.PromptTokens != 1 {
+		t.Fatalf("usage = %+v, want prompt_tokens 1", used)
+	}
 }
 
 func TestReadSSEStopsOnErrorChunk(t *testing.T) {
 	stream := `data: {"error":{"message":"bad key"}}` + "\n"
-	_, err := readSSE(strings.NewReader(stream), func(string, string) error { return nil })
+	_, _, err := readSSE(strings.NewReader(stream), func(string, string) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "bad key") {
 		t.Fatalf("err = %v, want upstream error", err)
 	}
@@ -83,6 +90,9 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"tools"`) || !strings.Contains(string(raw), "file_glob") {
 		t.Fatalf("request omitted tools: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"stream_options":{"include_usage":true}`) {
+		t.Fatalf("request omitted include_usage: %s", raw)
 	}
 }
 
@@ -184,6 +194,49 @@ func TestStreamUpstreamStatusHidesDetail(t *testing.T) {
 	}
 }
 
+func TestStreamReturnsProviderUsage(t *testing.T) {
+	var requestBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		stream := strings.Join([]string{
+			`data: {"choices":[{"delta":{}}]}`,
+			``,
+			`data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150}}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	p := &plugin{
+		cfg: config{
+			DefaultModel: "model-a",
+			Models:       []ModelConfig{{ID: "model-a", BaseURL: server.URL}},
+		},
+		client: server.Client(),
+	}
+	resp, err := p.stream(context.Background(), &pluginsdk.Request{ID: "test"}, &streamReq{
+		Model:    "model-a",
+		Messages: []pluginsdk.ChatMessage{{Role: pluginsdk.RoleUser, Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("usage missing from stream response")
+	}
+	if resp.Usage.PromptTokens != 120 || resp.Usage.CompletionTokens != 30 || resp.Usage.TotalTokens != 150 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if !strings.Contains(string(requestBody), `"stream_options":{"include_usage":true}`) {
+		t.Fatalf("request omitted include_usage: %s", requestBody)
+	}
+}
+
 func TestStreamIdleTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -252,7 +305,7 @@ func TestReadSSEAccumulatesToolCallDeltas(t *testing.T) {
 		``,
 	}, "\n")
 
-	toolCalls, err := readSSE(strings.NewReader(stream), func(string, string) error { return nil })
+	toolCalls, _, err := readSSE(strings.NewReader(stream), func(string, string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

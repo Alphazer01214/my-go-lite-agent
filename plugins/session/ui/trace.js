@@ -56,6 +56,9 @@ function factPreview(fact) {
 }
 
 export class SessionTrace extends HTMLElement {
+	static tabTitle = "Facts";
+	static tabOrder = 10;
+
 	constructor() {
 		super();
 		this.attachShadow({ mode: "open" });

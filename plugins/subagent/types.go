@@ -50,10 +50,13 @@ type infoTool struct {
 
 type sessionInfo struct {
 	SessionId       string `json:"session_id"`
+	Title           string `json:"title,omitempty"`
 	Workspace       string `json:"workspace"`
 	ParentSessionId string `json:"parent_session_id"`
 	Origin          string `json:"origin"`
 	Model           string `json:"model"`
+	FactCount       int    `json:"fact_count"`
+	MessageCount    int    `json:"message_count"`
 }
 
 type sessionCreateReq struct {
@@ -69,6 +72,8 @@ type sessionFact struct {
 	Role        string          `json:"role,omitempty"`
 	TextContent string          `json:"text_content,omitempty"`
 	Meta        json.RawMessage `json:"meta,omitempty"`
+	Seq         int             `json:"seq,omitempty"`
+	Timestamp   int64           `json:"timestamp,omitempty"`
 }
 
 type appendReq struct {
@@ -78,6 +83,39 @@ type appendReq struct {
 
 type appendResp struct {
 	Seqs []int `json:"seqs"`
+}
+
+type factsReq struct {
+	SessionID string   `json:"session_id"`
+	Types     []string `json:"types,omitempty"`
+}
+
+type factsResp struct {
+	Facts []sessionFact `json:"facts"`
+	Total int           `json:"total"`
+}
+
+type runsReq struct {
+	SessionID string `json:"session_id"`
+}
+
+type runView struct {
+	ChildSessionID  string `json:"child_session_id"`
+	Title           string `json:"title,omitempty"`
+	State           string `json:"state"`
+	DelegationDepth int    `json:"delegation_depth"`
+	StartedTs       int64  `json:"started_ts"`
+	FinishedTs      int64  `json:"finished_ts,omitempty"`
+	DurationMs      int64  `json:"duration_ms,omitempty"`
+	TurnCount       int    `json:"turn_count,omitempty"`
+	Error           string `json:"error,omitempty"`
+	FactCount       int    `json:"fact_count,omitempty"`
+	MessageCount    int    `json:"message_count,omitempty"`
+}
+
+type runsResp struct {
+	SessionID string    `json:"session_id"`
+	Runs      []runView `json:"runs"`
 }
 
 type turnReq struct {

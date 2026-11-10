@@ -277,7 +277,13 @@ body.resizing {
 }
 
 .slot-bottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .slot-bottom:empty {
@@ -1200,6 +1206,10 @@ body.plugin-drawer-open {
 }
 
 .plugin-drawer .plugin-graph {
+  display: flex;
+  align-items: center;
+  align-items: safe center;
+  justify-content: center;
   min-height: 0;
   max-height: none;
   padding: 16px;

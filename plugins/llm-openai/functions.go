@@ -118,7 +118,7 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 	reader = &cappedReader{reader: reader, remaining: cfg.maxResponseBytes()}
 
 	var text, reasoning strings.Builder
-	toolCalls, err := readSSE(reader, func(channel, delta string) error {
+	toolCalls, usage, err := readSSE(reader, func(channel, delta string) error {
 		if channel == "thinking" {
 			reasoning.WriteString(delta)
 		} else {
@@ -131,7 +131,7 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 		return nil, p.streamFailure(ctx, totalCtx, &idleExpired, url, err, idleTimeout)
 	}
 
-	return &streamResp{
+	out := &streamResp{
 		Model: model.ID,
 		Messages: []pluginsdk.ChatMessage{{
 			Role:      pluginsdk.RoleAssistant,
@@ -139,7 +139,11 @@ func (p *plugin) stream(ctx context.Context, req *pluginsdk.Request, in *streamR
 			Reasoning: reasoning.String(),
 			ToolCalls: toolCalls,
 		}},
-	}, nil
+	}
+	if !usage.empty() {
+		out.Usage = &usage
+	}
+	return out, nil
 }
 
 func (p *plugin) streamFailure(
@@ -178,19 +182,22 @@ func buildChatRequest(model string, messages []pluginsdk.ChatMessage, tools []pl
 		})
 	}
 	return chatRequest{
-		Model:     model,
-		Stream:    true,
-		MaxTokens: maxTokens,
-		Messages:  wireMessages(messages),
-		Tools:     outTools,
+		Model:         model,
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+		MaxTokens:     maxTokens,
+		Messages:      wireMessages(messages),
+		Tools:         outTools,
 	}
 }
 
-func readSSE(r io.Reader, onDelta func(channel, delta string) error) ([]pluginsdk.ToolCall, error) {
+func readSSE(r io.Reader, onDelta func(channel, delta string) error) ([]pluginsdk.ToolCall, usage, error) {
+	// OpenAI sends the usage chunk last, with empty choices.
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	calls := make(map[int]*toolCallAccumulator)
 	order := make([]int, 0)
+	var lastUsage usage
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -205,7 +212,10 @@ func readSSE(r io.Reader, onDelta func(channel, delta string) error) ([]pluginsd
 			continue
 		}
 		if chunk.Error != nil {
-			return nil, fmt.Errorf("llm stream error: %s", chunk.Error.Message)
+			return nil, usage{}, fmt.Errorf("llm stream error: %s", chunk.Error.Message)
+		}
+		if !chunk.Usage.empty() {
+			lastUsage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -217,12 +227,12 @@ func readSSE(r io.Reader, onDelta func(channel, delta string) error) ([]pluginsd
 		}
 		if reasoning != "" {
 			if err := onDelta("thinking", reasoning); err != nil {
-				return nil, err
+				return nil, usage{}, err
 			}
 		}
 		if delta.Content != "" {
 			if err := onDelta("content", delta.Content); err != nil {
-				return nil, err
+				return nil, usage{}, err
 			}
 		}
 		for _, item := range delta.ToolCalls {
@@ -249,9 +259,13 @@ func readSSE(r io.Reader, onDelta func(channel, delta string) error) ([]pluginsd
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, usage{}, err
 	}
-	return finalizeToolCalls(calls, order)
+	toolCalls, err := finalizeToolCalls(calls, order)
+	if err != nil {
+		return nil, usage{}, err
+	}
+	return toolCalls, lastUsage, nil
 }
 
 func finalizeToolCalls(calls map[int]*toolCallAccumulator, order []int) ([]pluginsdk.ToolCall, error) {

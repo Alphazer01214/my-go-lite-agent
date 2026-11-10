@@ -116,16 +116,13 @@ func TestReplaceModelPayloadPreservesMetadata(t *testing.T) {
 	}
 }
 
-func TestMessageHashAndTokenEstimateAreStable(t *testing.T) {
+func TestMessageHashIsStable(t *testing.T) {
 	messages := []pluginsdk.ChatMessage{
 		{Role: pluginsdk.RoleSystem, Text: strings.Repeat("a", 40)},
 		{Role: pluginsdk.RoleUser, Text: "hello"},
 	}
 	if messageHash(messages) != messageHash(messages) {
 		t.Fatal("message hash is not stable")
-	}
-	if estimateTokens(messages) <= 0 {
-		t.Fatal("token estimate must be positive")
 	}
 }
 

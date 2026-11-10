@@ -22,12 +22,20 @@ Agent 按 `max_steps` 执行模型与工具循环。
 
 1. 调用 `llm.stream`，只传模型选择和会话元数据。
 2. 将助手消息写入 Session。
-3. 没有 `tool_calls` 时返回最终回答。
-4. 有 `tool_calls` 时逐个调用 `tool.call`。
-5. 将工具结果写成 `role=tool` 的 message Fact。
-6. 工具结果落库后继续下一轮模型调用。
+3. 响应带 `usage` 时追加一条 `type=usage` 的 Fact。
+4. 没有 `tool_calls` 时返回最终回答。
+5. 有 `tool_calls` 时逐个调用 `tool.call`。
+6. 将工具结果写成 `role=tool` 的 message Fact。
+7. 工具结果落库后继续下一轮模型调用。
 
 工具调用达到 `max_steps` 仍未结束时返回 `max_steps_exceeded`。
+
+## Usage
+
+`usage` Fact 的 `role` 为 `host`。
+`meta` 包含 `turn_id`、`step`、`model`、`prompt_tokens`、`completion_tokens` 和 `total_tokens`。
+每次模型调用记录一条；供应商未返回 `usage` 时不写 Fact。
+Agent 不估算 token。
 
 ## 下游请求
 

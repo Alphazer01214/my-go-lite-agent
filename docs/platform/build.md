@@ -66,6 +66,7 @@ Bash 脚本的参数别名：
 | `liteagent-server` | Host 可执行 | `dist/liteagent-server` |
 | `plugin:agent` | 插件可执行 | `dist/plugins/agent/agent` |
 | `plugin:session` | 插件可执行 | `dist/plugins/session/session` |
+| `plugin:git` | 插件可执行 | `dist/plugins/git/git` |
 | `plugin:llm-openai` | 插件可执行 | `dist/plugins/llm-openai/llm-openai` |
 | `plugin:prompter` | 插件可执行 | `dist/plugins/prompter/prompter` |
 | `plugin:tools` | 插件可执行 | `dist/plugins/tools/tools` |

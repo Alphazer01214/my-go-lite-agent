@@ -1,0 +1,18 @@
+{
+  "name": "git",
+  "version": "0.1.0",
+  "protocol": 1,
+  "entry": "git",
+  "provides": ["git"],
+  "requires": ["workspace"],
+  "depends_on": ["session"],
+  "autostart": true,
+  "priority": 0,
+  "description": "Workspace Git panel: status, branches and diffs",
+  "ui": {
+    "entry": "ui/main.js",
+    "components": [
+      { "tag": "git-board", "mount_id": "git", "slot": "right" }
+    ]
+  }
+}

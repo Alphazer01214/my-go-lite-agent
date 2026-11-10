@@ -26,7 +26,9 @@
 {"session_id": "s-1"}
 ```
 
-`session_id` 可省略，省略时返回最近一次装配的会话；没有 live 缓存时由 UI 传入最近会话走派生路径。
+`session_id` 可省略，省略时返回最近一次装配的会话。
+Context 面板始终传入当前活动会话的 `session_id`。
+活动会话由 Session UI 的 `liteagent:session-changed` 信号提供。
 
 响应：
 
@@ -38,7 +40,9 @@
   "source": "live",
   "assembled_at": "RFC3339",
   "usage": {
-    "token_estimate": 12345,
+    "prompt_tokens": 12345,
+    "completion_tokens": 678,
+    "total_tokens": 13023,
     "context_window": 128000,
     "percent": 9.6,
     "message_count": 42,
@@ -46,7 +50,7 @@
     "tool_catalog_generation": 12
   },
   "messages": [
-    {"seq": 1, "role": "system", "tokens": 800, "text": "...", "truncated": false}
+    {"seq": 1, "role": "system", "text": "...", "truncated": false}
   ],
   "tools": [
     {"name": "file_read", "description": "...", "parameters": {}}
@@ -63,6 +67,11 @@
 ```
 
 `source` 取 `live` / `derived` / `none`。
+
+三个 token 字段来自该会话最近一条 `usage` Fact，由 Agent 在每次模型调用后写入。
+没有 `usage` Fact 时三个字段省略，`percent` 也为 0。
+`live` 视图只采用 `turn_id` 与缓存装配一致的用量。
+不返回 token 估算值，也不返回消息级 token 数。
 
 ## 3. Skills
 
@@ -277,7 +286,7 @@ MCP `status` 取 `disabled` / `unconfigured` / `connecting` / `connected` / `err
 ```text
 WebUI.SetState("context", {
   session_id, turn_id, model,
-  usage: {token_estimate, message_count, tool_count, ...},
+  usage: {prompt_tokens, completion_tokens, total_tokens, message_count, tool_count, ...},
   updated_at
 })
 ```

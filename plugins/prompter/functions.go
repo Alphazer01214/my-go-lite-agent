@@ -258,7 +258,6 @@ func buildSnapshotMeta(
 		SystemPromptHash:      systemHash,
 		RuntimeContextHash:    runtimeHash,
 		MessagesHash:          messageHash(messages),
-		TokenEstimate:         estimateTokens(messages),
 		MessageCount:          len(messages),
 		ToolCatalogGeneration: tools.Generation,
 		ToolCatalogHash:       tools.Hash,
@@ -296,7 +295,7 @@ func (p *plugin) sessionInfo(ctx context.Context, sessionID string) (sessionInfo
 func (p *plugin) sessionFacts(ctx context.Context, sessionID string) ([]sessionFact, error) {
 	payload, err := json.Marshal(factsReq{
 		SessionID: sessionID,
-		Types:     []string{factTypeMessage, factTypeSystemPrompt, factTypeRuntimeContext},
+		Types:     []string{factTypeMessage, factTypeSystemPrompt, factTypeRuntimeContext, factTypeUsage},
 	})
 	if err != nil {
 		return nil, err

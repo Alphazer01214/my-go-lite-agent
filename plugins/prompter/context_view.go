@@ -25,7 +25,6 @@ type contextGetReq struct {
 type contextMessageView struct {
 	Seq        int                  `json:"seq,omitempty"`
 	Role       string               `json:"role"`
-	Tokens     int                  `json:"tokens"`
 	Text       string               `json:"text"`
 	Reasoning  string               `json:"reasoning,omitempty"`
 	Truncated  bool                 `json:"truncated,omitempty"`
@@ -41,7 +40,9 @@ type contextToolView struct {
 }
 
 type contextUsage struct {
-	TokenEstimate         int     `json:"token_estimate"`
+	PromptTokens          int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens      int     `json:"completion_tokens,omitempty"`
+	TotalTokens           int     `json:"total_tokens,omitempty"`
 	ContextWindow         int     `json:"context_window,omitempty"`
 	Percent               float64 `json:"percent,omitempty"`
 	MessageCount          int     `json:"message_count"`
@@ -109,6 +110,7 @@ func (p *plugin) contextViewFor(ctx context.Context, sessionID string) (contextV
 	p.contextMu.Unlock()
 	if ok {
 		view := entry.view
+		p.applyLatestUsage(ctx, &view)
 		p.enrichContextUsage(ctx, &view)
 		return view, nil
 	}
@@ -158,6 +160,7 @@ func (p *plugin) deriveContextView(ctx context.Context, sessionID string) (conte
 	messages := projectMessages(facts)
 	snapshot := buildSnapshotMeta(sessionID, model, snapshotBaseline, messages, tools)
 	view := buildContextView("derived", sessionID, "", model, messages, tools, snapshot)
+	applyUsage(&view, usageFromFacts(facts))
 	p.enrichContextUsage(ctx, &view)
 	return view, nil
 }
@@ -231,7 +234,6 @@ func buildContextView(
 		Source:      source,
 		AssembledAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Usage: contextUsage{
-			TokenEstimate:         estimateTokens(messages),
 			MessageCount:          len(messages),
 			ToolCount:             len(tools.Tools),
 			ToolCatalogGeneration: tools.Generation,
@@ -252,7 +254,6 @@ func buildContextView(
 		view.Messages = append(view.Messages, contextMessageView{
 			Seq:        message.Seq,
 			Role:       message.Role,
-			Tokens:     estimateMessageTokens(message.Text),
 			Text:       text,
 			Reasoning:  message.Reasoning,
 			Truncated:  truncated,
@@ -289,8 +290,65 @@ func (p *plugin) enrichContextUsage(ctx context.Context, view *contextView) {
 		return
 	}
 	view.Usage.ContextWindow = window
-	percent := float64(view.Usage.TokenEstimate) * 100 / float64(window)
+	if view.Usage.PromptTokens <= 0 {
+		return
+	}
+	percent := float64(view.Usage.PromptTokens) * 100 / float64(window)
 	view.Usage.Percent = math.Round(percent*10) / 10
+}
+
+func (p *plugin) applyLatestUsage(ctx context.Context, view *contextView) {
+	if view == nil || view.SessionID == "" {
+		return
+	}
+	meta, err := p.latestUsage(ctx, view.SessionID)
+	if err != nil || meta == nil {
+		return
+	}
+	if view.TurnID != "" && meta.TurnId != "" && meta.TurnId != view.TurnID {
+		return
+	}
+	applyUsage(view, meta)
+}
+
+func (p *plugin) latestUsage(ctx context.Context, sessionID string) (*usageMeta, error) {
+	if p.sdk == nil || sessionID == "" {
+		return nil, nil
+	}
+	payload, err := json.Marshal(factsReq{SessionID: sessionID, Types: []string{factTypeUsage}})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := p.sdk.Call(ctx, "session", "facts", payload)
+	if err != nil {
+		return nil, err
+	}
+	var out factsResp
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return usageFromFacts(out.Facts), nil
+}
+
+func usageFromFacts(facts []sessionFact) *usageMeta {
+	fact := latestFact(facts, factTypeUsage)
+	if fact == nil || len(fact.Meta) == 0 {
+		return nil
+	}
+	var meta usageMeta
+	if err := json.Unmarshal(fact.Meta, &meta); err != nil {
+		return nil
+	}
+	return &meta
+}
+
+func applyUsage(view *contextView, meta *usageMeta) {
+	if view == nil || meta == nil {
+		return
+	}
+	view.Usage.PromptTokens = meta.PromptTokens
+	view.Usage.CompletionTokens = meta.CompletionTokens
+	view.Usage.TotalTokens = meta.TotalTokens
 }
 
 func (p *plugin) modelContextWindow(ctx context.Context, model string) int {
@@ -316,10 +374,6 @@ func (p *plugin) modelContextWindow(ctx context.Context, model string) int {
 		}
 	}
 	return 0
-}
-
-func estimateMessageTokens(text string) int {
-	return (len([]rune(text))+3)/4 + 4
 }
 
 func truncateContextText(value string, perLimit, remaining int) (string, bool) {

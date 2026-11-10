@@ -27,7 +27,10 @@ Session 只记录事实，Prompter 决定所有模型可见内容。
 - `source=derived`：缓存不存在时，从 `session.facts` 和 `tool.list` 重新派生；只读，不写 Fact。
 - `source=none`：还没有装配过上下文。
 
-`usage.token_estimate` 是估算值；`context_window` 来自 `llm.models.list`，存在时同时返回百分比。
+`usage` 取自会话最近一条 `usage` Fact：`prompt_tokens`、`completion_tokens`、`total_tokens`。
+`context_window` 来自 `llm.models.list`，有真实用量时同时返回百分比。
+live 视图只采用与装配 `turn_id` 一致的用量；派生视图采用最近一条 `usage` Fact。
+Prompter 不再估算 token，也不返回消息级 token 数。
 消息正文按单条 16 KiB、总量 1 MiB 截断，并通过 `truncated` 标记。
 
 ## Skills
@@ -73,11 +76,18 @@ Session 只记录事实，Prompter 决定所有模型可见内容。
 
 | 组件 | slot | 说明 |
 |---|---|---|
-| `prompter-context` | `right` | LLM 可见 messages、tools、snapshot 和用量 |
-| `prompter-resources` | `bottom` | 收起时只显示 MCP / Skills 按钮；点击打开浮层，查看状态和 MCP JSON 配置 |
+| `prompter-context` | `right` | LLM 可见上下文：用量摘要、消息、工具和快照 |
+| `prompter-resources` | `bottom` | 底部 dock 按钮；点击打开浮层，查看状态和 MCP JSON 配置 |
 
+`prompter-resources` 声明 `static overlay`，不参与 slot tab 分组。
 组件通过 `setData` 接收轻量状态推送，通过 `resync()` 重新拉取完整数据。
 完整 messages 不放进 `ui.state`。
+回合结束后 Session Chat 广播 `liteagent:turn-settled`，Context 面板据此刷新用量。
+Context 面板分为消息、工具和快照三个分区。
+消息默认只显示一行预览，点击后展开正文、思考过程和工具调用。
+Context 面板消费 Session UI 的 `liteagent:session-changed` 信号。
+切换会话后，面板只请求当前会话的上下文，不再展示上一个会话的缓存。
+面板挂载时会广播 `liteagent:session-request`，向 Session UI 查询当前活动会话。
 
 ## Facts
 
@@ -85,7 +95,8 @@ Session 只记录事实，Prompter 决定所有模型可见内容。
 |---|---|---|
 | `system_prompt` | `system` | 静态轨全文，`meta.hash` 记录内容哈希 |
 | `runtime_context` | `user` | `<runtime_context>` 包裹的环境、skills、MCP |
-| `context_snapshot` | `host` | 本次实际送出的 surface seqs、hash、token 估算；不投影 |
+| `context_snapshot` | `host` | 本次实际送出的 surface seqs、hash、消息数；不投影 |
+| `usage` | `host` | Agent 写入的真实用量；Prompter 只读，不投影 |
 
 ## 配置
 

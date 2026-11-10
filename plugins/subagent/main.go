@@ -18,6 +18,7 @@ func main() {
 
 	sdk.Register("subagent", "info", p.handleInfo)
 	sdk.Register("subagent", "run", p.handleRun)
+	sdk.Register("subagent", "runs", p.handleRuns)
 	sdk.Register("subagent", "settings.get", p.handleSettingsGet)
 	sdk.Register("subagent", "settings.save", p.handleSettingsSave)
 

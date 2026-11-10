@@ -88,6 +88,11 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 			return nil, err
 		}
 		seqs = append(seqs, assistantSeqs...)
+		usageSeqs, err := p.appendUsage(turnCtx, sessionID, turnID, step, reply)
+		if err != nil {
+			return nil, err
+		}
+		seqs = append(seqs, usageSeqs...)
 		modelMessages = append(modelMessages, reply.Messages...)
 
 		toolCalls := collectToolCalls(reply.Messages)
@@ -215,6 +220,33 @@ func (p *plugin) callLLM(
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (p *plugin) appendUsage(
+	ctx context.Context,
+	sessionID, turnID string,
+	step int,
+	reply *llmStreamResp,
+) ([]int, error) {
+	if reply == nil || reply.Usage == nil {
+		return nil, nil
+	}
+	meta, err := json.Marshal(usageMeta{
+		TurnId:           turnID,
+		Step:             step,
+		Model:            reply.Model,
+		PromptTokens:     reply.Usage.PromptTokens,
+		CompletionTokens: reply.Usage.CompletionTokens,
+		TotalTokens:      reply.Usage.TotalTokens,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p.appendFacts(ctx, sessionID, []sessionFact{{
+		Type: factTypeUsage,
+		Role: "host",
+		Meta: meta,
+	}})
 }
 
 func normalizeToolCalls(messages []pluginsdk.ChatMessage, turnID string, step int) error {

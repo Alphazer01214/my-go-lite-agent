@@ -31,6 +31,20 @@ Turn 结束后仍由 `refreshCurrent()` 加载完整正文和 Facts 列表。
 已完成的工具调用和工具结果因此在回合结束前就能显示。
 新持久化的助手消息会从本地 draft 中剥掉对应前缀，避免与流式文本重复。
 
+## 跨组件刷新
+
+回合结束（完成、失败、取消或恢复调用收尾）后，Session Chat 广播 `liteagent:turn-settled`。
+事件 `detail` 包含 `session_id` 和 `status`。
+Context 面板据此刷新真实 token 用量。
+
+当前活动会话变化时，Session UI 广播 `liteagent:session-changed`。
+事件 `detail` 包含 `session_id` 和 `workspace`。
+活动会话包括选中会话、新建会话、恢复标签和删除后的回退。
+其他插件的面板消费该信号，按会话刷新自己的视图。
+
+晚于信号挂载的组件可以广播 `liteagent:session-request`。
+Session UI 收到后立即重播当前活动会话，避免挂载顺序导致状态缺失。
+
 ## 刷新与运行态恢复
 
 Host 为浏览器发起的调用维护 Call Registry，缓存事件并在调用结束后保留一段时间。
