@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -75,6 +76,13 @@ func saveConfig(path string, cfg config) error {
 }
 
 func parseConfig(data []byte) (config, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return config{}, fmt.Errorf("prompt_config_invalid: %w", err)
+	}
+	if _, ok := fields["mcp_servers"]; ok {
+		return config{}, fmt.Errorf("prompt_config_invalid: mcp_servers is no longer supported, use mcpServers")
+	}
 	var cfg config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return config{}, fmt.Errorf("prompt_config_invalid: %w", err)
@@ -175,46 +183,81 @@ func normalizeSkills(skills []skillEntry) error {
 	return nil
 }
 
-func normalizeMCP(servers []mcpEntry) error {
-	seen := make(map[string]bool, len(servers))
-	for i := range servers {
-		entry := &servers[i]
-		entry.Name = strings.TrimSpace(entry.Name)
-		entry.Description = strings.TrimSpace(entry.Description)
-		entry.Transport = strings.TrimSpace(entry.Transport)
-		entry.Command = strings.TrimSpace(entry.Command)
-		entry.Cwd = strings.TrimSpace(entry.Cwd)
-		if entry.Name == "" {
+// UnmarshalJSON 拒绝旧的 server 内字段：name 改由 mcpServers 键提供，transport 改为 type。
+func (e *mcpEntry) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["name"]; ok {
+		return fmt.Errorf("mcp server uses legacy field \"name\"; use the mcpServers key instead")
+	}
+	if _, ok := fields["transport"]; ok {
+		return fmt.Errorf("mcp server uses legacy field \"transport\"; use \"type\" instead")
+	}
+	type plain mcpEntry
+	var entry plain
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return err
+	}
+	*e = mcpEntry(entry)
+	return nil
+}
+
+func normalizeMCP(servers map[string]mcpEntry) error {
+	for _, rawName := range sortedMCPNames(servers) {
+		entry := servers[rawName]
+		name := strings.TrimSpace(rawName)
+		if name == "" {
 			return fmt.Errorf("prompt_config_invalid: mcp server name is required")
 		}
-		if seen[entry.Name] {
-			return fmt.Errorf("prompt_config_invalid: duplicate mcp server %s", entry.Name)
+		if name != rawName {
+			delete(servers, rawName)
+			if _, exists := servers[name]; exists {
+				return fmt.Errorf("prompt_config_invalid: duplicate mcp server %s", name)
+			}
 		}
-		seen[entry.Name] = true
+		entry.Name = name
+		entry.Description = strings.TrimSpace(entry.Description)
+		entry.Type = strings.TrimSpace(entry.Type)
+		entry.Command = strings.TrimSpace(entry.Command)
+		entry.URL = strings.TrimSpace(entry.URL)
+		entry.Cwd = strings.TrimSpace(entry.Cwd)
+		if entry.Type == "" {
+			if entry.URL != "" {
+				entry.Type = mcpTransportHTTP
+			} else {
+				entry.Type = mcpTransportStdio
+			}
+		}
+		switch entry.Type {
+		case mcpTransportStdio, mcpTransportHTTP, mcpTransportSSE:
+		default:
+			return fmt.Errorf("prompt_config_invalid: mcp server %s has unknown type %q", name, entry.Type)
+		}
 		if entry.Enabled == nil {
 			enabled := true
 			entry.Enabled = &enabled
 		}
-		if entry.Transport == "" {
-			entry.Transport = "stdio"
-		}
-		if entry.Transport != "stdio" {
-			return fmt.Errorf("prompt_config_invalid: mcp server %s uses unsupported transport %q", entry.Name, entry.Transport)
-		}
 		if entry.TimeoutMS < 0 || entry.TimeoutMS > maxMCPTimeoutMS {
-			return fmt.Errorf("prompt_config_invalid: mcp server %s timeout_ms is out of range", entry.Name)
+			return fmt.Errorf("prompt_config_invalid: mcp server %s timeout_ms is out of range", name)
 		}
-		if strings.ContainsRune(entry.Command, 0) || strings.ContainsRune(entry.Cwd, 0) {
-			return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in command or cwd", entry.Name)
+		if strings.ContainsRune(entry.Command, 0) || strings.ContainsRune(entry.Cwd, 0) || strings.ContainsRune(entry.URL, 0) {
+			return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in command, cwd, or url", name)
 		}
 		for _, arg := range entry.Args {
 			if strings.ContainsRune(arg, 0) {
-				return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in args", entry.Name)
+				return fmt.Errorf("prompt_config_invalid: mcp server %s has NUL in args", name)
 			}
 		}
 		for key, value := range entry.Env {
 			if !validMCPEnvName(key) || strings.ContainsRune(value, 0) {
-				return fmt.Errorf("prompt_config_invalid: mcp server %s has invalid env %q", entry.Name, key)
+				return fmt.Errorf("prompt_config_invalid: mcp server %s has invalid env %q", name, key)
+			}
+		}
+		for key, value := range entry.Headers {
+			if strings.TrimSpace(key) == "" || strings.ContainsRune(key, 0) || strings.ContainsRune(value, 0) {
+				return fmt.Errorf("prompt_config_invalid: mcp server %s has invalid header %q", name, key)
 			}
 		}
 		tools := entry.Tools[:0]
@@ -225,8 +268,22 @@ func normalizeMCP(servers []mcpEntry) error {
 			}
 		}
 		entry.Tools = tools
+		servers[name] = entry
 	}
 	return nil
+}
+
+func sortedMCPNames(servers map[string]mcpEntry) []string {
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func mcpGloballyEnabled(cfg config) bool {
+	return cfg.MCPEnabled == nil || *cfg.MCPEnabled
 }
 
 func validMCPEnvName(value string) bool {

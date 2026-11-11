@@ -79,8 +79,8 @@ func TestRenderSkillsAndMCP(t *testing.T) {
 			{Name: "repo-search", Description: "Search the repository"},
 			{Name: "planner"},
 		},
-		MCPServers: []mcpEntry{
-			{Name: "filesystem", Description: "Local files", Tools: []string{"read", "write"}},
+		MCPServers: map[string]mcpEntry{
+			"filesystem": {Description: "Local files", Tools: []string{"read", "write"}},
 		},
 	}
 	if err := cfg.normalize(); err != nil {

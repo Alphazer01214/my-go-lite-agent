@@ -137,23 +137,21 @@ Tools 转发的 Provider 输入：
 
 ```json
 {
-  "servers": [
-    {
-      "name": "filesystem",
-      "enabled": true,
-      "transport": "stdio",
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "env": {"KEY": "value"},
-      "cwd": "",
-      "timeout_ms": 30000
+      "env": {"KEY": "value"}
     }
-  ]
+  }
 }
 ```
 
 `save` 请求使用同一结构，响应 `{"saved": true}`。
-只支持 `transport=stdio`；配置保存后异步重连。
+结构与 Claude 配置一致；`name` 取自 `mcpServers` 键，server 内不再接受 `name`/`transport`。
+只实现 stdio；`http`/`sse` 可以保存，但运行时报 unsupported transport。
+`mcp_enabled` 默认开启，通过 `prompter.settings.save` 控制；配置保存后异步重连。
 
 ### 4.2 `mcp.info`
 

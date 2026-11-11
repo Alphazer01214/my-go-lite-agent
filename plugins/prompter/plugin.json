@@ -43,7 +43,8 @@
       {
         "key": "mcp_enabled",
         "label": "启用 MCP",
-        "type": "boolean"
+        "type": "boolean",
+        "description": "默认开启；关闭后所有 MCP server 保持 disabled。"
       },
       {
         "key": "mcp_timeout_ms",

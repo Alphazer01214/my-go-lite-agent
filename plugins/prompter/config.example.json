@@ -45,8 +45,8 @@
   ],
   "skills_global_dir": "",
   "skills_workspace_dir": ".liteagent/skills",
-  "mcp_enabled": false,
+  "mcp_enabled": true,
   "mcp_timeout_ms": 30000,
   "skills": [],
-  "mcp_servers": []
+  "mcpServers": {}
 }

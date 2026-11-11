@@ -113,12 +113,12 @@ class PrompterResources extends HTMLElement {
 					</div>
 					<details class="config">
 						<summary>MCP JSON config</summary>
-						<textarea data-mcp-config spellcheck="false" placeholder='{"servers":[]}'></textarea>
+						<textarea data-mcp-config spellcheck="false" placeholder='{"mcpServers":{}}'></textarea>
 						<div class="config-actions">
 							<button type="button" data-mcp-save>Save config</button>
 							<span class="config-status" data-config-status></span>
 						</div>
-						<div class="hint">Edits the servers array. Enable MCP and set the global timeout in plugin settings.</div>
+						<div class="hint">Edits mcpServers in Claude format. Enable MCP and set the global timeout in plugin settings.</div>
 					</details>
 				</div>
 			</dialog>`;
@@ -227,8 +227,9 @@ class PrompterResources extends HTMLElement {
 		this.setConfigStatus("Saving…", "info");
 		try {
 			const value = JSON.parse(this.els.configText.value || "{}");
-			if (!value || typeof value !== "object" || !Array.isArray(value.servers)) {
-				throw new Error('config must contain a "servers" array');
+			if (!value || typeof value !== "object" || Array.isArray(value) ||
+				!value.mcpServers || typeof value.mcpServers !== "object" || Array.isArray(value.mcpServers)) {
+				throw new Error('config must contain an "mcpServers" object');
 			}
 			await callPrompter("mcp.config.save", value);
 			this.configDirty = false;
@@ -308,7 +309,7 @@ class PrompterResources extends HTMLElement {
 				this.setConfigStatus(this.configError, "error");
 			}
 			if (!this.configDirty) {
-				this.els.configText.value = JSON.stringify(this.mcpConfig ?? { servers: [] }, null, 2);
+				this.els.configText.value = JSON.stringify(this.mcpConfig ?? { mcpServers: {} }, null, 2);
 			}
 		}
 	}

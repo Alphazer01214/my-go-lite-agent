@@ -30,7 +30,7 @@ type mcpCallArgs struct {
 }
 
 type mcpConfigView struct {
-	Servers []mcpEntry `json:"servers"`
+	MCPServers map[string]mcpEntry `json:"mcpServers"`
 }
 
 func mcpEnabled(entry mcpEntry) bool {
@@ -59,11 +59,16 @@ func (p *plugin) reloadMCP() {
 	}
 }
 
-func (p *plugin) runtimeMCPServers(cfg config) []mcpEntry {
+func (p *plugin) runtimeMCPServers(cfg config) map[string]mcpEntry {
 	if p.mcp == nil {
 		return cfg.MCPServers
 	}
-	return p.mcp.runtimeEntries()
+	entries := p.mcp.runtimeEntries()
+	out := make(map[string]mcpEntry, len(entries))
+	for _, entry := range entries {
+		out[entry.Name] = entry
+	}
+	return out
 }
 
 func (p *plugin) resourceMCP(cfg config) resourceMCPView {
@@ -71,32 +76,33 @@ func (p *plugin) resourceMCP(cfg config) resourceMCPView {
 		return p.mcp.resourceView()
 	}
 	servers := make([]resourceMCPServer, 0, len(cfg.MCPServers))
-	for _, entry := range cfg.MCPServers {
+	for _, name := range sortedMCPNames(cfg.MCPServers) {
+		entry := cfg.MCPServers[name]
 		status := "configured"
-		if !mcpEnabled(entry) {
+		if !mcpEnabled(entry) || !mcpGloballyEnabled(cfg) {
 			status = mcpStatusDisabled
-		} else if strings.TrimSpace(entry.Command) == "" {
+		} else if strings.TrimSpace(entry.Command) == "" && entry.Type == mcpTransportStdio {
 			status = mcpStatusUnconfigured
 		}
-		transport := entry.Transport
+		transport := entry.Type
 		if transport == "" {
-			transport = "stdio"
+			transport = mcpTransportStdio
 		}
 		tools := make([]resourceMCPTool, 0, len(entry.Tools))
 		for _, tool := range entry.Tools {
 			tools = append(tools, resourceMCPTool{Name: tool})
 		}
 		servers = append(servers, resourceMCPServer{
-			Name:        entry.Name,
+			Name:        name,
 			Description: entry.Description,
 			Transport:   transport,
 			Status:      status,
-			Enabled:     mcpEnabled(entry),
+			Enabled:     mcpEnabled(entry) && mcpGloballyEnabled(cfg),
 			Tools:       tools,
 		})
 	}
 	return resourceMCPView{
-		Enabled:   cfg.MCPEnabled,
+		Enabled:   mcpGloballyEnabled(cfg),
 		TimeoutMS: cfg.MCPTimeoutMS,
 		Servers:   servers,
 	}
@@ -171,9 +177,9 @@ func (p *plugin) handleMCPConfigGet(ctx context.Context, _ *pluginsdk.Request) (
 	cfg := p.currentConfig()
 	servers := cfg.MCPServers
 	if servers == nil {
-		servers = []mcpEntry{}
+		servers = map[string]mcpEntry{}
 	}
-	return json.Marshal(mcpConfigView{Servers: servers})
+	return json.Marshal(mcpConfigView{MCPServers: servers})
 }
 
 func (p *plugin) handleMCPConfigSave(ctx context.Context, req *pluginsdk.Request) (json.RawMessage, error) {
@@ -186,9 +192,9 @@ func (p *plugin) handleMCPConfigSave(ctx context.Context, req *pluginsdk.Request
 	}
 
 	cfg := p.currentConfig()
-	cfg.MCPServers = input.Servers
+	cfg.MCPServers = input.MCPServers
 	if cfg.MCPServers == nil {
-		cfg.MCPServers = []mcpEntry{}
+		cfg.MCPServers = map[string]mcpEntry{}
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, pluginsdk.ErrCode(codeMCPConfigInvalid, err.Error())

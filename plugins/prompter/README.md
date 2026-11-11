@@ -44,32 +44,29 @@ Prompter 不再估算 token，也不返回消息级 token 数。
 
 ## MCP
 
-当前只支持 stdio。
-
-- `mcp_enabled` 控制总开关，`mcp_timeout_ms` 是全局超时。
-- server 配置通过 `prompter.mcp.config.save` 写入 JSON：
+server 配置使用 Claude 的 `mcpServers` 结构，直接写在 `config.json` 顶层：
 
 ```json
 {
-  "servers": [
-    {
-      "name": "filesystem",
-      "enabled": true,
-      "transport": "stdio",
+  "mcpServers": {
+    "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "env": {"KEY": "value"},
-      "cwd": "",
-      "timeout_ms": 30000
+      "env": {"KEY": "value"}
     }
-  ]
+  }
 }
 ```
 
-- 启用且有 `command` 的 server 会启动子进程，完成 initialize、`tools/list`，然后进入 connected。
+- `mcp_enabled` 默认开启，只在需要全局停用时写成 `false`；`mcp_timeout_ms` 是全局超时。
+- `command`、`args`、`env` 与 Claude 配置一致；`type` 省略时按 stdio 处理，`url`/`headers` 会被解析。
+- 当前只实现 stdio。`type` 为 `http`/`sse` 的 server 保留在配置中并显示 `error`，不影响其他 server。
+- 启用且有 `command` 的 stdio server 会启动子进程，完成 initialize、`tools/list`，然后进入 connected。
 - runtime context 只列 connected server 和工具名；模型通过通用 `mcp_call` 调用。
 - `mcp_call` 参数：`server`、`tool`、`arguments`。
 - server 状态、工具和错误显示在底部 MCP / Skills 面板；JSON 配置也在该面板编辑。
+- 旧的 `mcp_servers` 数组、server 内的 `name` 和 `transport` 字段不再接受，插件启动时报配置错误。
+- 可选扩展字段：`description`、`enabled`、`cwd`、`timeout_ms`、`tools`。
 - 当前不实现 HTTP transport、per-tool 工具定义和自动重连；配置保存或 `resources.refresh` 会重连。
 
 ## UI
@@ -102,9 +99,9 @@ Context 面板消费 Session UI 的 `liteagent:session-changed` 信号。
 
 `config.json` 可选；缺省使用内嵌的 `config.example.json`。
 
-- `prompt_sections`、`skills`、`mcp_servers`：兼容旧配置。
-- `skills_global_dir`、`skills_workspace_dir`、`mcp_enabled`、`mcp_timeout_ms`：通过 settings 修改，下一次调用生效。
-- `mcp_servers`：通过底部面板的 JSON 编辑器修改。
+- `prompt_sections`、`skills`、`mcpServers`：写在 `config.json` 里。
+- `skills_global_dir`、`skills_workspace_dir`、`mcp_enabled`（默认开启）、`mcp_timeout_ms`：通过 settings 修改，下一次调用生效。
+- `mcpServers`：通过底部面板的 JSON 编辑器修改，结构与 Claude 配置一致。
 
 `prompt_sections` 仍在进程启动时读取。
 

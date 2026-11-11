@@ -91,24 +91,22 @@ func (m *mcpManager) reload(cfg config) {
 	m.order = nil
 	m.generation++
 	generation := m.generation
-	m.enabled = cfg.MCPEnabled
+	m.enabled = mcpGloballyEnabled(cfg)
 	m.timeout = time.Duration(timeout) * time.Millisecond
 
 	specs := make([]mcpConnectSpec, 0, len(cfg.MCPServers))
-	for _, entry := range cfg.MCPServers {
-		name := strings.TrimSpace(entry.Name)
-		if name == "" {
-			continue
-		}
+	for _, name := range sortedMCPNames(cfg.MCPServers) {
+		entry := cfg.MCPServers[name]
+		entry.Name = name
 		state := &mcpServerState{entry: entry, generation: generation}
 		switch {
 		case !mcpEnabled(entry) || !m.enabled:
 			state.status = mcpStatusDisabled
+		case entry.Type != "" && entry.Type != mcpTransportStdio:
+			state.status = mcpStatusError
+			state.lastError = "unsupported transport: " + entry.Type
 		case strings.TrimSpace(entry.Command) == "":
 			state.status = mcpStatusUnconfigured
-		case entry.Transport != "" && entry.Transport != "stdio":
-			state.status = mcpStatusError
-			state.lastError = "unsupported transport: " + entry.Transport
 		default:
 			state.status = mcpStatusConnecting
 			specs = append(specs, mcpConnectSpec{name: name, entry: entry, generation: generation})
@@ -244,7 +242,7 @@ func (m *mcpManager) snapshot() mcpSnapshot {
 		servers = append(servers, mcpServerStatus{
 			Name:        state.entry.Name,
 			Description: state.entry.Description,
-			Transport:   state.entry.Transport,
+			Transport:   state.entry.Type,
 			Status:      state.status,
 			Enabled:     enabled,
 			Runnable:    enabled && strings.TrimSpace(state.entry.Command) != "",

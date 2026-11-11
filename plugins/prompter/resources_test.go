@@ -12,9 +12,9 @@ func TestResourcesViewListsSkillsAndMCP(t *testing.T) {
 		PromptSections:     []promptSection{{Name: "identity", Order: -1000, Track: trackStatic, Text: "identity"}},
 		SkillsGlobalDir:    globalDir,
 		SkillsWorkspaceDir: ".liteagent/skills",
-		MCPEnabled:         true,
+		MCPEnabled:         boolPtr(true),
 		MCPTimeoutMS:       30000,
-		MCPServers:         []mcpEntry{{Name: "filesystem", Description: "Files", Tools: []string{"read_file", "write_file"}}},
+		MCPServers:         map[string]mcpEntry{"filesystem": {Description: "Files", Tools: []string{"read_file", "write_file"}}},
 	}
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize: %v", err)

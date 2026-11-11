@@ -110,12 +110,13 @@ func renderSkills(skills []skillEntry, readable bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderMCPServers(servers []mcpEntry) string {
+func renderMCPServers(servers map[string]mcpEntry) string {
 	if len(servers) == 0 {
 		return ""
 	}
 	lines := []string{"## MCP Servers"}
-	for _, server := range servers {
+	for _, name := range sortedMCPNames(servers) {
+		server := servers[name]
 		line := "- " + server.Name
 		if server.Description != "" {
 			line += ": " + server.Description

@@ -19,6 +19,10 @@ const (
 	configPath          = "config.json"
 	defaultMCPTimeoutMS = 30000
 	maxMCPTimeoutMS     = 600000
+
+	mcpTransportStdio = "stdio"
+	mcpTransportHTTP  = "http"
+	mcpTransportSSE   = "sse"
 )
 
 type promptSection struct {
@@ -33,28 +37,31 @@ type skillEntry struct {
 	Description string `json:"description,omitempty"`
 }
 
+// mcpEntry 对应 Claude mcpServers 里的单个 server。Name 取自映射键，不写入值内。
 type mcpEntry struct {
-	Name        string            `json:"name"`
+	Name        string            `json:"-"`
 	Description string            `json:"description,omitempty"`
 	Enabled     *bool             `json:"enabled,omitempty"`
-	Transport   string            `json:"transport,omitempty"`
+	Type        string            `json:"type,omitempty"`
 	Command     string            `json:"command,omitempty"`
 	Args        []string          `json:"args,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
 	Cwd         string            `json:"cwd,omitempty"`
 	TimeoutMS   int               `json:"timeout_ms,omitempty"`
 	Tools       []string          `json:"tools,omitempty"`
 }
 
 type config struct {
-	PromptSections     []promptSection `json:"prompt_sections"`
-	SkillsGlobalDir    string          `json:"skills_global_dir,omitempty"`
-	SkillsWorkspaceDir string          `json:"skills_workspace_dir,omitempty"`
-	MCPEnabled         bool            `json:"mcp_enabled,omitempty"`
-	MCPTimeoutMS       int             `json:"mcp_timeout_ms,omitempty"`
-	Skills             []skillEntry    `json:"skills,omitempty"`
-	MCPServers         []mcpEntry      `json:"mcp_servers,omitempty"`
-	SkillsReadable     bool            `json:"-"`
+	PromptSections     []promptSection     `json:"prompt_sections"`
+	SkillsGlobalDir    string              `json:"skills_global_dir,omitempty"`
+	SkillsWorkspaceDir string              `json:"skills_workspace_dir,omitempty"`
+	MCPEnabled         *bool               `json:"mcp_enabled,omitempty"`
+	MCPTimeoutMS       int                 `json:"mcp_timeout_ms,omitempty"`
+	Skills             []skillEntry        `json:"skills,omitempty"`
+	MCPServers         map[string]mcpEntry `json:"mcpServers,omitempty"`
+	SkillsReadable     bool                `json:"-"`
 }
 
 type createPayload struct {

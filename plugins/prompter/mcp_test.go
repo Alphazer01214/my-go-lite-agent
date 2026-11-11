@@ -85,29 +85,32 @@ func TestMCPHelperProcess(t *testing.T) {
 	}
 }
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func mcpTestEntry(t *testing.T) mcpEntry {
 	t.Helper()
 	command, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		t.Fatalf("helper path: %v", err)
 	}
-	enabled := true
 	return mcpEntry{
-		Name:      "fake",
-		Enabled:   &enabled,
-		Transport: "stdio",
-		Command:   command,
-		Args:      []string{"-test.run=TestMCPHelperProcess", "--"},
-		Env:       map[string]string{"GO_WANT_MCP_HELPER": "1"},
+		Name:    "fake",
+		Enabled: boolPtr(true),
+		Type:    mcpTransportStdio,
+		Command: command,
+		Args:    []string{"-test.run=TestMCPHelperProcess", "--"},
+		Env:     map[string]string{"GO_WANT_MCP_HELPER": "1"},
 	}
 }
 
 func TestMCPInfoAndCall(t *testing.T) {
 	cfg := config{
 		PromptSections: []promptSection{{Name: "identity", Order: -1000, Track: trackStatic, Text: "identity"}},
-		MCPEnabled:     true,
+		MCPEnabled:     boolPtr(true),
 		MCPTimeoutMS:   5000,
-		MCPServers:     []mcpEntry{mcpTestEntry(t)},
+		MCPServers:     map[string]mcpEntry{"fake": mcpTestEntry(t)},
 	}
 	p := &plugin{cfg: cfg}
 	p.startMCP()
@@ -168,20 +171,86 @@ func TestMCPInfoAndCall(t *testing.T) {
 	}
 }
 
-func TestMCPConfigSaveRejectsUnsupportedTransport(t *testing.T) {
+func TestMCPConfigSaveRejectsUnknownType(t *testing.T) {
 	p := &plugin{cfg: config{
 		PromptSections: []promptSection{{Name: "identity", Order: -1000, Track: trackStatic, Text: "identity"}},
-		MCPEnabled:     true,
+		MCPEnabled:     boolPtr(true),
 		MCPTimeoutMS:   defaultMCPTimeoutMS,
 	}, configPath: filepath.Join(t.TempDir(), "config.json")}
-	payload, _ := json.Marshal(mcpConfigView{Servers: []mcpEntry{{
-		Name:      "remote",
-		Transport: "http",
-	}}})
+	payload, _ := json.Marshal(mcpConfigView{MCPServers: map[string]mcpEntry{
+		"remote": {Type: "websocket", URL: "wss://example.com/mcp"},
+	}})
 
 	_, err := p.handleMCPConfigSave(context.Background(), &pluginsdk.Request{Payload: payload})
 	if pluginsdk.Code(err) != codeMCPConfigInvalid {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMCPManagerReportsUnsupportedTransport(t *testing.T) {
+	p := &plugin{cfg: config{
+		PromptSections: []promptSection{{Name: "identity", Order: -1000, Track: trackStatic, Text: "identity"}},
+		MCPServers: map[string]mcpEntry{
+			"remote": {Type: mcpTransportHTTP, URL: "https://example.com/mcp"},
+		},
+	}}
+	p.startMCP()
+	defer p.closeMCP()
+
+	snapshot := p.mcp.snapshot()
+	if len(snapshot.Servers) != 1 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	server := snapshot.Servers[0]
+	if server.Status != mcpStatusError || !strings.Contains(server.LastError, "unsupported transport") {
+		t.Fatalf("server = %+v", server)
+	}
+}
+
+func TestLoadConfigUsesClaudeMCPServers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{
+  "prompt_sections": [{"name": "identity", "order": -1000, "track": "static", "text": "identity"}],
+  "mcpServers": {
+    "rea": {
+      "command": "npx",
+      "args": ["-y", "rea-agents", "mcp"],
+      "env": {"KEY": "value"}
+    }
+  }
+}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	entry, ok := cfg.MCPServers["rea"]
+	if !ok {
+		t.Fatalf("servers = %+v", cfg.MCPServers)
+	}
+	if entry.Name != "rea" || entry.Type != mcpTransportStdio || entry.Command != "npx" || len(entry.Args) != 3 || entry.Env["KEY"] != "value" {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if !mcpGloballyEnabled(cfg) {
+		t.Fatalf("mcp should default to enabled: %+v", cfg)
+	}
+}
+
+func TestLoadConfigRejectsLegacyMCPServersArray(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{
+  "prompt_sections": [{"name": "identity", "order": -1000, "track": "static", "text": "identity"}],
+  "mcp_servers": [{"name": "rea", "command": "npx"}]
+}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := loadConfig(path); err == nil {
+		t.Fatal("legacy mcp_servers array accepted")
 	}
 }
 

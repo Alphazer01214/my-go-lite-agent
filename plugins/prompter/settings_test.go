@@ -16,7 +16,7 @@ func settingsTestPlugin(t *testing.T) (*plugin, string) {
 	cfg := config{
 		PromptSections: []promptSection{{Name: "identity", Order: -1000, Track: trackStatic, Text: "identity"}},
 		Skills:         []skillEntry{{Name: "manual-skill", Description: "manual"}},
-		MCPServers:     []mcpEntry{{Name: "manual-mcp", Description: "manual"}},
+		MCPServers:     map[string]mcpEntry{"manual-mcp": {Description: "manual"}},
 	}
 	if err := saveConfig(path, cfg); err != nil {
 		t.Fatalf("seed config: %v", err)
@@ -62,13 +62,13 @@ func TestSettingsSavePersistsAndPreservesConfig(t *testing.T) {
 	if len(loaded.Skills) != 1 || loaded.Skills[0].Name != "manual-skill" {
 		t.Fatalf("static skills lost: %+v", loaded.Skills)
 	}
-	if len(loaded.MCPServers) != 1 || loaded.MCPServers[0].Name != "manual-mcp" {
+	if entry, ok := loaded.MCPServers["manual-mcp"]; !ok || entry.Name != "manual-mcp" {
 		t.Fatalf("static mcp lost: %+v", loaded.MCPServers)
 	}
 	if loaded.SkillsGlobalDir != globalDir || loaded.SkillsWorkspaceDir != ".liteagent/skills" {
 		t.Fatalf("skill dirs = %+v", loaded)
 	}
-	if !loaded.MCPEnabled || loaded.MCPTimeoutMS != 45000 {
+	if !mcpGloballyEnabled(loaded) || loaded.MCPTimeoutMS != 45000 {
 		t.Fatalf("mcp = %+v", loaded)
 	}
 	if p.currentConfig().SkillsGlobalDir != globalDir {
@@ -142,7 +142,7 @@ func TestLoadConfigMissingUsesEmbeddedDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if len(cfg.PromptSections) == 0 || cfg.MCPTimeoutMS != defaultMCPTimeoutMS {
+	if len(cfg.PromptSections) == 0 || cfg.MCPTimeoutMS != defaultMCPTimeoutMS || !mcpGloballyEnabled(cfg) {
 		t.Fatalf("config = %+v", cfg)
 	}
 	if _, err := os.Stat(path); err == nil {

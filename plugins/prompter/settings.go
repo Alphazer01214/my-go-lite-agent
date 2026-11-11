@@ -34,7 +34,7 @@ func (p *plugin) handleSettingsGet(_ context.Context, _ *pluginsdk.Request) (jso
 	return json.Marshal(settingsGetResp{Values: settingsValues{
 		SkillsGlobalDir:    cfg.SkillsGlobalDir,
 		SkillsWorkspaceDir: cfg.SkillsWorkspaceDir,
-		MCPEnabled:         cfg.MCPEnabled,
+		MCPEnabled:         mcpGloballyEnabled(cfg),
 		MCPTimeoutMS:       cfg.MCPTimeoutMS,
 	}})
 }
@@ -48,7 +48,8 @@ func (p *plugin) handleSettingsSave(_ context.Context, req *pluginsdk.Request) (
 	cfg := p.currentConfig()
 	cfg.SkillsGlobalDir = strings.TrimSpace(input.Values.SkillsGlobalDir)
 	cfg.SkillsWorkspaceDir = strings.TrimSpace(input.Values.SkillsWorkspaceDir)
-	cfg.MCPEnabled = input.Values.MCPEnabled
+	enabled := input.Values.MCPEnabled
+	cfg.MCPEnabled = &enabled
 	cfg.MCPTimeoutMS = input.Values.MCPTimeoutMS
 
 	if cfg.SkillsGlobalDir != "" && !filepath.IsAbs(cfg.SkillsGlobalDir) {
