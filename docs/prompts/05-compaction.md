@@ -1,6 +1,6 @@
 # 压缩与摘要
 
-> 状态：目标契约
+> 状态：当前实现
 
 长会话必然超出上下文窗口。压缩是让会话能继续的手段。
 
@@ -8,22 +8,22 @@
 
 | 路径 | 机制 | 状态 |
 |---|---|---|
-| 确定性摘要 | 抽取旧消息的角色与正文首段，截断到上限 | 当前实现 |
-| 模型摘要 | 用一次辅助调用生成结构化交接摘要 | 目标契约 |
+| 确定性摘要 | 抽取旧消息的角色与正文首段，截断到上限 | 当前实现（兜底） |
+| 模型摘要 | 用一次辅助调用生成结构化交接摘要 | 当前实现 |
 
 确定性摘要不丢失意图结构，但会丢失细节。它保证压缩一定成功，代价是信息损失。
 
 模型摘要保留意图、决策和待办，代价是要额外一次调用，且可能失败。
 
-v1 保留确定性摘要作为兜底。当模型摘要不可用或被判为不合格时，退回确定性摘要。
+两条路径都已落地。模型摘要不可用或被判为不合格时，退回确定性摘要；确定性摘要也不合格时保持旧摘要。
 
 ## 2. 压缩 prompt 骨架
 
-模型摘要用固定骨架。骨架固定，节可缺，节不删。
+模型摘要用固定骨架。骨架固定，节可空，节不删。
 
 ```text
 CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
-- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- Do NOT use file_read, shell_execute, file_grep, or ANY other tool.
 - You already have all the context you need in the conversation above.
 - Tool calls will be REJECTED and will waste your only turn — you will fail the task.
 - Your entire response must be plain text: an <analysis> block followed by a <summary> block.
@@ -64,8 +64,8 @@ a <summary> block. Tool calls will be rejected and you will fail the task.
 
 | 部分 | 出处 |
 |---|---|
-| 九节骨架与思考段分离 | claude-code-main `src/services/compact/prompt.ts:66-77` |
-| `EXACTLY`、`(none)`、禁丢节、既有检查点合并、保密令 | deepseek-harness `packages/core/compaction/src/summarizer.ts:33-67` |
+| 分节骨架与思考段分离 | claude-code-main `src/services/compact/prompt.ts:66-77` |
+| `EXACTLY`、`(none)`、禁丢节、既有检查点合并、保密令 | deepseek-harness `packages/compaction/compaction-basic/src/summarizer.ts:32-67` |
 | 首尾禁令夹层 | claude-code-main `src/services/compact/prompt.ts:12-26`；ZCode `compact/prompt.ts:1-12` |
 
 ## 3. 意图必须逐字保留
@@ -97,7 +97,9 @@ decided.
 
 恢复消息要求模型直接续作。不致谢，不复述，不重做计划。
 
-- 出处：claude-code-main `src/services/compact/prompt.ts:345-350`；deepseek-harness `packages/core/compaction/src/summarizer.ts:70-71`
+落库为一条 `context_compaction` Fact。`meta.covered_to_seq` 记录覆盖到哪条消息，`meta.method` 记录 `model` 或 `deterministic`。投影时隐藏被覆盖的普通消息，并在原位置插入恢复消息加 `<compacted-summary>`。system prompt 与运行时上下文不参与覆盖。
+
+- 出处：claude-code-main `src/services/compact/prompt.ts:345-350`；deepseek-harness `packages/compaction/compaction-basic/src/summarizer.ts:70-71`
 
 ## 6. 迭代压缩
 
@@ -105,7 +107,7 @@ decided.
 
 合并规则：保留仍然成立的事实，丢弃已失效的事实。不要把上一份摘要原样抄过来。
 
-- 出处：deepseek-harness `packages/core/compaction/src/summarizer.ts:66`
+- 出处：deepseek-harness `packages/compaction/compaction-basic/src/summarizer.ts:66`
 
 ## 7. 拒绝坏摘要
 
@@ -116,6 +118,9 @@ decided.
 | 摘要长度不短于被压缩的内容 | 判为失败，退回确定性摘要 |
 | 摘要缺少骨架中的任一节 | 判为失败，退回确定性摘要 |
 | 摘要中出现工具调用 | 判为失败，退回确定性摘要 |
+| 输出缺少 `<summary>` 闭合标签 | 视为截断，保持旧摘要 |
+
+模型摘要超过 `compact_max_chars` 也判为失败。确定性兜底取角色、正文首段与工具名，按同一上限截断。遇到旧检查点时只取 `<compacted-summary>` 内的正文，不复制恢复 preamble。
 
 - 出处：pi `coding-agent/src/core/compaction/compaction.ts:607-614`；deepseek-harness-x `packages/compaction/compaction-basic/README.md`
 
@@ -124,23 +129,27 @@ decided.
 | 触发点 | 条件 | 状态 |
 |---|---|---|
 | 预算触发 | 估算用量超过窗口的压缩阈值 | 当前实现 |
-| 轮次开始前 | 上下文预算不足一次请求 | 目标契约 |
-| 轮次中途 | 单步输出过长，需要腾出空间 | 目标契约 |
-| 手动 | 调用方显式要求压缩 | 当前实现 |
+| 轮次开始前 | 上下文预算不足一次请求 | 当前实现（同一预算检查） |
+| 轮次中途 | 单步输出过长，需要腾出空间 | 当前实现（只压缩已完成的旧回合） |
+| 手动 | 调用方显式要求压缩 | 当前实现（`prompter.compact`） |
+
+预算取 `max(最近一条压缩之后的 usage, 字符估算)`。窗口取 `min(模型窗口, max_context_tokens)`，阈值为窗口乘 `compact_threshold`。
 
 压缩只覆盖普通对话消息。system prompt、运行时上下文不受影响。
 
-压缩按用户消息分段，不切开工具调用与工具结果的配对。
+压缩按用户消息分段，不切开工具调用与工具结果的配对。切点回退到最近的 user 消息，因此当前回合整体保留；单回合超长时不会压缩当前回合。
 
-- 出处：上下文组装插件当前实现的分段规则，见 [docs/design/plugins/04-model-context.md](../design/plugins/04-model-context.md)
+- 出处：当前分段规则见 [plugins/prompter/README.md](../../plugins/prompter/README.md) 的“压缩”一节
 
 ## 9. 成本技巧
 
 压缩指令不作为独立的 system prompt 发出。
 
-它作为"重放对话前缀之后的最后一条 user 消息"发出。这样辅助调用与主请求共享前缀，可以命中服务端的提示缓存。
+它作为"重放对话前缀之后的最后一条 user 消息"发出。这样辅助调用与主请求共享前缀，可以命中服务端的提示缓存。工具表随请求保留，进一步保持请求形状一致。
 
-- 出处：deepseek-harness-x `packages/compaction/compaction-basic/src/summarizer.ts:25-30`；deepseek-harness 同款
+辅助调用复用 `llm.stream`，payload 带 `purpose=compaction`。消费链看到该字段直接放行到 provider，避免 Prompter 递归装配。
+
+- 出处：deepseek-harness `packages/compaction/compaction-basic/src/summarizer.ts:25-30`；deepseek-harness-x 同款
 
 ## 10. 主 prompt 的披露
 
@@ -150,7 +159,7 @@ decided.
 - The runtime compresses older messages automatically when the context budget is reached, so the session is not limited by the context window.
 ```
 
-不披露的话，模型会担心上下文被截断而提前收尾。
+不披露的话，模型会担心上下文被截断而提前收尾。默认 `config.example.json` 的 `system_semantics` 已包含这句。
 
 - 出处：claude-code-main `src/constants/prompts.ts:193`
 
@@ -158,10 +167,10 @@ decided.
 
 | 项 | 检查方式 |
 |---|---|
-| 骨架完整 | 落库摘要含全部九节，缺节判失败 |
-| 意图逐字 | 摘要第一节含用户原话的逐字片段 |
+| 骨架完整 | 落库摘要含全部八节，缺节判失败 |
+| 意图非空 | 模型指令要求逐字引用；落库校验要求第一节非空，不自动判断语义逐字 |
 | 思考段剥离 | 落库摘要不含 `<analysis>` 标记 |
-| 坏摘要不落库 | 错误、截断、超长、缺节四种输入都保留旧摘要 |
-| 合并正确 | 二次压缩后摘要不含已失效事实 |
+| 坏摘要不落库 | 错误、截断保持旧摘要；超长、缺节、工具调用退回确定性摘要 |
+| 合并正确 | 二次压缩后摘要不含已失效事实；新 `covered_to_seq` 大于旧值 |
 | 配对不切开 | 摘要边界不落在工具调用与结果之间 |
-| 预算不越界 | 压缩后估算用量低于上限，否则报预算超限 |
+| 预算不越界 | 压缩后估算低于阈值；仍超限时记 `over_budget` 并继续请求 |

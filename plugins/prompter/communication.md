@@ -9,6 +9,7 @@
 | `session.create` | 消费，补初始 system/runtime facts |
 | `llm.stream` | 消费，装配 messages/tools 后 Proceed |
 | `prompter.context.get` | 返回最近一次或派生的 LLM 可见上下文 |
+| `prompter.compact` | 手动压缩指定会话 |
 | `prompter.resources.list` | 返回 Skills / MCP 状态 |
 | `prompter.resources.refresh` | 重新扫描 Skills、重连 MCP |
 | `prompter.settings.get/save` | 读写设置 |
@@ -71,7 +72,35 @@ Context 面板始终传入当前活动会话的 `session_id`。
 三个 token 字段来自该会话最近一条 `usage` Fact，由 Agent 在每次模型调用后写入。
 没有 `usage` Fact 时三个字段省略，`percent` 也为 0。
 `live` 视图只采用 `turn_id` 与缓存装配一致的用量。
-不返回 token 估算值，也不返回消息级 token 数。
+不返回 token 估算值，也不返回消息级 token 数；估算只用于压缩预算。
+
+## 2.1 `prompter.compact`
+
+请求：
+
+```json
+{"session_id": "s-1"}
+```
+
+`session_id` 必填。手动压缩跳过阈值检查，但仍按配置的保留预算切段。
+响应：
+
+```json
+{
+  "session_id": "s-1",
+  "compacted": true,
+  "method": "model",
+  "covered_from_seq": 3,
+  "covered_to_seq": 8,
+  "tokens_before": 121000,
+  "tokens_after": 24000,
+  "over_budget": false
+}
+```
+
+没有可压缩区间、窗口未知或关闭压缩时返回 `{"compacted": false, "reason": "..."}`。
+`method` 取 `model` 或 `deterministic`。
+压缩后追加 `context_compaction` Fact 并刷新 Context 面板缓存。
 
 ## 3. Skills
 
@@ -319,7 +348,10 @@ sequenceDiagram
     Tools-->>Agent: tool result
 ```
 
+预算超过阈值时，Prompter 会在装配本轮请求前对同一 provider 发一次 `purpose=compaction` 的辅助 `llm.stream` 调用，再把摘要写入 `context_compaction` Fact 并重新投影。`purpose=compaction` 的请求直接放行到 provider，不再进入装配。
+
 ## 9. 实现状态
 
 已实现：skills 目录扫描、`skill_read`、MCP stdio client、`mcp_call`、MCP JSON 配置、资源面板、上下文查看和设置。
-未实现：MCP HTTP、per-tool 工具定义、MCP 自动重连、用户选择可见 message、上下文压缩。
+已实现：预算触发的自动压缩、`prompter.compact` 手动压缩、模型摘要与确定性兜底。
+未实现：MCP HTTP、per-tool 工具定义、MCP 自动重连、用户选择可见 message、压缩后的多级检查点。

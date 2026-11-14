@@ -28,7 +28,9 @@ Brief the subagent like a smart colleague who just walked into the room — it h
 
 Never delegate understanding. Do not write "based on your findings, fix the bug". Include file paths, line numbers, and the exact change to make.
 
-The subagent starts fresh: the prompt must be self-contained. A subagent cannot delegate beyond the configured delegation depth.`
+The subagent starts fresh: the prompt must be self-contained. A subagent cannot delegate beyond the configured delegation depth.
+
+Multiple subagent calls in one step run in parallel. Only delegate independent tasks: parallel subagents share the same workspace and may race if they edit the same files.`
 
 func (p *plugin) toolInfo() infoResponse {
 	return infoResponse{

@@ -65,8 +65,21 @@ func projectMessages(facts []sessionFact) []pluginsdk.ChatMessage {
 			Text: fact.TextContent,
 		})
 	}
+	coveredTo := compactionCoveredTo(facts)
+	if coveredTo > 0 {
+		if fact := latestFact(facts, factTypeContextCompaction); fact != nil && fact.TextContent != "" {
+			messages = append(messages, pluginsdk.ChatMessage{
+				Seq:  fact.Seq,
+				Role: pluginsdk.RoleUser,
+				Text: fact.TextContent,
+			})
+		}
+	}
 	for _, fact := range facts {
 		if fact.Type != factTypeMessage || fact.Role == "" {
+			continue
+		}
+		if coveredTo > 0 && fact.Seq <= coveredTo {
 			continue
 		}
 		messages = append(messages, pluginsdk.ChatMessage{
@@ -81,6 +94,29 @@ func projectMessages(facts []sessionFact) []pluginsdk.ChatMessage {
 		})
 	}
 	return messages
+}
+
+func contextPrefixCount(facts []sessionFact) int {
+	count := 0
+	if fact := latestFact(facts, factTypeSystemPrompt); fact != nil && fact.TextContent != "" {
+		count++
+	}
+	if fact := latestFact(facts, factTypeRuntimeContext); fact != nil && fact.TextContent != "" {
+		count++
+	}
+	return count
+}
+
+func compactionCoveredTo(facts []sessionFact) int {
+	fact := latestFact(facts, factTypeContextCompaction)
+	if fact == nil || fact.TextContent == "" || len(fact.Meta) == 0 {
+		return 0
+	}
+	var meta compactionMeta
+	if err := json.Unmarshal(fact.Meta, &meta); err != nil {
+		return 0
+	}
+	return meta.CoveredToSeq
 }
 
 func changedBaselineFacts(facts []sessionFact, baseline []factIn) []factIn {

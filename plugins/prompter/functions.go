@@ -50,6 +50,12 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 	var in streamPayload
 	_ = json.Unmarshal(req.Payload, &in)
 
+	// The compaction auxiliary call re-enters llm.stream; it must reach the
+	// provider untouched instead of being assembled (and compacted) again.
+	if in.Purpose == compactPurpose {
+		return req.Proceed(ctx, nil)
+	}
+
 	sessionID := strings.TrimSpace(in.Meta.SessionID)
 	if sessionID == "" {
 		return req.Proceed(ctx, nil)
@@ -85,6 +91,10 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 	if len(messages) == 0 {
 		return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, "prompter has no model-visible messages")
 	}
+	facts, messages, err = p.maybeCompact(ctx, req, sessionID, model, facts, messages, tools)
+	if err != nil {
+		return err
+	}
 	turnID := strings.TrimSpace(in.Meta.TurnID)
 	snapshot := buildSnapshotMeta(sessionID, model, baseline, messages, tools)
 	p.writeSnapshot(ctx, sessionID, snapshot)
@@ -99,6 +109,32 @@ func (p *plugin) consumeLLMStream(ctx context.Context, req *pluginsdk.Request) e
 
 func prompterError(scope string, err error) error {
 	return pluginsdk.ErrCode(pluginsdk.CodeHandlerError, "prompter "+scope+": "+err.Error())
+}
+
+func (p *plugin) maybeCompact(
+	ctx context.Context,
+	req *pluginsdk.Request,
+	sessionID, model string,
+	facts []sessionFact,
+	messages []pluginsdk.ChatMessage,
+	tools toolCatalog,
+) ([]sessionFact, []pluginsdk.ChatMessage, error) {
+	result, compactedFacts, compactedMessages, err := p.compactContext(ctx, compactRequest{
+		SessionID: sessionID,
+		Model:     model,
+		ContextID: req.ContextID,
+		Facts:     facts,
+		Messages:  messages,
+		Tools:     tools,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !result.Compacted {
+		return facts, messages, nil
+	}
+	logf("compacted session %s: %d -> %d tokens (%s)", sessionID, result.TokensBefore, result.TokensAfter, result.Method)
+	return compactedFacts, compactedMessages, nil
 }
 
 func mergeCreateFacts(raw map[string]json.RawMessage, baseline []factIn) (json.RawMessage, error) {
@@ -295,7 +331,13 @@ func (p *plugin) sessionInfo(ctx context.Context, sessionID string) (sessionInfo
 func (p *plugin) sessionFacts(ctx context.Context, sessionID string) ([]sessionFact, error) {
 	payload, err := json.Marshal(factsReq{
 		SessionID: sessionID,
-		Types:     []string{factTypeMessage, factTypeSystemPrompt, factTypeRuntimeContext, factTypeUsage},
+		Types: []string{
+			factTypeMessage,
+			factTypeSystemPrompt,
+			factTypeRuntimeContext,
+			factTypeContextCompaction,
+			factTypeUsage,
+		},
 	})
 	if err != nil {
 		return nil, err

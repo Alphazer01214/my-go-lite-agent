@@ -101,7 +101,7 @@ not prose paragraphs. Write "(none)" for an empty section — never drop a secti
 
 `(none)` 占位这条也是同一个思路：**缺节和空节要可区分**。写 `(none)` 说明"这一节确实没有内容"，不写会让下游分不清"空"和"漏了"。
 
-**本项目落点。** 压缩 prompt 见 [05-compaction.md](05-compaction.md) 第 2 节，落库校验见第 7 节。保密令改写成本项目的措辞：本项目没有 `<summary>` 标签，用 `context_summary` Fact 的 `Active` 标记表达同一件事。
+**本项目落点。** 压缩 prompt 见 [05-compaction.md](05-compaction.md) 第 2 节，落库校验见第 7 节。保密令改写成本项目的措辞：检查点用 `<compacted-summary>` 包裹，落库为 `context_compaction` Fact，由 `covered_to_seq` 标记覆盖范围。
 
 ### 2.4 deepseek-harness-x：顺序带与"模型可见即已记录"
 
@@ -183,7 +183,7 @@ readonly order: number
 
 **本项目落点。** 压缩 prompt 的第一节 `Primary Request and Intent` 保留"quote verbatim where the exact wording matters"，见 [05-compaction.md](05-compaction.md) 第 3 节。落库校验要检查第一节含用户原话的逐字片段。
 
-本项目当前的确定性摘要**不满足**这条要求。它抽取旧消息的角色与正文首段，没有逐字引用。差异记在 [09-plan.md](09-plan.md) 第 4 节。
+模型摘要在 prompt 里要求逐字引用；确定性摘要仍只取角色与正文首段，不满足这条要求，因此只作为降级路径。差异记在 [09-plan.md](09-plan.md) 第 4 节。
 
 ### 2.7 pi：工具描述三件套
 
@@ -313,7 +313,7 @@ authorization.
 |---|---|
 | grok-build 的 `X, not Y` 句式禁令 | 本项目工具纪律需要对比句式堵默认习惯。规则服务对象不同，不冲突。 |
 | codex 的 `**Title Case**` 标题格式 | 本项目 UI 消费 Markdown 文本，标题格式由 WebUI 决定，不进模型侧 prompt。 |
-| MiMo-Code 的 11 段 checkpoint 文件结构 | 本项目压缩产物是单条 `context_summary` Fact，不落多文件。 |
+| MiMo-Code 的 11 段 checkpoint 文件结构 | 本项目压缩产物是单条 `context_compaction` Fact，不落多文件。 |
 | dsh 的 8 段 checkpoint | 同上。骨架是 9 节（claude-code 版本），取其一。 |
 | claude-code 的 compact 9 段里的 `<analysis>` 分离 | 本项目当前摘要不进上下文。目标契约见 [05-compaction.md](05-compaction.md) 第 4 节。 |
 | 任何依赖"多客户端"或"子代理继承父会话"的措辞 | 本项目 v1 是单会话、无子代理。这类措辞描述的是本项目没有的行为。 |

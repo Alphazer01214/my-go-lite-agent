@@ -11,7 +11,27 @@
     "get": { "capability": "agent", "method": "settings.get" },
     "save": { "capability": "agent", "method": "settings.save" },
     "schema": [
-      { "key": "max_steps", "label": "Max steps", "type": "number", "required": true }
+      { "key": "max_steps", "label": "Max steps", "type": "number", "required": true },
+      {
+        "key": "tool_parallelism",
+        "label": "工具并行",
+        "type": "select",
+        "required": true,
+        "description": "auto 只并行安全集内的工具；serial 全部串行。",
+        "options": [
+          { "value": "serial", "label": "串行" },
+          { "value": "auto", "label": "并行（安全集）" }
+        ]
+      },
+      {
+        "key": "max_parallel_tools",
+        "label": "最大并行工具数",
+        "type": "number",
+        "required": true,
+        "min": 1,
+        "max": 8,
+        "description": "同一模型步内同时执行的工具上限。"
+      }
     ]
   },
   "description": "Turn orchestrator: executes model/tool loop and persists session facts",

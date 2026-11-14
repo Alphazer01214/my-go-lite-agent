@@ -24,11 +24,23 @@ Agent 按 `max_steps` 执行模型与工具循环。
 2. 将助手消息写入 Session。
 3. 响应带 `usage` 时追加一条 `type=usage` 的 Fact。
 4. 没有 `tool_calls` 时返回最终回答。
-5. 有 `tool_calls` 时逐个调用 `tool.call`。
+5. 有 `tool_calls` 时按批次调用 `tool.call`。
 6. 将工具结果写成 `role=tool` 的 message Fact。
 7. 工具结果落库后继续下一轮模型调用。
 
 工具调用达到 `max_steps` 仍未结束时返回 `max_steps_exceeded`。
+
+## 工具并行
+
+`tool_parallelism=auto` 时，同一模型步内的连续安全调用并发执行；其他调用形成屏障，单独执行。
+工具结果始终按 `tool_calls` 原顺序写入 Session，与完成顺序无关。
+并发上限由 `max_parallel_tools` 控制。
+
+默认安全集是 `file_read`、`file_glob`、`file_grep` 和 `subagent`。
+`shell_execute`、`python_execute`、`mcp_call`、`file_write` 和 `file_edit` 默认串行。
+`subagent` 并行时会共享同一个 workspace；只应并行相互独立、不会同时修改同一批文件的任务。
+
+`serial` 模式完全保持旧的逐调用行为。
 
 ## Usage
 
@@ -48,6 +60,14 @@ Prompter 根据 Session Facts 装配 `messages` 和 `tools`。
 
 ## Settings
 
-当前只提供 `max_steps`，限制一次 `loop.turn` 的模型调用次数。
-取值必须是正整数，持久化到插件目录的 `config.json`。
+| 字段 | 说明 |
+|---|---|
+| `max_steps` | 一次 `loop.turn` 的模型调用次数上限，正整数 |
+| `tool_parallelism` | `serial` 或 `auto`，默认 `auto` |
+| `max_parallel_tools` | 同时执行的工具数上限，默认 4，范围 1～8 |
+| `parallel_safe_tools` | 可并行的工具名列表，默认 `file_read`、`file_glob`、`file_grep`、`subagent` |
+
+设置持久化到插件目录的 `config.json`。
+`parallel_safe_tools` 目前只支持配置文件修改，不在设置表单中展示。
+保存设置时会保留未提交的字段。
 

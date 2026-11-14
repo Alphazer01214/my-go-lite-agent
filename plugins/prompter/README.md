@@ -12,6 +12,7 @@ Session 只记录事实，Prompter 决定所有模型可见内容。
 | `session.create` | 补初始 `system_prompt`、`runtime_context` 两类 Fact |
 | `llm.stream` | 装配 messages/tools 后 `Proceed` |
 | `prompter.context.get` | 返回最近一次或派生的 LLM 可见上下文和用量 |
+| `prompter.compact` | 手动压缩指定会话，返回压缩前后估算和覆盖范围 |
 | `prompter.resources.list` | 返回 Skills / MCP 状态 |
 | `prompter.resources.refresh` | 重新扫描 Skills、重连 MCP |
 | `prompter.settings.get/save` | 读写设置 |
@@ -30,8 +31,35 @@ Session 只记录事实，Prompter 决定所有模型可见内容。
 `usage` 取自会话最近一条 `usage` Fact：`prompt_tokens`、`completion_tokens`、`total_tokens`。
 `context_window` 来自 `llm.models.list`，有真实用量时同时返回百分比。
 live 视图只采用与装配 `turn_id` 一致的用量；派生视图采用最近一条 `usage` Fact。
-Prompter 不再估算 token，也不返回消息级 token 数。
+面板展示的用量仍来自 `usage` Fact；Prompter 内部的 token 估算只用于压缩预算，不返回给面板。
 消息正文按单条 16 KiB、总量 1 MiB 截断，并通过 `truncated` 标记。
+
+## 压缩
+
+每次 `llm.stream` 装配出 messages 后、写入快照前检查预算。预算取 `max(最近一条 usage 的 prompt_tokens, 字符估算)`；最近一次压缩之后的 usage 已失效，只用估算。窗口取 `min(模型 context_window, max_context_tokens)`，阈值为 `窗口 × compact_threshold`。
+
+超过阈值时：
+
+1. 保留最近 `retain_recent_tokens`（默认窗口的 16%）对应的尾部。切点回退到最近的 user 消息，因此不会切开工具调用与工具结果的配对，也不会压缩当前回合。
+2. 用嵌套 `llm.stream` 做一次辅助调用：重放当前 system、运行时上下文和被压区间，压缩指令作为最后一条 user 消息；payload 带 `purpose=compaction`，Prompter 看到该字段直接放行到 provider，避免递归。工具表随请求保留，用于复用前缀缓存。
+3. 只接受 `<summary>` 块，`<analysis>` 块不落库。校验八节齐全、`Primary Request and Intent` 非空、无工具调用、比被压内容短且不超过 `compact_max_chars`。
+4. 校验失败退回确定性摘要（角色 + 正文首段 + 工具名，按 `compact_max_chars` 截断）。调用出错或输出截断时保留旧摘要，不落库。
+5. 追加一条 `context_compaction` Fact，`meta.covered_to_seq` 记录覆盖到哪条消息。投影时隐藏 `seq <= covered_to_seq` 的普通消息，并在原位置插入一条 user 检查点消息（preamble + `<compacted-summary>`）。旧消息仍在 Session 日志里，只是不进模型输入。
+6. 压缩后估算仍高于阈值时，`meta.over_budget` 记为真并继续本轮请求，不阻断用户任务。
+
+压缩只改变之后的模型输入。Context 面板的 `usage` 仍显示最近一次真实请求的用量，直到下一轮写入新的 `usage` Fact。
+
+手动压缩用 `prompter.compact`，请求 `{"session_id": "s-1"}`。手动路径跳过阈值检查，但仍按同一保留预算切段；没有可压缩区间时返回 `compacted=false` 和原因。
+
+配置项写在 `config.json`：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `compact_enabled` | `true` | 关闭后只保留手动压缩 |
+| `max_context_tokens` | `0` | 非 0 时作为窗口上限；0 表示使用模型配置 |
+| `compact_threshold` | `0.8` | 触发阈值占窗口比例，取值 0 到 1 |
+| `retain_recent_tokens` | `0` | 保留尾部 token 数；0 表示窗口的 16% |
+| `compact_max_chars` | `12000` | 摘要最大字符数；模型摘要超限也退回确定性摘要 |
 
 ## Skills
 
@@ -92,6 +120,7 @@ Context 面板消费 Session UI 的 `liteagent:session-changed` 信号。
 |---|---|---|
 | `system_prompt` | `system` | 静态轨全文，`meta.hash` 记录内容哈希 |
 | `runtime_context` | `user` | `<runtime_context>` 包裹的环境、skills、MCP |
+| `context_compaction` | `host` | 检查点正文与 `covered_to_seq`；投影为一条 user 消息 |
 | `context_snapshot` | `host` | 本次实际送出的 surface seqs、hash、消息数；不投影 |
 | `usage` | `host` | Agent 写入的真实用量；Prompter 只读，不投影 |
 
@@ -99,8 +128,9 @@ Context 面板消费 Session UI 的 `liteagent:session-changed` 信号。
 
 `config.json` 可选；缺省使用内嵌的 `config.example.json`。
 
-- `prompt_sections`、`skills`、`mcpServers`：写在 `config.json` 里。
+- `prompt_sections`、`skills`、`mcpServers`、压缩配置：写在 `config.json` 里。
 - `skills_global_dir`、`skills_workspace_dir`、`mcp_enabled`（默认开启）、`mcp_timeout_ms`：通过 settings 修改，下一次调用生效。
+- 压缩配置通过 `config.json` 修改；settings 保存时保留这些字段。
 - `mcpServers`：通过底部面板的 JSON 编辑器修改，结构与 Claude 配置一致。
 
 `prompt_sections` 仍在进程启动时读取。
@@ -114,4 +144,5 @@ Context 面板消费 Session UI 的 `liteagent:session-changed` 信号。
 
 ## 非职责
 
-不持有会话历史；不调用模型；不定义模型 provider；首版不做上下文压缩和 MCP HTTP。
+不持有会话历史；除压缩辅助调用外不调用模型；不定义模型 provider；不做 MCP HTTP。
+压缩只影响模型输入，不删除 Session 中的原消息。

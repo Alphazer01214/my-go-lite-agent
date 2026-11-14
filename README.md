@@ -36,7 +36,7 @@ powershell -File scripts\build.ps1
 | `tools` | 工具目录和分发 |
 | `file-tools`、`shell-tools`、`python` | 具体工具 |
 | `subagent` | 子会话委派 |
-| `git` | 分支状态和 diff 面板 |
+| `git-tool` | 分支状态和 diff 面板 |
 | `sandbox` | 可选调用策略 |
 
 ## 目录

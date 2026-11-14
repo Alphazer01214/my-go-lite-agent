@@ -2,7 +2,7 @@
 
 `internal/webui` 是 Host 的浏览器展示面。它是 Host 与浏览器之间的唯一通道。
 
-浏览器侧的线契约见 [../webui.md](../webui.md)。本文只讲实现。
+浏览器侧的线契约见 [webui.md](webui.md)。本文只讲实现。端到端运行机制见 [webui-architecture.md](webui-architecture.md)。
 
 ## 1. 职责边界
 

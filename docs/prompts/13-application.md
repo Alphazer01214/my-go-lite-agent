@@ -42,7 +42,7 @@ sequenceDiagram
     M->>S: session.derive
     S-->>M: 投影后的消息序列
     M->>M: enforceBudget：超阈值则压缩
-    M->>S: session.append（context_summary / context_compaction）
+    M->>S: session.append（context_compaction）
     M->>M: newSnapshot：记录 surface、工具、hash
     M->>S: session.append（context_snapshot）
     M-->>L: 覆盖后的 messages 与 tools
@@ -60,19 +60,21 @@ sequenceDiagram
 
 ## 3. 投影顺序
 
-`session.derive` 把 Fact 投影成模型输入。顺序固定（`plugins/session/derive.go:114-153`）：
+`prompter` 的 `projectMessages` 把 Fact 投影成模型输入。顺序固定：
 
 | 位置 | 内容 | 角色 |
 |---|---|---|
-| 1 | system prompt（最新的 `model-context` 写入的） | system |
-| 2 | 活跃摘要（`context_summary`，`Active` 为真） | system |
-| 3 | 运行时上下文快照 | user |
-| 4 | 普通消息（未被摘要遮蔽的） | 按原角色 |
-| 5 | 工具结果替换 | — |
+| 1 | system prompt（最新的 `prompter` 写入的） | system |
+| 2 | 运行时上下文快照 | user |
+| 3 | 最新检查点（`context_compaction`，`covered_to_seq` 之前的消息被隐藏） | user |
+| 4 | 普通消息（未被检查点覆盖的） | 按原角色 |
+| 5 | 工具结果替换（目标契约） | — |
+
+位置 1 到 4 是当前实现；第 5 项工具结果替换尚未实现。
 
 两个细节：
 
-**摘要插在 system prompt 之后、运行时上下文之前。** 模型先看到"这是接续的会话"，再看到当前环境事实。顺序反了会让环境事实看起来像在总结之前就有的旧信息。
+**检查点放在被压区间的原位置，紧挨着第一条保留消息。** system prompt 与运行时上下文不参与压缩。检查点必须出现在保留的历史之前，先说明"这是接续的会话"，再读近期事实。
 
 **旧工具结果被确定性替换。** 保留最后 `fullTool` 个（默认 8）完整结果，更早的替换成 `[tool result omitted; N bytes; see seq=X]`。原文在 session 日志里还在，只是不进模型输入。
 
@@ -111,7 +113,7 @@ sequenceDiagram
 
 ## 5. 路径一：只改配置
 
-**做什么。** 写 `plugins/model-context/config.json`，内容取 [12-assets.md](12-assets.md) 第 3 节。
+**做什么。** 写 `plugins/prompter/config.json`，内容取 [12-assets.md](12-assets.md) 第 3 节。
 
 **为什么先做这条。** 它是唯一一条不需要改 Go 代码就能生效的路径，而且收益最直接。模型当前拿到的 system prompt 只有三行：
 
@@ -239,7 +241,7 @@ Pass the program's own flags; do not append `| grep`, `> file` or `&&`.
 |---|---|
 | `model-context.build` | 干跑下一次请求，返回渲染后的 messages、工具表、token 估算。不写 Fact，不调模型。 |
 | `model-context.inspect` | 按快照或 session 还原消息，返回 breakdown：system prompt、运行时上下文、摘要、session、工具各占多少 token。 |
-| `model-context.compact` | 手工触发压缩，看压缩前后 token 对比。 |
+| `prompter.compact` | 手工触发压缩，看压缩前后 token 对比。 |
 
 `context_snapshot` Fact 里还有 `system_prompt_hash`、`runtime_context_hash`（运行时上下文的）、`messages_hash`、`tools_hash`。静态轨改动后，第一个 hash 变、后三个不变，就是预期行为。
 
@@ -266,12 +268,12 @@ debug 视图和模型实际收到的内容必须走同一条渲染函数。禁�
 
 | 顺序 | 动作 | 产出 |
 |---|---|---|
-| 1 | 写 `plugins/model-context/config.json` | 静态轨八节生效，模型行为立刻改善 |
+| 1 | 写 `plugins/prompter/config.json` | 静态轨八节生效，模型行为立刻改善 |
 | 2 | 改两个工具插件的 `Description` 与参数描述 | 工具选择与参数填写准确率提升 |
 | 3 | 加 `track` 字段 | 缓存边界显式化，静态轨与动态轨可分别演进 |
 | 4 | 加 `guidelines` 字段 | 纪律随工具在场性出现，卸载工具不留残条 |
 | 5 | 加注入信封与转义 | 模型能区分框架事实与用户内容，外部内容不能伪造边界 |
 | 6 | 修 Mode/Scheme 重复 | 运行时上下文少一个重复段 |
-| 7 | 压缩路径接模型摘要 | 摘要保留意图，不再只是正文首段 |
+| 7 | 压缩路径接模型摘要（已完成） | 摘要保留意图，不再只是正文首段 |
 
 前三步不需要新的设计决策，照着 [12-assets.md](12-assets.md) 的文本改即可。

@@ -149,6 +149,25 @@ func (c *config) normalize() error {
 		return fmt.Errorf("prompt_config_invalid: mcp_timeout_ms must be between 1 and %d", maxMCPTimeoutMS)
 	}
 
+	if c.MaxContextTokens < 0 {
+		return fmt.Errorf("prompt_config_invalid: max_context_tokens must be non-negative")
+	}
+	if c.CompactThreshold < 0 || c.CompactThreshold > 1 {
+		return fmt.Errorf("prompt_config_invalid: compact_threshold must be between 0 and 1")
+	}
+	if c.CompactThreshold == 0 {
+		c.CompactThreshold = defaultCompactThreshold
+	}
+	if c.RetainRecentTokens < 0 {
+		return fmt.Errorf("prompt_config_invalid: retain_recent_tokens must be non-negative")
+	}
+	if c.CompactMaxChars < 0 {
+		return fmt.Errorf("prompt_config_invalid: compact_max_chars must be non-negative")
+	}
+	if c.CompactMaxChars == 0 {
+		c.CompactMaxChars = defaultCompactMaxChars
+	}
+
 	if err := normalizeSkills(c.Skills); err != nil {
 		return err
 	}
@@ -284,6 +303,10 @@ func sortedMCPNames(servers map[string]mcpEntry) []string {
 
 func mcpGloballyEnabled(cfg config) bool {
 	return cfg.MCPEnabled == nil || *cfg.MCPEnabled
+}
+
+func compactionEnabled(cfg config) bool {
+	return cfg.CompactEnabled == nil || *cfg.CompactEnabled
 }
 
 func validMCPEnvName(value string) bool {

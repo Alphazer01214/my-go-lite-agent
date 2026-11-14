@@ -54,5 +54,5 @@
       }
     ]
   },
-  "description": "Model request assembler: owns model-visible messages and tool definitions"
+  "description": "Model request assembler: owns model-visible messages, tool definitions, and context compaction"
 }

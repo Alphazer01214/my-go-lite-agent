@@ -12,6 +12,7 @@ func main() {
 	p.sdk.Register("prompter", "settings.get", p.handleSettingsGet)
 	p.sdk.Register("prompter", "settings.save", p.handleSettingsSave)
 	p.sdk.Register("prompter", "context.get", p.handleContextGet)
+	p.sdk.Register("prompter", "compact", p.handleCompact)
 	p.sdk.Register("prompter", "resources.list", p.handleResourcesList)
 	p.sdk.Register("prompter", "resources.refresh", p.handleResourcesRefresh)
 	p.sdk.Register("skill", "info", p.handleSkillInfo)

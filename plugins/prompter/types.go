@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	factTypeMessage         = "message"
-	factTypeSystemPrompt    = "system_prompt"
-	factTypeRuntimeContext  = "runtime_context"
-	factTypeContextSnapshot = "context_snapshot"
-	factTypeUsage           = "usage"
+	factTypeMessage           = "message"
+	factTypeSystemPrompt      = "system_prompt"
+	factTypeRuntimeContext    = "runtime_context"
+	factTypeContextCompaction = "context_compaction"
+	factTypeContextSnapshot   = "context_snapshot"
+	factTypeUsage             = "usage"
 
 	trackStatic  = "static"
 	trackDynamic = "dynamic"
@@ -59,6 +60,11 @@ type config struct {
 	SkillsWorkspaceDir string              `json:"skills_workspace_dir,omitempty"`
 	MCPEnabled         *bool               `json:"mcp_enabled,omitempty"`
 	MCPTimeoutMS       int                 `json:"mcp_timeout_ms,omitempty"`
+	CompactEnabled     *bool               `json:"compact_enabled,omitempty"`
+	MaxContextTokens   int                 `json:"max_context_tokens,omitempty"`
+	CompactThreshold   float64             `json:"compact_threshold,omitempty"`
+	RetainRecentTokens int                 `json:"retain_recent_tokens,omitempty"`
+	CompactMaxChars    int                 `json:"compact_max_chars,omitempty"`
 	Skills             []skillEntry        `json:"skills,omitempty"`
 	MCPServers         map[string]mcpEntry `json:"mcpServers,omitempty"`
 	SkillsReadable     bool                `json:"-"`
@@ -70,8 +76,9 @@ type createPayload struct {
 }
 
 type streamPayload struct {
-	Model string               `json:"model,omitempty"`
-	Meta  streamPayloadSession `json:"meta,omitempty"`
+	Model   string               `json:"model,omitempty"`
+	Purpose string               `json:"purpose,omitempty"`
+	Meta    streamPayloadSession `json:"meta,omitempty"`
 }
 
 type streamPayloadSession struct {

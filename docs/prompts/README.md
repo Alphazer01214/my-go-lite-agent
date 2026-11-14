@@ -1,7 +1,7 @@
 # Prompt 设计
 
 > 状态：目标契约
-> 说明：本目录定义 Prompt 契约。已落地的部分在 [plugins/model-context](../../plugins/model-context) 的实现里，阶段划分见 [09-plan.md](09-plan.md)。
+> 说明：本目录定义 Prompt 契约。已落地的部分在 [plugins/prompter](../../plugins/prompter) 的实现里，阶段划分见 [09-plan.md](09-plan.md)。
 
 本目录定义 LiteAgent 的 Prompt 契约。
 
@@ -39,11 +39,11 @@
 | [10-task-prompts.md](10-task-prompts.md) | 15 条可直接粘贴的任务级 prompt 全文、摆放位置与验收标准 |
 | [11-vendor-picks.md](11-vendor-picks.md) | 九家各挑一条最优，含原文、本项目落点与明确不抄的 |
 | [12-assets.md](12-assets.md) | **可直接使用的 prompt 文本**：静态轨八节、可粘贴的 config.json、9 个工具的描述、压缩与子代理 prompt |
-| [13-application.md](13-application.md) | **session/model-context 如何应用这些 prompt**：职责切分、时序、落点映射、三条落地路径 |
+| [13-application.md](13-application.md) | **session/prompter 如何应用这些 prompt**：职责切分、时序、落点映射、三条落地路径 |
 
 ### 2.1 快速上手
 
-想直接看到效果，看 [12-assets.md](12-assets.md)。第 3 节是一份可以原样写进 `plugins/model-context/config.json` 的配置，不改任何 Go 代码就能生效。
+想直接看到效果，看 [12-assets.md](12-assets.md)。第 3 节是一份可以原样写进 `plugins/prompter/config.json` 的配置，不改任何 Go 代码就能生效。
 
 想知道为什么抄这些，看 [11-vendor-picks.md](11-vendor-picks.md)。九家各一条，每条都带原文和本项目落点。
 

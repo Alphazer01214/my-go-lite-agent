@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
@@ -12,7 +13,12 @@ import (
 
 func TestSaveLoadAgentConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	want := config{MaxSteps: 42}
+	want := config{
+		MaxSteps:          42,
+		ToolParallelism:   toolParallelismAuto,
+		MaxParallelTools:  defaultMaxParallelTools,
+		ParallelSafeTools: append([]string(nil), defaultParallelSafeTools...),
+	}
 	if err := saveConfig(path, want); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
@@ -20,7 +26,7 @@ func TestSaveLoadAgentConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("config = %+v, want %+v", got, want)
 	}
 }
@@ -67,6 +73,32 @@ func TestAgentSettingsHandlersAndRegistrations(t *testing.T) {
 	}
 	if got.Values.MaxSteps != 42 {
 		t.Fatalf("max_steps = %d, want 42", got.Values.MaxSteps)
+	}
+	if got.Values.ToolParallelism != toolParallelismAuto {
+		t.Fatalf("tool_parallelism = %q, want %q", got.Values.ToolParallelism, toolParallelismAuto)
+	}
+	if got.Values.MaxParallelTools != defaultMaxParallelTools {
+		t.Fatalf("max_parallel_tools = %d, want %d", got.Values.MaxParallelTools, defaultMaxParallelTools)
+	}
+
+	raw, err = p.handleSettingsSave(context.Background(), &pluginsdk.Request{
+		Payload: json.RawMessage(`{"values":{"max_steps":42,"tool_parallelism":"serial","max_parallel_tools":2,"parallel_safe_tools":["file_read","subagent"]}}`),
+	})
+	if err != nil {
+		t.Fatalf("settings.save parallel fields: %v", err)
+	}
+	raw, err = p.handleSettingsGet(context.Background(), &pluginsdk.Request{})
+	if err != nil {
+		t.Fatalf("settings.get: %v", err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.Values.ToolParallelism != toolParallelismSerial || got.Values.MaxParallelTools != 2 {
+		t.Fatalf("parallel settings = %+v", got.Values)
+	}
+	if !reflect.DeepEqual(got.Values.ParallelSafeTools, []string{"file_read", "subagent"}) {
+		t.Fatalf("parallel_safe_tools = %v", got.Values.ParallelSafeTools)
 	}
 }
 

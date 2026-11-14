@@ -8,7 +8,7 @@
 |---|---|
 | `internal/host` | [internal/host.md](internal/host.md) |
 | `internal/plugin` | [internal/plugin.md](internal/plugin.md) |
-| `internal/webui` | [internal/webui.md](internal/webui.md) |
+| `internal/webui` | [internal_webui.md](internal_webui.md)、[webui-architecture.md](webui-architecture.md) |
 
 插件业务契约不在本文展开。插件的方法、payload、状态和前端通信写在 `plugins/<name>/`。
 
@@ -54,7 +54,7 @@ flowchart LR
 | `cmd/liteagent-server` | 组装 Host 与 WebUI，管理 HTTP 生命周期 | `run()` | 本文第 9 节 |
 | `internal/host` | Plugin Instance、执行上下文、路由、pending 闭环 | `host.New()` + `(*Host).Start()` | [internal/host.md](internal/host.md) |
 | `internal/plugin` | Manifest 发现和 autostart 排序 | `ScanRoot()` | [internal/plugin.md](internal/plugin.md) |
-| `internal/webui` | Browser Bridge、UI Push 和静态资源 | `NewServer()` | [internal/webui.md](internal/webui.md) |
+| `internal/webui` | Browser Bridge、UI Push 和静态资源 | `NewServer()` | [internal_webui.md](internal_webui.md)、[webui-architecture.md](webui-architecture.md) |
 | `protocol` | Frame 编解码和稳定错误码 | `Frame` | [protocol.md](protocol.md) |
 | `pluginsdk` | 插件注册、Call、Event | `Plugin` | [pluginsdk.md](pluginsdk.md) |
 
@@ -87,7 +87,7 @@ Frame 结构在平台树里只存在一份，定义在 `protocol/frame.go`。`in
 | `internal/plugin` | [internal/plugin.md](internal/plugin.md) 第 3 节 |
 | `internal/host` | [internal/host.md](internal/host.md) 第 3 节 |
 | `pluginsdk` | [pluginsdk.md](pluginsdk.md) 第 1 节 |
-| `internal/webui` | [internal/webui.md](internal/webui.md) 第 3 节 |
+| `internal/webui` | [internal_webui.md](internal_webui.md) 第 3 节 |
 
 插件结构体只写在插件文档中。每个插件至少整理：
 

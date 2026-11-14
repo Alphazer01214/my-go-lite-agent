@@ -85,13 +85,13 @@
 
 ## 4. 摘要与历史的相对位置
 
-摘要作为 system 消息插在系统提示之后。
+摘要作为一条 user 检查点消息，放在被压缩区间的原位置。
 
-动态轨在摘要之后。
+具体顺序是：system prompt → 运行时上下文 → 检查点 → 未被覆盖的近期消息。system prompt 与运行时上下文始终不被压缩。
 
-这个顺序不能变。摘要要在历史之前，让模型先知道"这是接续的会话"，再读新事实。
+这个顺序不能变。检查点要在保留的历史之前，让模型先知道"这是接续的会话"，再读近期事实。
 
-- 出处：claude-code-main `src/services/compact/prompt.ts:311-335`；上下文组装插件的当前投影规则，见 [docs/design/plugins/04-model-context.md](../design/plugins/04-model-context.md)
+- 出处：deepseek-harness `packages/compaction/compaction-basic/src/summarizer.ts:70-71`；codex `codex-rs/core/src/compact.rs:356`；投影规则见 [plugins/prompter](../../plugins/prompter/README.md)
 
 ## 5. 工具表与静态轨的一致性
 

@@ -3,13 +3,13 @@
 > 状态：目标契约
 > 说明：本文给出可以直接部署的 prompt 文本。选型依据见 [11-vendor-picks.md](11-vendor-picks.md)，写作规则见 [01-principles.md](01-principles.md)。
 
-本文的文本不是模板占位符。每一节都能直接放进 `plugins/model-context/config.json` 的 `prompt_sections` 里生效。
+本文的文本不是模板占位符。每一节都能直接放进 `plugins/prompter/config.json` 的 `prompt_sections` 里生效。
 
 ## 1. 三条使用路径
 
 | 路径 | 改什么 | 生效条件 | 收益 |
 |---|---|---|---|
-| 一，改配置 | 只写 `plugins/model-context/config.json` | 重启 model-context 插件 | 模型的纪律、语气、工具使用习惯立刻变好 |
+| 一，改配置 | 只写 `plugins/prompter/config.json` | 重启 prompter 插件 | 模型的纪律、语气、工具使用习惯立刻变好 |
 | 二，改工具描述 | 改 `plugins/file-tools/main.go` 与 `plugins/shell-tools/main.go` 里的 `Description` 与 `InputSchema` 描述 | 重新构建插件 | 工具选择准确率提升，参数不再填错 |
 | 三，改代码 | 加 `track` 字段、加 `guidelines` 字段、加注入信封 | 见 [13-application.md](13-application.md) 第 7 节 | 缓存边界显式化，纪律随工具在场性出现 |
 
@@ -168,7 +168,7 @@ asked for, and you report what actually happened.
 
 ## 3. 可直接使用的 config.json
 
-写在 `plugins/model-context/config.json`。插件进程的工作目录是插件自身目录，所以这个路径是相对 Host 启动目录解析的固定位置，见 `internal/host/proc.go:15`。
+写在 `plugins/prompter/config.json`。插件进程的工作目录是插件自身目录，所以这个路径是相对 Host 启动目录解析的固定位置，见 `internal/host/proc.go:15`。
 
 ```json
 {
@@ -420,11 +420,11 @@ boundary and report truncation honestly.
 
 ## 5. 压缩 prompt 资产
 
-用于模型摘要路径。当前实现是确定性摘要，这段文本在路径三落地后生效。
+用于模型摘要路径。当前实现是模型摘要加确定性兜底，这段文本已生效。
 
 ```text
 CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
-- Do NOT use file_read, shell_execute, file_search, or ANY other tool.
+- Do NOT use file_read, shell_execute, file_grep, or ANY other tool.
 - You already have all the context you need in the conversation above.
 - Tool calls will be REJECTED and will waste your only turn — you will fail the task.
 - Your entire response must be plain text: an <analysis> block followed by a <summary> block.
@@ -466,9 +466,9 @@ a <summary> block. Tool calls will be rejected and you will fail the task.
 
 | 改动 | 原因 |
 |---|---|
-| 工具名换成本项目真实的四个 | 不教模型调用不存在的签名 |
+| 工具名换成本项目真实的名称 | 不教模型调用不存在的签名 |
 | `Files and Code` 要求 workspace-relative path | 本项目工具只接受工作区相对路径 |
-| 合并规则改成本项目的 `summary block` 措辞 | 本项目没有 `<summary>` 标签，用 `context_summary` Fact 表达 |
+| 合并规则改成本项目的 `summary block` 措辞 | 检查点用 `<compacted-summary>` 包裹，落库为 `context_compaction` Fact |
 
 压缩后的恢复消息：
 

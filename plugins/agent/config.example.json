@@ -1,3 +1,6 @@
 {
-  "max_steps": 128
+  "max_steps": 128,
+  "tool_parallelism": "auto",
+  "max_parallel_tools": 4,
+  "parallel_safe_tools": ["file_read", "file_glob", "file_grep", "subagent"]
 }

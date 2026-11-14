@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tomori/my-go-lite-agent/pluginsdk"
@@ -111,16 +112,16 @@ func (p *plugin) turn(ctx context.Context, r *pluginsdk.Request, in *fromWebUI) 
 			)
 		}
 
-		for _, call := range toolCalls {
-			result, err := p.executeToolCall(turnCtx, sessionID, in.Workspace, call)
-			if err != nil {
-				return nil, err
-			}
-			resultSeqs, err := p.appendFacts(turnCtx, sessionID, []sessionFact{result})
-			if err != nil {
-				return nil, err
+		resultFacts, execErr := p.executeToolCalls(turnCtx, sessionID, in.Workspace, toolCalls)
+		if len(resultFacts) > 0 {
+			resultSeqs, appendErr := p.appendFacts(turnCtx, sessionID, resultFacts)
+			if appendErr != nil {
+				return nil, appendErr
 			}
 			seqs = append(seqs, resultSeqs...)
+		}
+		if execErr != nil {
+			return nil, execErr
 		}
 	}
 
@@ -250,6 +251,7 @@ func (p *plugin) appendUsage(
 }
 
 func normalizeToolCalls(messages []pluginsdk.ChatMessage, turnID string, step int) error {
+	seen := make(map[string]struct{})
 	for messageIndex := range messages {
 		for callIndex := range messages[messageIndex].ToolCalls {
 			call := &messages[messageIndex].ToolCalls[callIndex]
@@ -257,6 +259,10 @@ func normalizeToolCalls(messages []pluginsdk.ChatMessage, turnID string, step in
 			if call.ID == "" {
 				call.ID = fmt.Sprintf("%s-tool-%d-%d", turnID, step, callIndex+1)
 			}
+			if _, exists := seen[call.ID]; exists {
+				return pluginsdk.ErrCode(codeToolCallInvalid, "duplicate tool call id: "+call.ID)
+			}
+			seen[call.ID] = struct{}{}
 			call.Type = strings.TrimSpace(call.Type)
 			if call.Type == "" {
 				call.Type = "function"
@@ -292,6 +298,142 @@ func collectToolCalls(messages []pluginsdk.ChatMessage) []pluginsdk.ToolCall {
 		calls = append(calls, message.ToolCalls...)
 	}
 	return calls
+}
+
+type toolExecutor func(context.Context, pluginsdk.ToolCall) (sessionFact, error)
+
+// planToolBatches keeps the model's order. Consecutive parallel-safe calls form
+// one batch; every unsafe call is a barrier and runs alone.
+func planToolBatches(calls []pluginsdk.ToolCall, safe map[string]bool) [][]pluginsdk.ToolCall {
+	batches := make([][]pluginsdk.ToolCall, 0, len(calls))
+	run := make([]pluginsdk.ToolCall, 0, len(calls))
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		batches = append(batches, run)
+		run = nil
+	}
+	for _, call := range calls {
+		if safe[call.FunctionCall.Name] {
+			run = append(run, call)
+			continue
+		}
+		flush()
+		batches = append(batches, []pluginsdk.ToolCall{call})
+	}
+	flush()
+	return batches
+}
+
+func (p *plugin) executeToolCalls(
+	ctx context.Context,
+	sessionID, workspace string,
+	calls []pluginsdk.ToolCall,
+) ([]sessionFact, error) {
+	cfg := p.currentConfig()
+	if !cfg.parallelEnabled() {
+		return p.executeToolCallsSerial(ctx, sessionID, workspace, calls)
+	}
+	execute := func(callCtx context.Context, call pluginsdk.ToolCall) (sessionFact, error) {
+		return p.executeToolCall(callCtx, sessionID, workspace, call)
+	}
+	facts := make([]sessionFact, 0, len(calls))
+	for _, batch := range planToolBatches(calls, cfg.safeToolSet()) {
+		if len(batch) == 1 {
+			fact, err := execute(ctx, batch[0])
+			if err != nil {
+				return facts, err
+			}
+			facts = append(facts, fact)
+			continue
+		}
+		batchFacts, err := runToolBatch(ctx, batch, cfg.MaxParallelTools, execute)
+		facts = append(facts, batchFacts...)
+		if err != nil {
+			return facts, err
+		}
+	}
+	return facts, nil
+}
+
+func (p *plugin) executeToolCallsSerial(
+	ctx context.Context,
+	sessionID, workspace string,
+	calls []pluginsdk.ToolCall,
+) ([]sessionFact, error) {
+	facts := make([]sessionFact, 0, len(calls))
+	for _, call := range calls {
+		fact, err := p.executeToolCall(ctx, sessionID, workspace, call)
+		if err != nil {
+			return facts, err
+		}
+		facts = append(facts, fact)
+	}
+	return facts, nil
+}
+
+// runToolBatch executes one contiguous safe batch with bounded concurrency.
+// Results stay in call order even when completion order differs.
+func runToolBatch(
+	ctx context.Context,
+	calls []pluginsdk.ToolCall,
+	limit int,
+	execute toolExecutor,
+) ([]sessionFact, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	batchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	facts := make([]sessionFact, len(calls))
+	errs := make([]error, len(calls))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i := range calls {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-batchCtx.Done():
+				errs[i] = batchContextError(batchCtx)
+				return
+			}
+			defer func() { <-sem }()
+			facts[i], errs[i] = execute(batchCtx, calls[i])
+			if errs[i] != nil {
+				cancel()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return compactToolFacts(facts), err
+		}
+	}
+	return facts, nil
+}
+
+func compactToolFacts(facts []sessionFact) []sessionFact {
+	out := make([]sessionFact, 0, len(facts))
+	for _, fact := range facts {
+		if fact.ToolCallID == "" {
+			continue
+		}
+		out = append(out, fact)
+	}
+	return out
+}
+
+func batchContextError(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return pluginsdk.ErrCode(pluginsdk.CodeCallDeadlineExceeded, "call deadline exceeded")
+	}
+	return pluginsdk.ErrCode(pluginsdk.CodeCallCancelled, "call cancelled")
 }
 
 func (p *plugin) executeToolCall(

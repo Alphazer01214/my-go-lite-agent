@@ -2,7 +2,7 @@
 
 WebUI 是 Host 的平台展示面。Host 提供 Shell、Slot、Loader 和 Browser Bridge。插件提供自己的 Custom Element。Plugin Runtime 驱动自己拥有的 Component。
 
-组件业务含义由插件文档定义。本文只定义 Host 与插件前端之间的平台接口。
+组件业务含义由插件文档定义。本文只定义 Host 与插件前端之间的平台接口。端到端运行机制见 [webui-architecture.md](webui-architecture.md)。
 
 ## 1. 技术栈
 
